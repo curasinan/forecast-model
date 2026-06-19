@@ -1,0 +1,5 @@
+feature,in_main,in_half_a,in_half_b,status
+momentum_24h,1,1,1,stable
+momentum_72h,1,1,1,stable
+price_now,1,1,1,stable
+time_to_resolution,1,1,1,stable

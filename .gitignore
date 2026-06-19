@@ -1,0 +1,42 @@
+# Secrets / env
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+*.ipynb_checkpoints/
+.claude/
+
+# Databases (large / regenerable)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/backups/
+data/predictions.db
+data/questions/
+data/cache/
+
+# Logs (incl. metaculus debug JSON dumps)
+logs/*.log
+logs/*.json
+
+# Model artifacts (large binaries; keep model/results/ JSON+CSV for history)
+model/artifacts/*.pkl
+
+# Monitoring runtime state
+monitoring/heartbeat_state.json
+
+# Lock files
+logs/*.lock
+
+# Globally-installed tool with its own git repo (not project code)
+context-hub/

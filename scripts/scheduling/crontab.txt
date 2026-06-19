@@ -1,0 +1,25 @@
+# Polymarket collector cron entries.
+#
+# 1. Edit REPO and PY below to match your environment.
+# 2. Install:   crontab -e       # then paste the block below (without the
+#                                 # leading '#' on the cron lines themselves)
+# 3. Verify:    crontab -l
+#
+# `flock -n` is the scheduler-level overlap guard: if the lock file is
+# already held by a running instance, flock exits immediately with status
+# 1 and cron logs nothing. Redundant with the PID lock inside the Python
+# scripts, but harmless. Both layers together make stacking impossible.
+#
+# Logging is handled entirely by the Python scripts (they append to
+# logs/market_collector.log and logs/snapshot_collector.log). We still
+# redirect stdout/stderr to /dev/null so cron does not email you about
+# every successful fire.
+
+REPO=/path/to/new_work
+PY=/usr/bin/python3
+
+# collect_markets — daily at 06:00 and 18:00
+0 6,18 * * *  cd $REPO && flock -n logs/collect_markets.lock $PY -m collectors.collect_markets >/dev/null 2>&1
+
+# collect_snapshots — every 15 minutes, all day
+*/15 * * * *  cd $REPO && flock -n logs/collect_snapshots.lock $PY -m collectors.collect_snapshots >/dev/null 2>&1

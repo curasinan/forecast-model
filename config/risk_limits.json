@@ -1,0 +1,12 @@
+{
+  "starting_bankroll": 1000,
+  "drawdown_halt_pct": 0.2,
+  "cluster_exposure_cap_pct": 0.1,
+  "total_exposure_cap_pct": 0.35,
+  "max_simultaneous_positions": 12,
+  "min_position_dollars": 5,
+  "max_single_position_pct": 0.05,
+  "min_edge_threshold": 0.005,
+  "kelly_multiplier": 0.25,
+  "max_snapshot_age_minutes": 45
+}

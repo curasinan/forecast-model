@@ -1,0 +1,96 @@
+{
+  "trained_at": "2026-05-26T13:26:57.538853+00:00",
+  "model_type": "regression_with_overfit_checks",
+  "experiment_config": {
+    "horizon_hours": 6,
+    "target_column": "price_change_6h",
+    "feature_set": "stable",
+    "feature_cols": [
+      "price_now",
+      "momentum_24h",
+      "momentum_72h",
+      "time_to_resolution"
+    ],
+    "trade_threshold": 0.005
+  },
+  "n_markets": 499,
+  "n_timestamps": 120,
+  "rows_after_label_filter": 5228,
+  "split": {
+    "train_split_timestamp": "2026-05-09T22:05:03.246773+00:00",
+    "val_split_timestamp": "2026-05-12T16:05:03.246773+00:00",
+    "train_size": 3137,
+    "val_size": 1045,
+    "holdout_size": 1046
+  },
+  "learning_curve": [
+    {
+      "n_estimators": 50,
+      "val_mae": 0.004540873775068786
+    },
+    {
+      "n_estimators": 100,
+      "val_mae": 0.004649950166345478
+    },
+    {
+      "n_estimators": 200,
+      "val_mae": 0.004766259486391214
+    },
+    {
+      "n_estimators": 300,
+      "val_mae": 0.004828682995748945
+    },
+    {
+      "n_estimators": 500,
+      "val_mae": 0.004972242166865718
+    }
+  ],
+  "optimal_n_estimators": 50,
+  "metrics": {
+    "train": {
+      "mae": 0.0028927145270190033,
+      "r2": 0.11317503892231617
+    },
+    "validation": {
+      "mae": 0.004540873775068786,
+      "rmse": 0.0165893273340626,
+      "r2": 0.043016741213884324,
+      "pearson_r": 0.2556017585117989,
+      "n_rows": 1045
+    },
+    "overfitting_warning": false
+  },
+  "feature_stability": {
+    "stable": [
+      "momentum_24h",
+      "momentum_72h",
+      "price_now",
+      "time_to_resolution"
+    ],
+    "unstable": []
+  },
+  "profit_simulation": {
+    "full": {
+      "n_buy_signals": 22,
+      "n_sell_signals": 42,
+      "avg_pnl_per_buy": -0.015022727272727264,
+      "avg_pnl_per_sell": 0.03245238095238094,
+      "total_pnl": 1.0324999999999998,
+      "pct_profitable_overall": 0.484375,
+      "pct_profitable_buys": 0.09090909090909091,
+      "pct_profitable_sells": 0.6904761904761905
+    },
+    "confident_only": {
+      "n_buy_signals": 0,
+      "n_sell_signals": 0,
+      "avg_pnl_per_buy": null,
+      "avg_pnl_per_sell": null,
+      "total_pnl": 0.0,
+      "pct_profitable_overall": null,
+      "pct_profitable_buys": null,
+      "pct_profitable_sells": null,
+      "pred_std_median_cutoff": 3.619503131827628e-05,
+      "n_rows_kept": 521
+    }
+  }
+}
