@@ -1,0 +1,79 @@
+market_id,question,category,scored_at,llm_probability,market_price_at_scoring,resolution,disagreement,winner,price_snapshot_gap_minutes
+1171663,"Russia x Ukraine ceasefire by June 30, 2026?",other,2026-07-07T17:44:55.558668+00:00,0.18,0.195,1,False,,86308.77930956666
+1400465,Will Gerry Hutch win the 2026 Dublin-central by-election?,election_open,2026-07-07T17:44:55.558668+00:00,0.08,0.006,0,False,,65219.471675
+1439560,"Russia x Ukraine ceasefire by April 30, 2026?",other,2026-07-07T17:44:55.558668+00:00,0.18,0.0025,0,True,market,100468.04201555
+1485215,Will Benjamin Netanyahu be the next leader out before 2027?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.18,0.0015,0,True,market,85904.43768803333
+1485219,Will Keir Starmer be the next leader out before 2027?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.18,0.003,0,True,market,85679.55566566667
+1485222,Will Vladimir Putin be the next leader out before 2027?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.08,0.0015,0,False,,88709.53931228333
+1507751,Will the Iranian regime fall by April 30?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.02,0.0025,0,False,,100462.5717908
+1515492,Iran agrees to end enrichment of uranium by April 30?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.04,0.0035,0,False,,100468.26475163334
+1517835,Trump announces end of military operations against Iran by April 30th?,executive_action,2026-07-07T17:44:55.558668+00:00,0.15,0.0165,0,True,market,99463.56647011667
+1517836,Trump announces end of military operations against Iran by June 30th?,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.605,1,True,market,96628.66736746667
+1543487,US-Iran nuclear deal by April 30?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.08,0.0055,0,False,,100468.3108885
+1633619,Israeli forces cross the Litani River by June 30?,other,2026-07-07T17:44:55.558668+00:00,0.12,0.645,1,True,market,81374.6295852
+1651389,Pete Hegseth out as Secretary of Defense by April 30?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.18,0.0025,0,True,market,100468.41038604999
+1693042,Will UAE strike Iran by April 30?,other,2026-07-07T17:44:55.558668+00:00,0.02,0.0205,0,False,,100468.5803312
+1693058,Will Saudi Arabia strike Iran by April 30?,other,2026-07-07T17:44:55.558668+00:00,0.03,0.013500000000000002,0,False,,100468.58821305
+1707932,Will the Iranian regime fall by May 31?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.03,0.0015,0,False,,57624.559378716665
+1733817,Trump out as President by April 30?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.03,0.0015,0,False,,100468.74686946667
+1795527,"Russia x Ukraine ceasefire by May 31, 2026?",other,2026-07-07T17:44:55.558668+00:00,0.18,0.189,1,False,,86309.73323268333
+1895140,Trump announces end of military operations against Iran by May 31st?,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.345,1,False,,96628.65845063333
+1921802,Will Trump agree to Iranian enrichment of uranium in April?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.08,0.0045000000000000005,0,False,,100469.09030431668
+1961415,Will Donald Trump announce that the United States blockade of the Strait of Hormuz has been lifted b,executive_action,2026-07-07T17:44:55.558668+00:00,0.3,0.055,0,True,market,100469.11066446666
+1972137,Will Donald Trump announce that the United States blockade of the Strait of Hormuz has been lifted b,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.27,0,False,,55799.7042582
+2009635,"Trump renames Strait of Hormuz to ""Strait of Trump"" by May 31?",executive_action,2026-07-07T17:44:55.558668+00:00,0.03,0.002,0,False,,55799.842032333334
+2047156,Will the next US x Iran diplomatic meeting occur after May 10?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.45,0.987,1,True,market,86034.39004403332
+2097472,Trump out as President by May 31?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.03,0.0015,0,False,,57623.46653431666
+2097554,Pete Hegseth out as Secretary of Defense by May 31?,leadership_stability,2026-07-07T17:44:55.558668+00:00,0.22,0.0015,0,True,market,55794.06490773334
+2097821,Will Donald Trump announce that the United States blockade of the Strait of Hormuz has been lifted b,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.017,0,True,market,78834.00381671666
+2111561,Will Trump agree to Iranian enrichment of uranium by May 31?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.12,0.013999999999999999,0,True,market,55793.994011983326
+2111563,Will Trump agree to Iranian transit fees in the Strait of Hormuz by May 31?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.02,0.0165,0,False,,55793.98680643333
+2111605,Iran agrees to unrestricted shipping through Hormuz by May 31?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.04,0.07200000000000001,0,False,,55794.01751963333
+2111624,Iran agrees to end enrichment of uranium by May 31?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.05,0.07200000000000001,0,False,,55794.02448305
+2111640,US-Iran nuclear deal by May 31?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.12,0.0655,0,False,,55794.032576
+2119227,Will Donald Trump announce that the United States blockade of the Strait of Hormuz has been lifted b,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.056499999999999995,0,True,market,69144.1664305
+2133404,Iran closes its airspace by May 8?,other,2026-07-07T17:44:55.558668+00:00,0.35,0.0015,0,True,market,85747.0441096
+2133405,Iran closes its airspace by May 31?,other,2026-07-07T17:44:55.558668+00:00,0.35,0.095,0,True,market,55793.76623951667
+2155023,Will Donald Trump announce that the United States blockade of the Strait of Hormuz has been lifted b,executive_action,2026-07-07T17:44:55.558668+00:00,0.35,0.715,1,True,market,32918.66888348333
+2166353,Iran closes its airspace by May 15?,other,2026-07-07T17:44:55.558668+00:00,0.35,0.0315,0,True,market,78833.27966183334
+2170230,US x Iran peace deal before Trump visits China?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.03,0.0015,0,False,,79838.7041442
+2241742,Iran closes its airspace by June 30?,other,2026-07-07T17:44:55.558668+00:00,0.35,0.277,1,False,,43208.99870695
+2296150,Iran closes its airspace by June 15?,other,2026-07-07T17:44:55.558668+00:00,0.35,0.2085,1,True,llm,43208.95402521666
+562186,Will Ken Paxton win the 2026 Texas Republican Primary?,election_open,2026-07-07T17:44:55.558668+00:00,0.28,0.9655,1,True,market,63264.99146403334
+562187,Will John Cornyn win the 2026 Texas Republican Primary?,election_incumbent,2026-07-07T17:44:55.558668+00:00,0.62,0.036500000000000005,0,True,market,63264.984756750004
+562188,Will Dawn Buckingham win the 2026 Texas Republican Primary?,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,106148.2434646
+562189,Will Beth Van Duyne win the 2026 Texas Republican Primary?,election_open,2026-07-07T17:44:55.558668+00:00,0.07,0.0015,0,False,,63264.97102804999
+562190,Will Wesley Hunt win the 2026 Texas Republican Primary?,election_open,2026-07-07T17:44:55.558668+00:00,0.18,0.0015,0,True,market,91524.67388574999
+567687,Russia x Ukraine ceasefire by end of 2026?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.28,0.4,1,True,market,86305.30937651667
+569342,Will Paloma Valencia win the 1st round of the 2026 Colombian presidential election?,election_open,2026-07-07T17:44:55.558668+00:00,0.08,0.0015,0,False,,54865.761706883335
+569343,Will Iván Cepeda Castro win the 1st round of the 2026 Colombian presidential election?,election_open,2026-07-07T17:44:55.558668+00:00,0.05,0.765,0,True,llm,54865.754688483335
+569344,Will Abelardo de la Espriella win the 1st round of the 2026 Colombian presidential election?,election_open,2026-07-07T17:44:55.558668+00:00,0.04,0.237,1,True,market,54865.747728333336
+599323,Will Graham Platner be the Democratic nominee for Senate in Maine?,election_open,2026-07-07T17:44:55.558668+00:00,0.15,0.9964999999999999,1,True,market,40495.6921743
+665325,US-Iran nuclear deal before 2027?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.1,0.865,1,True,market,32921.375765983335
+678929,Will Oh Se-hoon win the 2026 Seoul Mayoral Election,election_incumbent,2026-07-07T17:44:55.558668+00:00,0.42,0.155,1,True,llm,51761.80655868333
+678930,Will Na Kyung-won win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,77681.58658206667
+678931,Will Cho Eun-hee win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.05,0.0015,0,False,,66266.97278371667
+678932,Will Han Dong-hoon win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,66266.91521363334
+678933,Will Ahn Cheol-soo win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,72701.9794451
+678934,Will Park Ju-min win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,77681.56852166666
+678935,Will Park Yong-jin win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,71768.89190356666
+678936,Will Park Hong-keun win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.2,0.0015,0,True,market,70152.11924673333
+678937,Will Chong Won-oh win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.05,0.845,0,True,llm,51761.77620771667
+678938,Will Seo Young-kyo win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.06,0.0015,0,False,,68453.87815695
+678939,Will Hong Ihk-pyo win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,66266.94426338334
+678940,Will Jeon Hyun-heui win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.12,0.0015,0,True,market,68911.93294216666
+678941,Will Cho Kuk win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.08,0.0015,0,False,,68453.92118186667
+678943,Will Kang Hoon-sik win the 2026 Seoul Mayoral Election,election_open,2026-07-07T17:44:55.558668+00:00,0.05,0.0015,0,False,,69132.09048593332
+679492,Will Choo Mi-ae win the 2026 Gyeonggi Province Gubernatorial Election?,election_open,2026-07-07T17:44:55.558668+00:00,0.18,0.993,1,True,market,51762.098425133336
+679494,Will Han Jun-ho win the 2026 Gyeonggi Province Gubernatorial Election?,election_open,2026-07-07T17:44:55.558668+00:00,0.08,0.0015,0,False,,58841.89772096667
+687171,Will Yoo Jeong-bok win the 2026 Incheon mayoral election?,election_incumbent,2026-07-07T17:44:55.558668+00:00,0.18,0.0115,0,True,market,51762.220054833335
+703986,Will the People Power Party (PPP) win the 2026 South Korean local elections?,election_open,2026-07-07T17:44:55.558668+00:00,0.32,0.006500000000000001,0,True,market,51762.555980850004
+703987,Will the Democratic Party of Korea (DP) win the 2026 South Korean local elections?,election_open,2026-07-07T17:44:55.558668+00:00,0.45,0.993,1,True,market,51762.56313191667
+706279,Will Trump visit China by April 30?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.07,0.0025,0,False,,100464.18287071666
+789540,Will Thomas Massie be the Republican nominee for KY-04?,election_incumbent,2026-07-07T17:44:55.558668+00:00,0.82,0.45999999999999996,0,True,market,73407.67468733333
+824261,Will Steve Lanier win the 2026 New Mexico Governor Republican primary election?,election_open,2026-07-07T17:44:55.558668+00:00,0.2,0.012499999999999999,0,True,market,58842.4662895
+836184,Will Casey Putsch win the 2026 Ohio Governor Republican primary election?,election_open,2026-07-07T17:44:55.558668+00:00,0.06,0.003,0,False,,93492.15126861665
+842020,Will Israel win Eurovision 2026?,other,2026-07-07T17:44:55.558668+00:00,0.04,0.0555,0,False,,77682.62239630001
+842036,Will Ukraine win Eurovision 2026?,other,2026-07-07T17:44:55.558668+00:00,0.12,0.0115,0,True,market,77682.57820176666
+922766,Will Scottish National Party win the most seats in the 2026 Scottish Parliament election?,election_incumbent,2026-07-07T17:44:55.558668+00:00,0.42,0.997,1,True,market,90372.7937577
+957019,US-Iran nuclear deal by June 30?,diplomatic_summit,2026-07-07T17:44:55.558668+00:00,0.12,0.635,1,True,market,32922.84555405

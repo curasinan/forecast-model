@@ -1,0 +1,532 @@
+{
+  "generated_at": "2026-07-03T22:35:04.168341+09:00",
+  "warning": "EXPLORATORY EXPERIMENT \u2014 ~78 samples, high variance; results are diagnostic only and must NOT drive trading decisions.",
+  "config": {
+    "reference_hours_before": 48,
+    "min_snapshots": 100,
+    "n_folds": 5,
+    "features": [
+      "price_now",
+      "momentum_24h",
+      "momentum_72h",
+      "time_to_resolution",
+      "cluster_id",
+      "cluster_size",
+      "cluster_avg_price",
+      "cluster_price_dispersion",
+      "cluster_avg_momentum_1h",
+      "own_vs_cluster_momentum",
+      "cluster_lead_signal"
+    ],
+    "lgbm_params": {
+      "n_estimators": 50,
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "min_child_samples": 5,
+      "reg_alpha": 0.1,
+      "reg_lambda": 1.0,
+      "subsample": 0.8,
+      "subsample_freq": 1,
+      "colsample_bytree": 0.8,
+      "class_weight": "balanced",
+      "random_state": 42
+    }
+  },
+  "dataset": {
+    "n_candidates": 78,
+    "n_labeled": 78,
+    "n_survived_48h": 78,
+    "n_dropped_short_span": 0,
+    "n_dropped_null_price": 22,
+    "n_final": 56,
+    "n_yes": 17,
+    "n_no": 39
+  },
+  "metrics": {
+    "roc_auc_model": 0.9110105580693816,
+    "roc_auc_price_baseline": 0.9283559577677225,
+    "brier_model": 0.09857543287033817,
+    "brier_price_baseline": 0.11434919196428571,
+    "confusion_at_0p5_reference_only": {
+      "tn": 34,
+      "fp": 5,
+      "fn": 2,
+      "tp": 15
+    },
+    "calibration_bins": [
+      {
+        "bin": 1,
+        "n": 14,
+        "mean_predicted": 0.08630661496927937,
+        "actual_yes_rate": 0.0
+      },
+      {
+        "bin": 2,
+        "n": 14,
+        "mean_predicted": 0.12849652383304008,
+        "actual_yes_rate": 0.07142857142857142
+      },
+      {
+        "bin": 3,
+        "n": 14,
+        "mean_predicted": 0.3861595077257351,
+        "actual_yes_rate": 0.35714285714285715
+      },
+      {
+        "bin": 4,
+        "n": 14,
+        "mean_predicted": 0.8109628933625649,
+        "actual_yes_rate": 0.7857142857142857
+      }
+    ]
+  },
+  "edge_check": {
+    "disagreement_threshold": 0.1,
+    "n_total": 56,
+    "n_disagreements": 29,
+    "model_wins_among_disagreements": 10,
+    "model_win_rate_among_disagreements": 0.3448275862068966,
+    "model_wins_full_set": 12,
+    "model_win_rate_full_set": 0.21428571428571427
+  },
+  "feature_importances": [
+    {
+      "feature": "price_now",
+      "importance": 37
+    },
+    {
+      "feature": "momentum_72h",
+      "importance": 25
+    },
+    {
+      "feature": "time_to_resolution",
+      "importance": 25
+    },
+    {
+      "feature": "momentum_24h",
+      "importance": 21
+    },
+    {
+      "feature": "cluster_id",
+      "importance": 15
+    },
+    {
+      "feature": "cluster_price_dispersion",
+      "importance": 6
+    },
+    {
+      "feature": "cluster_avg_momentum_1h",
+      "importance": 4
+    },
+    {
+      "feature": "cluster_size",
+      "importance": 1
+    },
+    {
+      "feature": "cluster_avg_price",
+      "importance": 1
+    },
+    {
+      "feature": "own_vs_cluster_momentum",
+      "importance": 1
+    },
+    {
+      "feature": "cluster_lead_signal",
+      "importance": 0
+    }
+  ],
+  "per_market": [
+    {
+      "market_id": "1171663",
+      "question": "Russia x Ukraine ceasefire by June 30, 2026?",
+      "price_48h": 0.085,
+      "p_model_oof": 0.5081,
+      "outcome": 1
+    },
+    {
+      "market_id": "1400465",
+      "question": "Will Gerry Hutch win the 2026 Dublin-central by-election?",
+      "price_48h": 0.044,
+      "p_model_oof": 0.301,
+      "outcome": 0
+    },
+    {
+      "market_id": "1439560",
+      "question": "Russia x Ukraine ceasefire by April 30, 2026?",
+      "price_48h": 0.0025,
+      "p_model_oof": 0.0989,
+      "outcome": 0
+    },
+    {
+      "market_id": "1485215",
+      "question": "Will Benjamin Netanyahu be the next leader out before 2027?",
+      "price_48h": 0.0015,
+      "p_model_oof": 0.2107,
+      "outcome": 0
+    },
+    {
+      "market_id": "1485219",
+      "question": "Will Keir Starmer be the next leader out before 2027?",
+      "price_48h": 0.0085,
+      "p_model_oof": 0.1803,
+      "outcome": 0
+    },
+    {
+      "market_id": "1507751",
+      "question": "Will the Iranian regime fall by April 30?",
+      "price_48h": 0.0025,
+      "p_model_oof": 0.0933,
+      "outcome": 0
+    },
+    {
+      "market_id": "1515492",
+      "question": "Iran agrees to end enrichment of uranium by April 30?",
+      "price_48h": 0.0245,
+      "p_model_oof": 0.0848,
+      "outcome": 0
+    },
+    {
+      "market_id": "1517835",
+      "question": "Trump announces end of military operations against Iran by April 30th?",
+      "price_48h": 0.0385,
+      "p_model_oof": 0.0853,
+      "outcome": 0
+    },
+    {
+      "market_id": "1517836",
+      "question": "Trump announces end of military operations against Iran by June 30th?",
+      "price_48h": 0.585,
+      "p_model_oof": 0.8285,
+      "outcome": 1
+    },
+    {
+      "market_id": "1543487",
+      "question": "US-Iran nuclear deal by April 30?",
+      "price_48h": 0.025,
+      "p_model_oof": 0.0828,
+      "outcome": 0
+    },
+    {
+      "market_id": "1633619",
+      "question": "Israeli forces cross the Litani River by June 30?",
+      "price_48h": 0.565,
+      "p_model_oof": 0.8357,
+      "outcome": 1
+    },
+    {
+      "market_id": "1651389",
+      "question": "Pete Hegseth out as Secretary of Defense by April 30?",
+      "price_48h": 0.0045,
+      "p_model_oof": 0.0822,
+      "outcome": 0
+    },
+    {
+      "market_id": "1693042",
+      "question": "Will UAE strike Iran by April 30?",
+      "price_48h": 0.024,
+      "p_model_oof": 0.0794,
+      "outcome": 0
+    },
+    {
+      "market_id": "1693058",
+      "question": "Will Saudi Arabia strike Iran by April 30?",
+      "price_48h": 0.0235,
+      "p_model_oof": 0.0819,
+      "outcome": 0
+    },
+    {
+      "market_id": "1707932",
+      "question": "Will the Iranian regime fall by May 31?",
+      "price_48h": 0.0025,
+      "p_model_oof": 0.0996,
+      "outcome": 0
+    },
+    {
+      "market_id": "1733817",
+      "question": "Trump out as President by April 30?",
+      "price_48h": 0.0015,
+      "p_model_oof": 0.1496,
+      "outcome": 0
+    },
+    {
+      "market_id": "1795527",
+      "question": "Russia x Ukraine ceasefire by May 31, 2026?",
+      "price_48h": 0.0405,
+      "p_model_oof": 0.2423,
+      "outcome": 1
+    },
+    {
+      "market_id": "1895140",
+      "question": "Trump announces end of military operations against Iran by May 31st?",
+      "price_48h": 0.355,
+      "p_model_oof": 0.6734,
+      "outcome": 1
+    },
+    {
+      "market_id": "1921802",
+      "question": "Will Trump agree to Iranian enrichment of uranium in April?",
+      "price_48h": 0.0225,
+      "p_model_oof": 0.0853,
+      "outcome": 0
+    },
+    {
+      "market_id": "1961415",
+      "question": "Will Donald Trump announce that the United States blockade of the Strait of Horm",
+      "price_48h": 0.065,
+      "p_model_oof": 0.1489,
+      "outcome": 0
+    },
+    {
+      "market_id": "1972137",
+      "question": "Will Donald Trump announce that the United States blockade of the Strait of Horm",
+      "price_48h": 0.225,
+      "p_model_oof": 0.5708,
+      "outcome": 0
+    },
+    {
+      "market_id": "2009635",
+      "question": "Trump renames Strait of Hormuz to \"Strait of Trump\" by May 31?",
+      "price_48h": 0.0025,
+      "p_model_oof": 0.1031,
+      "outcome": 0
+    },
+    {
+      "market_id": "2047156",
+      "question": "Will the next US x Iran diplomatic meeting occur after May 10?",
+      "price_48h": 0.885,
+      "p_model_oof": 0.5519,
+      "outcome": 1
+    },
+    {
+      "market_id": "2097554",
+      "question": "Pete Hegseth out as Secretary of Defense by May 31?",
+      "price_48h": 0.0055,
+      "p_model_oof": 0.0989,
+      "outcome": 0
+    },
+    {
+      "market_id": "2097821",
+      "question": "Will Donald Trump announce that the United States blockade of the Strait of Horm",
+      "price_48h": 0.04,
+      "p_model_oof": 0.1566,
+      "outcome": 0
+    },
+    {
+      "market_id": "2111561",
+      "question": "Will Trump agree to Iranian enrichment of uranium by May 31?",
+      "price_48h": 0.0135,
+      "p_model_oof": 0.0953,
+      "outcome": 0
+    },
+    {
+      "market_id": "2111563",
+      "question": "Will Trump agree to Iranian transit fees in the Strait of Hormuz by May 31?",
+      "price_48h": 0.013,
+      "p_model_oof": 0.0828,
+      "outcome": 0
+    },
+    {
+      "market_id": "2111605",
+      "question": "Iran agrees to unrestricted shipping through Hormuz by May 31?",
+      "price_48h": 0.135,
+      "p_model_oof": 0.686,
+      "outcome": 0
+    },
+    {
+      "market_id": "2111624",
+      "question": "Iran agrees to end enrichment of uranium by May 31?",
+      "price_48h": 0.066,
+      "p_model_oof": 0.1317,
+      "outcome": 0
+    },
+    {
+      "market_id": "2111640",
+      "question": "US-Iran nuclear deal by May 31?",
+      "price_48h": 0.1375,
+      "p_model_oof": 0.1029,
+      "outcome": 0
+    },
+    {
+      "market_id": "2119227",
+      "question": "Will Donald Trump announce that the United States blockade of the Strait of Horm",
+      "price_48h": 0.055,
+      "p_model_oof": 0.1477,
+      "outcome": 0
+    },
+    {
+      "market_id": "2133404",
+      "question": "Iran closes its airspace by May 8?",
+      "price_48h": 0.0345,
+      "p_model_oof": 0.2459,
+      "outcome": 0
+    },
+    {
+      "market_id": "2133405",
+      "question": "Iran closes its airspace by May 31?",
+      "price_48h": 0.0975,
+      "p_model_oof": 0.2492,
+      "outcome": 0
+    },
+    {
+      "market_id": "2155023",
+      "question": "Will Donald Trump announce that the United States blockade of the Strait of Horm",
+      "price_48h": 0.65,
+      "p_model_oof": 0.8663,
+      "outcome": 1
+    },
+    {
+      "market_id": "2166353",
+      "question": "Iran closes its airspace by May 15?",
+      "price_48h": 0.085,
+      "p_model_oof": 0.1327,
+      "outcome": 0
+    },
+    {
+      "market_id": "2170230",
+      "question": "US x Iran peace deal before Trump visits China?",
+      "price_48h": 0.015,
+      "p_model_oof": 0.1774,
+      "outcome": 0
+    },
+    {
+      "market_id": "562186",
+      "question": "Will Ken Paxton win the 2026 Texas Republican Primary?",
+      "price_48h": 0.945,
+      "p_model_oof": 0.8709,
+      "outcome": 1
+    },
+    {
+      "market_id": "562187",
+      "question": "Will John Cornyn win the 2026 Texas Republican Primary?",
+      "price_48h": 0.055,
+      "p_model_oof": 0.0853,
+      "outcome": 0
+    },
+    {
+      "market_id": "567687",
+      "question": "Russia x Ukraine ceasefire by end of 2026?",
+      "price_48h": 0.305,
+      "p_model_oof": 0.836,
+      "outcome": 1
+    },
+    {
+      "market_id": "569343",
+      "question": "Will Iv\u00e1n Cepeda Castro win the 1st round of the 2026 Colombian presidential ele",
+      "price_48h": 0.73,
+      "p_model_oof": 0.5281,
+      "outcome": 0
+    },
+    {
+      "market_id": "569344",
+      "question": "Will Abelardo de la Espriella win the 1st round of the 2026 Colombian presidenti",
+      "price_48h": 0.2855,
+      "p_model_oof": 0.7095,
+      "outcome": 1
+    },
+    {
+      "market_id": "599323",
+      "question": "Will Graham Platner be the Democratic nominee for Senate in Maine?",
+      "price_48h": 0.9865,
+      "p_model_oof": 0.8714,
+      "outcome": 1
+    },
+    {
+      "market_id": "665325",
+      "question": "US-Iran nuclear deal before 2027?",
+      "price_48h": 0.79,
+      "p_model_oof": 0.8357,
+      "outcome": 1
+    },
+    {
+      "market_id": "678929",
+      "question": "Will Oh Se-hoon win the 2026 Seoul Mayoral Election",
+      "price_48h": 0.185,
+      "p_model_oof": 0.1005,
+      "outcome": 1
+    },
+    {
+      "market_id": "678937",
+      "question": "Will Chong Won-oh win the 2026 Seoul Mayoral Election",
+      "price_48h": 0.825,
+      "p_model_oof": 0.8807,
+      "outcome": 0
+    },
+    {
+      "market_id": "679492",
+      "question": "Will Choo Mi-ae win the 2026 Gyeonggi Province Gubernatorial Election?",
+      "price_48h": 0.9795,
+      "p_model_oof": 0.7842,
+      "outcome": 1
+    },
+    {
+      "market_id": "687171",
+      "question": "Will Yoo Jeong-bok win the 2026 Incheon mayoral election?",
+      "price_48h": 0.0525,
+      "p_model_oof": 0.2858,
+      "outcome": 0
+    },
+    {
+      "market_id": "703986",
+      "question": "Will the People Power Party (PPP) win the 2026 South Korean local elections?",
+      "price_48h": 0.021,
+      "p_model_oof": 0.1084,
+      "outcome": 0
+    },
+    {
+      "market_id": "703987",
+      "question": "Will the Democratic Party of Korea (DP) win the 2026 South Korean local election",
+      "price_48h": 0.9785,
+      "p_model_oof": 0.7987,
+      "outcome": 1
+    },
+    {
+      "market_id": "706279",
+      "question": "Will Trump visit China by April 30?",
+      "price_48h": 0.0015,
+      "p_model_oof": 0.084,
+      "outcome": 0
+    },
+    {
+      "market_id": "789540",
+      "question": "Will Thomas Massie be the Republican nominee for KY-04?",
+      "price_48h": 0.635,
+      "p_model_oof": 0.7172,
+      "outcome": 0
+    },
+    {
+      "market_id": "836184",
+      "question": "Will Casey Putsch win the 2026 Ohio Governor Republican primary election?",
+      "price_48h": 0.0075,
+      "p_model_oof": 0.0871,
+      "outcome": 0
+    },
+    {
+      "market_id": "842020",
+      "question": "Will Israel win Eurovision 2026?",
+      "price_48h": 0.043,
+      "p_model_oof": 0.1985,
+      "outcome": 0
+    },
+    {
+      "market_id": "842036",
+      "question": "Will Ukraine win Eurovision 2026?",
+      "price_48h": 0.0115,
+      "p_model_oof": 0.1409,
+      "outcome": 0
+    },
+    {
+      "market_id": "922766",
+      "question": "Will Scottish National Party win the most seats in the 2026 Scottish Parliament ",
+      "price_48h": 0.9965,
+      "p_model_oof": 0.6602,
+      "outcome": 1
+    },
+    {
+      "market_id": "957019",
+      "question": "US-Iran nuclear deal by June 30?",
+      "price_48h": 0.475,
+      "p_model_oof": 0.8326,
+      "outcome": 1
+    }
+  ]
+}

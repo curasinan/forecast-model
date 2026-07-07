@@ -26,10 +26,16 @@ from src.utils.dates import parse_iso8601
 
 GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 EVENTS_ENDPOINT = f"{GAMMA_BASE_URL}/events"
+MARKETS_ENDPOINT = f"{GAMMA_BASE_URL}/markets"
 PAGE_SIZE = 100
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 30
+
+# Max Gamma single-market lookups per collector run for the resolution pass.
+# The collector fires every 6h -> up to 400 resolutions/day, well ahead of the
+# observed resolution rate, while keeping each run fast.
+RESOLUTION_PASS_LIMIT = 100
 
 
 class PaginationLimitReached(Exception):
@@ -302,6 +308,144 @@ def mark_stale(
     return len(stale_ids)
 
 
+# --------------------------------------------------------------------------- #
+# Resolution capture (Gamma outcomePrices -> markets.resolution)
+# --------------------------------------------------------------------------- #
+
+
+def _parse_outcome_prices(raw: Any) -> int | None:
+    """Normalize Gamma's ``outcomePrices`` field to a binary resolution.
+
+    Gamma returns it as a JSON-encoded string like ``'["0", "1"]'`` (YES price
+    first), but is handled defensively as a real list too — the API has
+    changed encodings before (cf. ``clobTokenIds``). A YES price pinned to 1
+    means resolved YES, pinned to 0 means resolved NO. Anything interior
+    (e.g. ``["0.56", "0.44"]`` on a removed/unresolved market) is not a
+    definitive outcome -> None. Never raises.
+    """
+    if raw is None:
+        return None
+    prices = raw
+    if isinstance(prices, str):
+        try:
+            prices = json.loads(prices)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(prices, list) or len(prices) != 2:
+        return None
+    try:
+        yes_price = float(prices[0])
+    except (TypeError, ValueError):
+        return None
+    if yes_price >= 0.999:
+        return 1
+    if yes_price <= 0.001:
+        return 0
+    return None
+
+
+def fetch_market_resolution(
+    session: requests.Session,
+    market_id: str,
+) -> int | None:
+    """Fetch one market from Gamma and return its resolution (1/0) or None.
+
+    None means: not found (404), not closed yet, no definitive outcome, or
+    retries exhausted on transient errors. Callers leave the DB row NULL in
+    all of those cases.
+    """
+    url = f"{MARKETS_ENDPOINT}/{market_id}"
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+            status = response.status_code
+            if status == 200:
+                market = response.json()
+                if not isinstance(market, dict):
+                    return None
+                if not market.get("closed"):
+                    # Not actually closed on Gamma's side; no trustworthy outcome.
+                    return None
+                return _parse_outcome_prices(market.get("outcomePrices"))
+            if status == 404:
+                return None
+            if status == 429 or 500 <= status < 600:
+                log.warning(
+                    "Gamma /markets/%s returned %s on attempt %s/%s; retrying in %ss",
+                    market_id, status, attempt, MAX_RETRIES, RETRY_DELAY_SECONDS,
+                )
+                last_error = RuntimeError(f"HTTP {status}")
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            log.warning("Gamma /markets/%s returned unexpected HTTP %s", market_id, status)
+            return None
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            log.warning(
+                "Gamma /markets/%s request failed on attempt %s/%s: %s",
+                market_id, attempt, MAX_RETRIES, exc,
+            )
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY_SECONDS)
+    log.error(
+        "Gamma /markets/%s: retries exhausted (%s); leaving resolution NULL",
+        market_id, last_error,
+    )
+    return None
+
+
+def fetch_missing_resolutions(
+    conn: sqlite3.Connection,
+    session: requests.Session | None = None,
+    limit: int = RESOLUTION_PASS_LIMIT,
+    fetcher=fetch_market_resolution,
+) -> int:
+    """Populate ``markets.resolution`` for snapshot-backed resolved markets.
+
+    Picks up to ``limit`` markets with status='resolved_or_removed', NULL
+    resolution, and at least one snapshot (only snapshot-backed markets can
+    ever become training rows), newest last_updated first so freshly-flipped
+    markets are captured promptly. Returns the number of rows updated.
+    Per-market failures are logged and skipped; this never aborts the run.
+    """
+    rows = conn.execute(
+        """
+        SELECT m.id FROM markets m
+         WHERE m.status = 'resolved_or_removed'
+           AND m.resolution IS NULL
+           AND EXISTS (SELECT 1 FROM snapshots s WHERE s.market_id = m.id)
+         ORDER BY m.last_updated DESC
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    if session is None:
+        session = requests.Session()
+
+    updated = 0
+    for (market_id,) in rows:
+        market_id = str(market_id)
+        try:
+            resolution = fetcher(session, market_id)
+        except Exception as exc:  # noqa: BLE001 — one bad market must not kill the run
+            log.error("Resolution fetch failed for market %s: %s", market_id, exc)
+            continue
+        if resolution is None:
+            continue
+        conn.execute(
+            "UPDATE markets SET resolution = ? WHERE id = ?",
+            (resolution, market_id),
+        )
+        updated += 1
+    conn.commit()
+    return updated
+
+
 # Backwards-compatible alias: this helper used to live in this module before
 # being promoted to ``src.utils.dates``. Kept so any old import paths still work.
 _parse_iso8601 = parse_iso8601
@@ -374,6 +518,10 @@ def run() -> int:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     try:
+        # Wait up to 15s on a locked DB instead of failing instantly — the
+        # snapshot collector (and occasional backfill scripts) write to the
+        # same file on their own schedules.
+        conn.execute("PRAGMA busy_timeout = 15000")
         init_db(conn)
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -466,13 +614,26 @@ def run() -> int:
             stale_count = mark_stale(conn, seen_ids, now_iso)
         conn.commit()
 
+        # Resolution pass: capture Gamma outcomePrices for snapshot-backed
+        # markets that resolved (flipped by this or any earlier run) but have
+        # no stored outcome yet. Bounded per run to keep the collector fast.
+        try:
+            resolutions_captured = fetch_missing_resolutions(conn)
+        except Exception as exc:  # noqa: BLE001 — never let this kill the run
+            log.error("Resolution pass failed: %s", exc)
+            resolutions_captured = 0
+        if resolutions_captured:
+            log.info("Resolution pass: captured %s outcome(s)", resolutions_captured)
+
         log.info(
-            "Run summary: processed=%s, new=%s, updated=%s, marked_stale=%s%s",
+            "Run summary: processed=%s, new=%s, updated=%s, marked_stale=%s%s, "
+            "resolutions_captured=%s",
             processed,
             inserted,
             updated,
             stale_count,
             " (stale sweep skipped: pagination truncated)" if pagination_truncated else "",
+            resolutions_captured,
         )
         return 0
     finally:

@@ -1,0 +1,12 @@
+{
+  "generated_at": "2026-07-08T02:52:11.397627+09:00",
+  "pilot_edge_check": {
+    "label": "CONTAMINATED PILOT \u2014 the model may have seen these outcomes in training; results are DIRECTIONAL ONLY, not evidence of live edge.",
+    "n_pilot_scores": 78,
+    "n_recognized_outcome_true": 0,
+    "n_clean_with_reference_price": 78,
+    "n_disagreements_gt_10pts": 47,
+    "llm_wins_among_disagreements": 5,
+    "llm_win_rate": 0.10638297872340426
+  }
+}

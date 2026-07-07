@@ -1,0 +1,129 @@
+{
+  "generated_at": "2026-07-08T03:09:16.497269+09:00",
+  "smoke": true,
+  "preregistered_config": {
+    "min_resolved_for_verdict": 40,
+    "disagreement_threshold": 0.1,
+    "win_rate_gate": 0.55,
+    "spike_ratio_gate": 2.0,
+    "spike_window_hours": 24,
+    "base_rate_divergence_threshold": 0.15,
+    "wilson_z": 1.96,
+    "flagged_categories": [
+      "legislation",
+      "judicial",
+      "leadership_stability"
+    ],
+    "tie_break": "market",
+    "zero_disagreements_verdict": "politics_closed"
+  },
+  "primary": {
+    "n_markets": 78,
+    "n_disagreements": 46,
+    "llm_wins": 4,
+    "llm_win_rate": 0.08695652173913043,
+    "wilson_95_lo": 0.03433531187670748,
+    "wilson_95_hi": 0.20324935635224178
+  },
+  "smoke_verdict": "politics_closed",
+  "secondaries": [
+    {
+      "label": "secondary",
+      "name": "confidence_gated_high",
+      "n_markets": 6,
+      "n_disagreements": 0,
+      "llm_wins": 0,
+      "llm_win_rate": null,
+      "wilson_95_lo": null,
+      "wilson_95_hi": null
+    },
+    {
+      "label": "secondary",
+      "name": "spike_gated",
+      "n_markets": 0,
+      "n_disagreements": 0,
+      "llm_wins": 0,
+      "llm_win_rate": null,
+      "wilson_95_lo": null,
+      "wilson_95_hi": null
+    },
+    {
+      "label": "secondary",
+      "name": "category:diplomatic_summit",
+      "flagged_prior_binding": false,
+      "n_markets": 14,
+      "n_disagreements": 5,
+      "llm_wins": 0,
+      "llm_win_rate": 0.0,
+      "wilson_95_lo": 0.0,
+      "wilson_95_hi": 0.43449149475208104
+    },
+    {
+      "label": "secondary",
+      "name": "category:election_incumbent",
+      "flagged_prior_binding": false,
+      "n_markets": 5,
+      "n_disagreements": 5,
+      "llm_wins": 1,
+      "llm_win_rate": 0.2,
+      "wilson_95_lo": 0.03622316096978745,
+      "wilson_95_hi": 0.6244717358814613
+    },
+    {
+      "label": "secondary",
+      "name": "category:election_open",
+      "flagged_prior_binding": false,
+      "n_markets": 28,
+      "n_disagreements": 19,
+      "llm_wins": 2,
+      "llm_win_rate": 0.10526315789473684,
+      "wilson_95_lo": 0.029357941395096593,
+      "wilson_95_hi": 0.313945504948417
+    },
+    {
+      "label": "secondary",
+      "name": "category:executive_action",
+      "flagged_prior_binding": false,
+      "n_markets": 9,
+      "n_disagreements": 6,
+      "llm_wins": 0,
+      "llm_win_rate": 0.0,
+      "wilson_95_lo": 0.0,
+      "wilson_95_hi": 0.3903430336530645
+    },
+    {
+      "label": "secondary",
+      "name": "category:leadership_stability",
+      "flagged_prior_binding": true,
+      "n_markets": 9,
+      "n_disagreements": 4,
+      "llm_wins": 0,
+      "llm_win_rate": 0.0,
+      "wilson_95_lo": 0.0,
+      "wilson_95_hi": 0.48990002040399916
+    },
+    {
+      "label": "secondary",
+      "name": "category:other",
+      "flagged_prior_binding": false,
+      "n_markets": 13,
+      "n_disagreements": 7,
+      "llm_wins": 1,
+      "llm_win_rate": 0.14285714285714285,
+      "wilson_95_lo": 0.02567895594897482,
+      "wilson_95_hi": 0.5131345033190299
+    },
+    {
+      "label": "secondary",
+      "name": "base_rate_divergence_check",
+      "n_markets": 24,
+      "base_rate_wins": 2,
+      "base_rate_win_rate": 0.08333333333333333,
+      "wilson_95_lo": 0.023158327842973503,
+      "wilson_95_hi": 0.258492152014506,
+      "actual_resolution_rate": 0.20833333333333334,
+      "mean_base_rate": 0.6783333333333333,
+      "mean_price": 0.16852083333333334
+    }
+  ]
+}

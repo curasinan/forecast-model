@@ -1,0 +1,12 @@
+{
+    "legislation": 0.03,
+    "executive_action": 0.45,
+    "nomination_confirmation": 0.875,
+    "diplomatic_summit": 0.75,
+    "election_incumbent": 0.92,
+    "election_open": null,
+    "judicial": 0.02,
+    "government_operations": 0.125,
+    "leadership_stability": 0.09,
+    "other": null
+}
