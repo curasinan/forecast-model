@@ -1,0 +1,120 @@
+{
+  "generated_at": "2026-07-21T00:01:11.641221+03:00",
+  "config": {
+    "holding_window_hours": 6,
+    "post_spacing_hours": 12,
+    "offsets": [
+      0.01,
+      0.02
+    ],
+    "mid_range": [
+      0.05,
+      0.95
+    ],
+    "markout_tolerance_min": 30,
+    "max_intra_window_gap_min": 60,
+    "phase4_buffer": 0.005,
+    "min_snapshots": 200,
+    "cohort": "political keyword filter (model.train.POLITICAL_REGEX)"
+  },
+  "funnel": {
+    "n_markets": 482,
+    "n_snapshots_scanned": 492058,
+    "n_posttimes": 9312,
+    "n_dropped_pin_posttimes": 317597,
+    "n_dropped_no_forward_posttimes": 1058,
+    "n_orders": 37248,
+    "n_orders_dense": 2136,
+    "n_orders_filled": 1663,
+    "n_orders_with_markout": 8752
+  },
+  "overall": {
+    "any_offset_net_favorable_oneleg": false,
+    "buffer_assessment": "optimistic",
+    "worst_offset": "sell_+0.02",
+    "worst_offset_adverse_cost": 0.05466355140186916,
+    "note": "buffer_assessment reflects the offset with the HIGHEST realized adverse cost (the binding case for a maker); net_oneleg is an entry-only mark \u2014 see avg_net_roundtrip for a figure net of an exit half-spread."
+  },
+  "by_offset": [
+    {
+      "offset": "buy_-0.01",
+      "side": "buy",
+      "signed_offset": -0.01,
+      "delta": 0.01,
+      "n_orders": 9312,
+      "n_dense": 534,
+      "n_filled": 556,
+      "n_filled_markout": 204,
+      "fill_rate": 0.05970790378006873,
+      "dense_fill_rate": 0.11797752808988764,
+      "avg_time_to_fill_min": 145.96480673438248,
+      "avg_adverse_cost": 0.031247549019607846,
+      "avg_net_oneleg": -0.021247549019607837,
+      "avg_net_roundtrip": -0.027264705882352934,
+      "unconditional_drift": -0.00014693784277879332,
+      "filled_drift": -0.031247549019607846,
+      "adverse_selection": -0.03110061117682905,
+      "buffer_verdict": "optimistic"
+    },
+    {
+      "offset": "sell_+0.01",
+      "side": "sell",
+      "signed_offset": 0.01,
+      "delta": 0.01,
+      "n_orders": 9312,
+      "n_dense": 534,
+      "n_filled": 499,
+      "n_filled_markout": 190,
+      "fill_rate": 0.05358676975945017,
+      "dense_fill_rate": 0.1404494382022472,
+      "avg_time_to_fill_min": 144.1254075784235,
+      "avg_adverse_cost": 0.03600263157894737,
+      "avg_net_oneleg": -0.026002631578947364,
+      "avg_net_roundtrip": -0.03244999999999999,
+      "unconditional_drift": 0.00014693784277879332,
+      "filled_drift": -0.03600263157894737,
+      "adverse_selection": -0.03614956942172616,
+      "buffer_verdict": "optimistic"
+    },
+    {
+      "offset": "buy_-0.02",
+      "side": "buy",
+      "signed_offset": -0.02,
+      "delta": 0.02,
+      "n_orders": 9312,
+      "n_dense": 534,
+      "n_filled": 312,
+      "n_filled_markout": 122,
+      "fill_rate": 0.03350515463917526,
+      "dense_fill_rate": 0.08239700374531835,
+      "avg_time_to_fill_min": 150.72960280411326,
+      "avg_adverse_cost": 0.046709016393442625,
+      "avg_net_oneleg": -0.026709016393442614,
+      "avg_net_roundtrip": -0.03342213114754097,
+      "unconditional_drift": -0.00014693784277879332,
+      "filled_drift": -0.046709016393442625,
+      "adverse_selection": -0.046562078550663834,
+      "buffer_verdict": "optimistic"
+    },
+    {
+      "offset": "sell_+0.02",
+      "side": "sell",
+      "signed_offset": 0.02,
+      "delta": 0.02,
+      "n_orders": 9312,
+      "n_dense": 534,
+      "n_filled": 296,
+      "n_filled_markout": 107,
+      "fill_rate": 0.03178694158075601,
+      "dense_fill_rate": 0.08426966292134831,
+      "avg_time_to_fill_min": 155.09507492083333,
+      "avg_adverse_cost": 0.05466355140186916,
+      "avg_net_oneleg": -0.03466355140186916,
+      "avg_net_roundtrip": -0.042359813084112144,
+      "unconditional_drift": 0.00014693784277879332,
+      "filled_drift": -0.05466355140186916,
+      "adverse_selection": -0.05481048924464795,
+      "buffer_verdict": "optimistic"
+    }
+  ]
+}

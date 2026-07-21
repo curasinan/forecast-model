@@ -1,0 +1,76 @@
+{
+  "generated_at": "2026-07-21T14:32:13.107133+03:00",
+  "config": {
+    "starting_bankroll": 500.0,
+    "true_edges": [
+      0.0,
+      0.02,
+      0.05
+    ],
+    "believed_edge_for_sizing": 0.02,
+    "kelly_multiplier": 0.25,
+    "quarter_kelly_fraction": 0.01,
+    "min_position_dollars": 5.0,
+    "max_single_position_pct": 0.05,
+    "min_position_mode": "floor",
+    "n_bets_attempts": 200,
+    "n_runs": 10000,
+    "fill_rate": 0.0597,
+    "adverse_cost": 0.03125,
+    "entry_price": 0.5,
+    "drag_fraction_of_stake": 0.0625,
+    "break_even_edge": 0.03125,
+    "ruin_floor_pct": 0.2,
+    "seed": 42,
+    "friction_source": "analysis/results/fill_simulation.json (buy_-0.01 offset)",
+    "payout_model": "even-money binary contract bought at $0.50; win_prob = 0.5 + true_edge",
+    "notes": "Sizing uses a fixed believed edge, not the swept true edge, so the zero-edge case still bets. The engine's 20% drawdown circuit-breaker is NOT applied so ruin below the floor is measurable."
+  },
+  "scenarios": [
+    {
+      "true_edge": 0.0,
+      "median_final": 496.2333984375,
+      "mean_final": 496.37484686274723,
+      "ci_5_final": 466.875,
+      "ci_25_final": 485.49493404840035,
+      "ci_75_final": 507.4714128055572,
+      "ci_95_final": 525.9435982483047,
+      "prob_below_start": 0.5674,
+      "prob_profit": 0.4326,
+      "prob_ruin": 0.0,
+      "median_max_drawdown": 0.033125,
+      "p95_max_drawdown": 0.07625967492260062,
+      "mean_fills": 11.9186
+    },
+    {
+      "true_edge": 0.02,
+      "median_final": 498.0751953125,
+      "mean_final": 498.59557684414926,
+      "ci_5_final": 470.3125,
+      "ci_25_final": 486.7588881267019,
+      "ci_75_final": 510.7535490397155,
+      "ci_95_final": 526.6613174787317,
+      "prob_below_start": 0.5171,
+      "prob_profit": 0.4828,
+      "prob_ruin": 0.0,
+      "median_max_drawdown": 0.032844573619993565,
+      "p95_max_drawdown": 0.07291963876292458,
+      "mean_fills": 11.9287
+    },
+    {
+      "true_edge": 0.05,
+      "median_final": 502.059743183102,
+      "mean_final": 502.6751903641937,
+      "ci_5_final": 474.9087157117653,
+      "ci_25_final": 490.9375,
+      "ci_75_final": 514.9963208818224,
+      "ci_95_final": 531.5984332519141,
+      "prob_below_start": 0.4269,
+      "prob_profit": 0.5731,
+      "prob_ruin": 0.0,
+      "median_max_drawdown": 0.031537527587890614,
+      "p95_max_drawdown": 0.0658178369291796,
+      "mean_fills": 11.9148
+    }
+  ]
+}
