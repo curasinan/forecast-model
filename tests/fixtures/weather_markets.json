@@ -1,0 +1,134 @@
+[
+  {
+    "id": "wx-nyc-1",
+    "question": "Highest temperature in NYC on July 28?",
+    "groupItemTitle": "84-85°F",
+    "description": "This market will resolve to the temperature range that contains the highest temperature recorded at the LaGuardia Airport Station in degrees Fahrenheit on 28 Jul '25. The resolution source for this market will be information from Wunderground, specifically the highest temperature recorded for all times on this day by the Forecast for the LaGuardia Airport Station once information is finalized, available here: https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA. Temperatures are whole degrees Fahrenheit."
+  },
+  {
+    "id": "wx-nyc-2",
+    "question": "Highest temperature in NYC on July 28?",
+    "groupItemTitle": "86°F or higher",
+    "description": "Resolves on Wunderground daily max at LaGuardia. https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA. Date: 28 Jul '25. Fahrenheit."
+  },
+  {
+    "id": "wx-ord-1",
+    "question": "Highest temperature in Chicago on May 10?",
+    "groupItemTitle": "64°F or higher",
+    "description": "This market will resolve to the temperature range that contains the highest temperature recorded at the Chicago O'Hare Intl Airport Station in degrees Fahrenheit on 10 May '26. Resolution source: https://www.wunderground.com/history/daily/us/il/chicago/KORD."
+  },
+  {
+    "id": "wx-ord-2",
+    "question": "Highest temperature in Chicago on June 12?",
+    "groupItemTitle": "72-73",
+    "description": "Chicago O'Hare Intl Airport Station. https://www.wunderground.com/history/daily/us/il/chicago/KORD. 12 Jun '26. Fahrenheit."
+  },
+  {
+    "id": "wx-ord-3",
+    "question": "Highest temperature in Chicago on May 14?",
+    "groupItemTitle": "60-61°F",
+    "description": "KORD Wunderground history daily. https://www.wunderground.com/history/daily/us/il/chicago/KORD. 14 May '26."
+  },
+  {
+    "id": "wx-paris-1",
+    "question": "Highest temperature in Paris on August 1?",
+    "groupItemTitle": "28-29°C",
+    "description": "Resolves to Celsius high at Paris-Le Bourget. https://www.wunderground.com/history/daily/fr/paris/LFPB. 01 Aug '26. Degrees Celsius."
+  },
+  {
+    "id": "wx-london-1",
+    "question": "Highest temperature in London on July 4?",
+    "groupItemTitle": "24°C or higher",
+    "description": "London City Airport Station. https://www.wunderground.com/history/daily/gb/london/EGLC. 04 Jul '26. Celsius."
+  },
+  {
+    "id": "wx-london-2",
+    "question": "Highest temperature in London on July 5?",
+    "groupItemTitle": "22-23°C",
+    "description": "Heathrow Airport. https://www.wunderground.com/history/daily/gb/london/EGLL. 05 Jul '26. Degrees Celsius."
+  },
+  {
+    "id": "wx-tokyo-1",
+    "question": "Highest temperature in Tokyo on August 12?",
+    "groupItemTitle": "34-35°C",
+    "description": "Haneda Airport Station RJTT. https://www.wunderground.com/history/daily/jp/tokyo/RJTT. 12 Aug '26. Celsius."
+  },
+  {
+    "id": "wx-tokyo-2",
+    "question": "Highest temperature in Tokyo on August 13?",
+    "groupItemTitle": "33°C or higher",
+    "description": "Narita. https://www.wunderground.com/history/daily/jp/tokyo/RJAA. 13 Aug '26."
+  },
+  {
+    "id": "wx-hk-1",
+    "question": "Highest temperature in Hong Kong on September 1?",
+    "groupItemTitle": "32-33°C",
+    "description": "Hong Kong Intl. https://www.wunderground.com/history/daily/hk/hong-kong/VHHH. 01 Sep '26. Celsius."
+  },
+  {
+    "id": "wx-lax-1",
+    "question": "Highest temperature in Los Angeles on July 20?",
+    "groupItemTitle": "78-79°F",
+    "description": "LAX Airport Station. https://www.wunderground.com/history/daily/us/ca/los-angeles/KLAX. 20 Jul '26. Fahrenheit."
+  },
+  {
+    "id": "wx-bur-1",
+    "question": "Highest temperature in Los Angeles on July 21?",
+    "groupItemTitle": "90°F or higher",
+    "description": "Hollywood Burbank. https://www.wunderground.com/history/daily/us/ca/burbank/KBUR. 21 Jul '26."
+  },
+  {
+    "id": "wx-nyc-low-1",
+    "question": "Lowest temperature in NYC on January 15?",
+    "groupItemTitle": "20°F or lower",
+    "description": "Lowest temperature at LaGuardia. https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA. 15 Jan '26. Fahrenheit."
+  },
+  {
+    "id": "wx-us-nyc-1",
+    "question": "Will the high temperature in New York City be 80°F or above on 2026-07-10?",
+    "groupItemTitle": "80°F or higher",
+    "description": "Polymarket US Temperature Contract. Settlement determined by the official NWS Daily Climate Report (CLI) for KNYC (Central Park), CLINYC. Date 2026-07-10. Fahrenheit."
+  },
+  {
+    "id": "wx-us-chi-1",
+    "question": "Will the high temperature in Chicago be between 70-71°F on 2026-06-01?",
+    "groupItemTitle": "70-71°F",
+    "description": "Settled via NWS Daily Climate Report CLIMDW at Chicago Midway Airport (KMDW). See climate.weather.gov CLI product. 2026-06-01."
+  },
+  {
+    "id": "wx-us-mia-1",
+    "question": "Miami high temperature on 2026-08-05?",
+    "groupItemTitle": "90°F or higher",
+    "description": "Official NWS Daily Climate Report CLIMIA for KMIA (Miami International Airport)."
+  },
+  {
+    "id": "wx-us-sfo-1",
+    "question": "San Francisco high temperature on 2026-09-09?",
+    "groupItemTitle": "68-69°F",
+    "description": "Settlement source: NWS CLI CLISFO for KSFO. Date 2026-09-09."
+  },
+  {
+    "id": "wx-us-lax-1",
+    "question": "Los Angeles high temperature on 2026-07-02?",
+    "groupItemTitle": "74-75°F",
+    "description": "NWS Daily Climate Report CLILAX at KLAX. Date 2026-07-02."
+  },
+  {
+    "id": "wx-nyc-3",
+    "question": "Highest temperature in New York on December 1?",
+    "groupItemTitle": "45-46°F",
+    "description": "LaGuardia Airport Station KLGA on Wunderground. https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA. 01 Dec '26."
+  },
+  {
+    "id": "wx-ord-low-1",
+    "question": "Lowest temperature in Chicago on February 2?",
+    "groupItemTitle": "10°F or lower",
+    "description": "Minimum temperature at Chicago O'Hare. https://www.wunderground.com/history/daily/us/il/chicago/KORD. 02 Feb '26. Fahrenheit."
+  },
+  {
+    "id": "wx-paris-2",
+    "question": "Highest temperature in Paris on 2026-07-15?",
+    "groupItemTitle": "30°C or higher",
+    "description": "Paris-Le Bourget LFPB via Wunderground daily summary once finalized. Celsius."
+  }
+]

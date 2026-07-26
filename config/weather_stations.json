@@ -1,0 +1,153 @@
+{
+  "stations": {
+    "KLGA": {
+      "name": "LaGuardia Airport",
+      "city": "New York City",
+      "lat": 40.7769,
+      "lon": -73.8740,
+      "timezone": "America/New_York",
+      "unit_default": "F",
+      "coastal": true,
+      "platforms": ["global"]
+    },
+    "KORD": {
+      "name": "Chicago O'Hare Intl",
+      "city": "Chicago",
+      "lat": 41.9742,
+      "lon": -87.9073,
+      "timezone": "America/Chicago",
+      "unit_default": "F",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "KMDW": {
+      "name": "Chicago Midway",
+      "city": "Chicago",
+      "lat": 41.7868,
+      "lon": -87.7522,
+      "timezone": "America/Chicago",
+      "unit_default": "F",
+      "coastal": false,
+      "platforms": ["us"]
+    },
+    "KNYC": {
+      "name": "Central Park",
+      "city": "New York City",
+      "lat": 40.7789,
+      "lon": -73.9692,
+      "timezone": "America/New_York",
+      "unit_default": "F",
+      "coastal": false,
+      "platforms": ["us"]
+    },
+    "KLAX": {
+      "name": "Los Angeles Intl",
+      "city": "Los Angeles",
+      "lat": 33.9425,
+      "lon": -118.4081,
+      "timezone": "America/Los_Angeles",
+      "unit_default": "F",
+      "coastal": true,
+      "platforms": ["global", "us"]
+    },
+    "KBUR": {
+      "name": "Hollywood Burbank",
+      "city": "Los Angeles",
+      "lat": 34.2007,
+      "lon": -118.3585,
+      "timezone": "America/Los_Angeles",
+      "unit_default": "F",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "KSFO": {
+      "name": "San Francisco Intl",
+      "city": "San Francisco",
+      "lat": 37.6213,
+      "lon": -122.3790,
+      "timezone": "America/Los_Angeles",
+      "unit_default": "F",
+      "coastal": true,
+      "platforms": ["us"]
+    },
+    "KMIA": {
+      "name": "Miami Intl",
+      "city": "Miami",
+      "lat": 25.7959,
+      "lon": -80.2870,
+      "timezone": "America/New_York",
+      "unit_default": "F",
+      "coastal": true,
+      "platforms": ["us"]
+    },
+    "LFPB": {
+      "name": "Paris-Le Bourget",
+      "city": "Paris",
+      "lat": 48.9694,
+      "lon": 2.4414,
+      "timezone": "Europe/Paris",
+      "unit_default": "C",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "EGLC": {
+      "name": "London City",
+      "city": "London",
+      "lat": 51.5053,
+      "lon": 0.0553,
+      "timezone": "Europe/London",
+      "unit_default": "C",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "EGLL": {
+      "name": "London Heathrow",
+      "city": "London",
+      "lat": 51.4700,
+      "lon": -0.4543,
+      "timezone": "Europe/London",
+      "unit_default": "C",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "RJTT": {
+      "name": "Tokyo Haneda",
+      "city": "Tokyo",
+      "lat": 35.5494,
+      "lon": 139.7798,
+      "timezone": "Asia/Tokyo",
+      "unit_default": "C",
+      "coastal": true,
+      "platforms": ["global"]
+    },
+    "RJAA": {
+      "name": "Tokyo Narita",
+      "city": "Tokyo",
+      "lat": 35.7720,
+      "lon": 140.3929,
+      "timezone": "Asia/Tokyo",
+      "unit_default": "C",
+      "coastal": false,
+      "platforms": ["global"]
+    },
+    "VHHH": {
+      "name": "Hong Kong Intl",
+      "city": "Hong Kong",
+      "lat": 22.3080,
+      "lon": 113.9185,
+      "timezone": "Asia/Hong_Kong",
+      "unit_default": "C",
+      "coastal": true,
+      "platforms": ["global"]
+    }
+  },
+  "model_availability_lag_hours": {
+    "ecmwf_ifs025": 7.0,
+    "gfs_seamless": 4.0,
+    "icon_seamless": 3.0,
+    "gem_global": 5.0,
+    "ecmwf_aifs025": 7.0,
+    "gfs025": 4.0,
+    "default": 6.0
+  }
+}

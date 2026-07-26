@@ -34,6 +34,9 @@ dependencies = [
     # Utilities
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+
+    # Weather data
+    "pyarrow>=17.0",
 ]
 
 [project.optional-dependencies]
@@ -50,13 +53,16 @@ web = [
 trading = [
     "py-clob-client>=0.17",
 ]
+mcp = [
+    "mcp>=1.27,<2",
+]
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*"]
+include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*", "weather*", "mcp_server*"]
 
 [tool.ruff]
 line-length = 100

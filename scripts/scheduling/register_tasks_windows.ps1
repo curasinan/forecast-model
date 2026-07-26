@@ -75,6 +75,43 @@ $snapshotTrigger = New-ScheduledTaskTrigger `
 
 Register-CollectorTask -TaskName "collect_snapshots" -Module "collectors.collect_snapshots" -Triggers $snapshotTrigger
 
+# --- weather collect cycle: every 30 minutes --------------------------------
+# discover live weather markets + Open-Meteo forecasts + IEM obs
+$weatherSeedMinutes = 30 - ($now.Minute % 30)
+if ($weatherSeedMinutes -eq 30) { $weatherSeedMinutes = 0 }
+$weatherSeed = $now.AddSeconds(-$now.Second).AddMilliseconds(-$now.Millisecond).AddMinutes($weatherSeedMinutes)
+if ($weatherSeed -le $now) { $weatherSeed = $weatherSeed.AddMinutes(30) }
+Write-Host "weather_collect_cycle first fire at: $weatherSeed"
+
+$weatherTrigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At $weatherSeed `
+    -RepetitionInterval (New-TimeSpan -Minutes 30) `
+    -RepetitionDuration ([TimeSpan]::FromDays(3650))
+
+$weatherAction = New-ScheduledTaskAction `
+    -Execute $PythonExe `
+    -Argument "scripts/run_weather_collect_cycle.py --allow-noncommercial" `
+    -WorkingDirectory $RepoRoot
+
+$settings = New-ScheduledTaskSettingsSet `
+    -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+
+Unregister-ScheduledTask -TaskPath $TaskPath -TaskName "weather_collect_cycle" -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask `
+    -TaskName "weather_collect_cycle" `
+    -TaskPath $TaskPath `
+    -Action $weatherAction `
+    -Trigger $weatherTrigger `
+    -Settings $settings `
+    -Description "Weather: discover markets + forecasts + IEM obs" | Out-Null
+Write-Host "Registered: ${TaskPath}weather_collect_cycle"
+Write-Host "NOTE: remove --allow-noncommercial after OPEN_METEO_API_KEY is set."
+
 Write-Host ""
 Write-Host "Done. View in Task Scheduler under '$TaskPath'."
 Write-Host "Tail logs:  Get-Content logs\snapshot_collector.log -Wait -Tail 20"

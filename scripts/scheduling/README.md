@@ -6,6 +6,7 @@ Two jobs need to run on a timer:
 |---|---|---|
 | `collect_markets` | `python -m collectors.collect_markets` | Daily at 06:00 and 18:00 local time |
 | `collect_snapshots` | `python -m collectors.collect_snapshots` | Every 15 minutes |
+| `weather_collect_cycle` | `python scripts/run_weather_collect_cycle.py` | Every 30 minutes (discover + forecasts + obs) |
 
 Both must be invoked with the repo root as the working directory
 (`C:\Users\asus\OneDrive\Desktop\new_work`) so relative paths

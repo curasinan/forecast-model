@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import sys
 import time
@@ -36,6 +37,19 @@ REQUEST_TIMEOUT_SECONDS = 30
 # The collector fires every 6h -> up to 400 resolutions/day, well ahead of the
 # observed resolution rate, while keeping each run fast.
 RESOLUTION_PASS_LIMIT = 100
+
+# Max Gamma lookups per run for the scored-market probe. Since the 422
+# pagination ceiling forces the stale sweep to be skipped on every run,
+# NOTHING else flips status='active' markets to resolved_or_removed anymore —
+# so this pass probes prospective-scored, still-'active' markets directly
+# against Gamma's `closed` flag, independent of the sweep. At ~305 scored
+# markets and 4 runs/day the whole cohort is re-checked about every 18h.
+SCORED_PROBE_LIMIT = 100
+
+# A latest midpoint at/beyond these bounds is the local signature of a market
+# that has de facto resolved (price pinned) — those candidates are probed first.
+PINNED_MIDPOINT_LOW = 0.02
+PINNED_MIDPOINT_HIGH = 0.98
 
 
 class PaginationLimitReached(Exception):
@@ -344,15 +358,19 @@ def _parse_outcome_prices(raw: Any) -> int | None:
     return None
 
 
-def fetch_market_resolution(
+def fetch_market_status(
     session: requests.Session,
     market_id: str,
-) -> int | None:
-    """Fetch one market from Gamma and return its resolution (1/0) or None.
+) -> tuple[str, int | None]:
+    """Fetch one market from Gamma; return (state, resolution).
 
-    None means: not found (404), not closed yet, no definitive outcome, or
-    retries exhausted on transient errors. Callers leave the DB row NULL in
-    all of those cases.
+    States:
+    - ``"closed"``  — Gamma says the market is closed; resolution is 1/0 when
+      ``outcomePrices`` is definitive, else None (still closed, outcome pending).
+    - ``"open"``    — market exists and is not closed.
+    - ``"gone"``    — 404 (removed from Gamma).
+    - ``"error"``   — retries exhausted / unexpected response; caller should
+      leave the row untouched and retry on a later run.
     """
     url = f"{MARKETS_ENDPOINT}/{market_id}"
     last_error: Exception | None = None
@@ -363,13 +381,13 @@ def fetch_market_resolution(
             if status == 200:
                 market = response.json()
                 if not isinstance(market, dict):
-                    return None
+                    return "error", None
                 if not market.get("closed"):
                     # Not actually closed on Gamma's side; no trustworthy outcome.
-                    return None
-                return _parse_outcome_prices(market.get("outcomePrices"))
+                    return "open", None
+                return "closed", _parse_outcome_prices(market.get("outcomePrices"))
             if status == 404:
-                return None
+                return "gone", None
             if status == 429 or 500 <= status < 600:
                 log.warning(
                     "Gamma /markets/%s returned %s on attempt %s/%s; retrying in %ss",
@@ -380,7 +398,7 @@ def fetch_market_resolution(
                     time.sleep(RETRY_DELAY_SECONDS)
                 continue
             log.warning("Gamma /markets/%s returned unexpected HTTP %s", market_id, status)
-            return None
+            return "error", None
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
             log.warning(
@@ -393,7 +411,21 @@ def fetch_market_resolution(
         "Gamma /markets/%s: retries exhausted (%s); leaving resolution NULL",
         market_id, last_error,
     )
-    return None
+    return "error", None
+
+
+def fetch_market_resolution(
+    session: requests.Session,
+    market_id: str,
+) -> int | None:
+    """Fetch one market from Gamma and return its resolution (1/0) or None.
+
+    None means: not found (404), not closed yet, no definitive outcome, or
+    retries exhausted on transient errors. Callers leave the DB row NULL in
+    all of those cases.
+    """
+    state, resolution = fetch_market_status(session, market_id)
+    return resolution if state == "closed" else None
 
 
 def fetch_missing_resolutions(
@@ -446,9 +478,108 @@ def fetch_missing_resolutions(
     return updated
 
 
+def probe_scored_unresolved(
+    conn: sqlite3.Connection,
+    session: requests.Session | None = None,
+    limit: int = SCORED_PROBE_LIMIT,
+    fetcher=fetch_market_status,
+    now_iso: str | None = None,
+) -> tuple[int, int]:
+    """Probe prospective-scored, still-'active' markets directly against Gamma.
+
+    The stale sweep is skipped on every run (422 pagination truncation), so no
+    market ever flips to resolved_or_removed and the resolution pass starves.
+    This pass restores the bookkeeping independent of the sweep: any market we
+    have a prospective LLM score for, still marked 'active' with NULL
+    resolution, is checked against Gamma's ``closed`` flag. Closed (or 404)
+    markets get status='resolved_or_removed' + last_updated=now, and the
+    resolution when ``outcomePrices`` is definitive; ambiguous outcomes leave
+    resolution NULL for ``fetch_missing_resolutions`` to retry next run.
+
+    Candidates are probed pinned-midpoint-first (latest midpoint at/beyond
+    0.02/0.98 — the local signature of a de facto resolved market), so likely
+    resolutions are captured earliest. Empirically end_date is useless as a
+    trigger here: these markets close far before their formal end date.
+
+    Returns (n_flipped, n_resolutions_written). Never raises on a per-market
+    failure. Missing llm_scores table (scorer never ran) -> (0, 0).
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.id,
+                   (SELECT sn.midpoint FROM snapshots sn
+                     WHERE sn.market_id = m.id
+                     ORDER BY sn.timestamp DESC LIMIT 1) AS last_mid
+              FROM markets m
+             WHERE m.status = 'active'
+               AND m.resolution IS NULL
+               AND EXISTS (SELECT 1 FROM llm_scores ls
+                            WHERE ls.market_id = m.id AND ls.retrospective = 0)
+            """
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        # llm_scores doesn't exist until the scorer has run at least once.
+        log.info("Scored-market probe skipped: %s", exc)
+        return 0, 0
+    if not rows:
+        return 0, 0
+
+    def _pinned(mid_val) -> bool:
+        return mid_val is not None and (
+            mid_val <= PINNED_MIDPOINT_LOW or mid_val >= PINNED_MIDPOINT_HIGH
+        )
+
+    candidates = sorted(rows, key=lambda r: (0 if _pinned(r[1]) else 1, str(r[0])))
+    candidates = candidates[:limit]
+
+    if session is None:
+        session = requests.Session()
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+    flipped = 0
+    resolved = 0
+    for market_id, _last_mid in candidates:
+        market_id = str(market_id)
+        try:
+            state, resolution = fetcher(session, market_id)
+        except Exception as exc:  # noqa: BLE001 — one bad market must not kill the run
+            log.error("Scored-market probe failed for market %s: %s", market_id, exc)
+            continue
+        if state not in ("closed", "gone"):
+            continue  # open -> still live; error -> retry a later run
+        conn.execute(
+            """
+            UPDATE markets
+               SET status = 'resolved_or_removed',
+                   last_updated = ?,
+                   resolution = COALESCE(?, resolution)
+             WHERE id = ?
+            """,
+            (now_iso, resolution, market_id),
+        )
+        flipped += 1
+        if resolution is not None:
+            resolved += 1
+    conn.commit()
+    return flipped, resolved
+
+
 # Backwards-compatible alias: this helper used to live in this module before
 # being promoted to ``src.utils.dates``. Kept so any old import paths still work.
 _parse_iso8601 = parse_iso8601
+
+
+_WEATHER_SNAPSHOT_RE = re.compile(
+    r"\b(temperature|temp|°[FC]|highest temperature|lowest temperature|"
+    r"high temp|low temp|degrees?\s+[FC])\b",
+    re.IGNORECASE,
+)
+
+
+def _is_weather_market_question(question: str | None) -> bool:
+    return bool(question and _WEATHER_SNAPSHOT_RE.search(question))
 
 
 def get_snapshot_candidates(
@@ -459,8 +590,10 @@ def get_snapshot_candidates(
     Filter:
       - status = 'active'
       - clob_token_ids is non-empty (not NULL, '', or '[]')
-      - liquidity > 250000 OR volume > 500000
-      - end_date is more than 24 hours in the future
+      - Politics / default: liquidity > 250000 OR volume > 500000,
+        end_date more than 24 hours in the future
+      - Weather override: lower liquidity/volume floors and nearer expiry
+        (temperature markets are thinner and resolve daily)
       - orderbook_missing is not set (i.e. the CLOB has a book for it;
         the flag is cleared on every collect_markets run so a relisted
         market becomes eligible again automatically)
@@ -468,17 +601,26 @@ def get_snapshot_candidates(
     Each returned dict has keys: ``id``, ``question``, ``clob_token_ids``.
     Also logs the count of candidates vs total active markets.
     """
+    # Import here to avoid circular imports at module load for non-weather runs.
+    try:
+        from src.config import settings as _settings
+
+        weather_min_liq = float(_settings.weather_min_liquidity)
+        weather_min_vol = float(_settings.weather_min_volume)
+        weather_end_hours = float(_settings.weather_snapshot_end_hours)
+    except Exception:  # noqa: BLE001
+        weather_min_liq, weather_min_vol, weather_end_hours = 1000.0, 5000.0, 2.0
+
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
             """
-            SELECT id, question, clob_token_ids, end_date
+            SELECT id, question, clob_token_ids, end_date, liquidity, volume
               FROM markets
              WHERE status = 'active'
                AND clob_token_ids IS NOT NULL
                AND clob_token_ids != ''
                AND clob_token_ids != '[]'
-               AND (liquidity > 250000 OR volume > 500000)
                AND end_date IS NOT NULL
                AND end_date != ''
                AND (orderbook_missing = 0 OR orderbook_missing IS NULL)
@@ -490,12 +632,29 @@ def get_snapshot_candidates(
     finally:
         conn.close()
 
-    cutoff = datetime.now(timezone.utc) + timedelta(hours=24)
+    now = datetime.now(timezone.utc)
+    politics_cutoff = now + timedelta(hours=24)
+    weather_cutoff = now + timedelta(hours=weather_end_hours)
     candidates: list[dict[str, Any]] = []
-    for market_id, question, clob_token_ids, end_date in rows:
+    weather_n = 0
+    for market_id, question, clob_token_ids, end_date, liquidity, volume in rows:
         end_dt = _parse_iso8601(end_date)
-        if end_dt is None or end_dt <= cutoff:
+        if end_dt is None:
             continue
+        liq = float(liquidity or 0.0)
+        vol = float(volume or 0.0)
+        is_weather = _is_weather_market_question(question)
+        if is_weather:
+            if liq <= weather_min_liq and vol <= weather_min_vol:
+                continue
+            if end_dt <= weather_cutoff:
+                continue
+            weather_n += 1
+        else:
+            if liq <= 250000 and vol <= 500000:
+                continue
+            if end_dt <= politics_cutoff:
+                continue
         candidates.append(
             {
                 "id": market_id,
@@ -506,10 +665,11 @@ def get_snapshot_candidates(
 
     pct = 100 * len(candidates) / total_active if total_active else 0.0
     log.info(
-        "Snapshot candidates: %s / %s active markets (%.2f%%)",
+        "Snapshot candidates: %s / %s active markets (%.2f%%); weather=%s",
         len(candidates),
         total_active,
         pct,
+        weather_n,
     )
     return candidates
 
@@ -625,15 +785,32 @@ def run() -> int:
         if resolutions_captured:
             log.info("Resolution pass: captured %s outcome(s)", resolutions_captured)
 
+        # Scored-market probe: with the stale sweep permanently skipped (422
+        # truncation), this is the ONLY path that flips scored 'active' markets
+        # to resolved_or_removed. See probe_scored_unresolved docstring.
+        try:
+            probe_flipped, probe_resolved = probe_scored_unresolved(conn)
+        except Exception as exc:  # noqa: BLE001 — never let this kill the run
+            log.error("Scored-market probe failed: %s", exc)
+            probe_flipped = probe_resolved = 0
+        if probe_flipped:
+            log.info(
+                "Scored-market probe: flipped %s market(s) to resolved_or_removed "
+                "(%s with definitive outcome)",
+                probe_flipped, probe_resolved,
+            )
+
         log.info(
             "Run summary: processed=%s, new=%s, updated=%s, marked_stale=%s%s, "
-            "resolutions_captured=%s",
+            "resolutions_captured=%s, scored_probe_flipped=%s, scored_probe_resolved=%s",
             processed,
             inserted,
             updated,
             stale_count,
             " (stale sweep skipped: pagination truncated)" if pagination_truncated else "",
             resolutions_captured,
+            probe_flipped,
+            probe_resolved,
         )
         return 0
     finally:
