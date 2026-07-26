@@ -1,0 +1,32 @@
+BIST 100 BÜLTENİ — KAPANIŞ SONRASI — 26 Temmuz 2026 Pazar
+Veri: 24.07.2026 kapanışı | 100 hisse
+NOT: XU100 endeksinin 24.07 günlük barı kaynakta eksikti; endeks kapanışı yfinance saatlik serisinin son barından (17:30 TSİ) alındı.
+
+XU100: 13,955.84 | 1G -0.87% | 5G -0.18% | 20G -2.13% | YBB +21.37%
+Genişlik: 30 yükselen / 69 düşen (%30 pozitif)
+
+TARAMA SİNYALLERİ
+Hacim patlaması (>=2x): KMPUR 4.2x
+Volatilite genişlemesi: VESBE 76%/rejim1.54, VESTL 75%/rejim1.47
+Direnç kırılımı: KMPUR +7.7%
+Destek kaybı: SKBNK -10.0%, TTKOM -3.0%, EKGYO -2.9%, ULKER -2.4%, ECILC -2.1%, MPARK -1.9%, TOASO -1.8%, BUCIM -1.5%, HALKB -1.3%, TCELL -1.2%
+Aşırı hareket: yok
+Güçlü RS: IZMDC +45.0, TUPRS +40.9, AKSEN +32.3, EUPWR +27.2, AKCNS +23.6, AKFYE +21.3, KMPUR +18.9, GESAN +18.7, CCOLA +17.3, PETKM +16.1
+Zayıf RS: KZBGY -23.2, GEREL -17.2, KARSN -15.7, YKBNK -15.5, HALKB -14.4, BERA -14.2, TOASO -14.1, MIATK -13.8, HEKTS -10.7, AKBNK -10.3
+
+YÜKSELENLER: KMPUR +7.72%, TKFEN +2.81%, KONYA +2.67%, BRSAN +2.33%, OYAKC +2.31%, EUPWR +2.08%, KCAER +2.04%, SASA +1.51%
+DÜŞENLER: SKBNK -9.95%, IZMDC -9.25%, ODAS -6.78%, CWENE -5.43%, BINHO -5.37%, HEKTS -3.86%, KONTR -3.85%, MAVI -3.70%
+EN VOLATİL: KONTR 135%, SKBNK 110%, VESBE 76%, VESTL 75%, GEREL 75%, ECZYT 72%, AKFYE 72%, IZMDC 69%
+EN YÜKSEK TL HACMİ: ASELS 16307mn, YKBNK 9378mn, AKBNK 8850mn, TUPRS 8698mn, THYAO 7314mn, ASTOR 6812mn, ISCTR 6758mn, EREGL 6183mn, TCELL 3762mn, BIMAS 3601mn
+
+SEKTÖRLER (1G ort.): Savunma-Tekno +0.97%, Teknoloji +0.78%, İnşaat +0.77%, Dayanıklı Tük. +0.22%, Ulaştırma +0.20%, Çimento -0.16%, Gıda -0.70%, Otomotiv -0.75%, Cam-Kimya -0.92%, Bankacılık -1.18%, Sanayi -1.56%, Enerji -1.60%, Holding -1.78%, GYO -1.84%, Telekom -2.10%, Demir-Çelik -2.23%, Perakende -2.70%
+
+TAKİP LİSTESİ
+KCHOL: 197.60 TL | 1G -0.30% | 20G +1.4% | YBB +13.0% | RS20 +3.5 | Vol 28% | BgHcm 0.51x | Dest 182.10 / Dir 205.70
+SAHOL: 87.10 TL | 1G -0.97% | 20G -10.2% | YBB -0.9% | RS20 -8.1 | Vol 20% | BgHcm 0.86x | Dest 87.55 / Dir 101.40
+EREGL: 43.28 TL | 1G -2.08% | 20G +7.3% | YBB +78.7% | RS20 +9.5 | Vol 44% | BgHcm 1.03x | Dest 39.04 / Dir 45.10
+SISE: 43.42 TL | 1G -0.60% | 20G -1.9% | YBB +10.9% | RS20 +0.3 | Vol 29% | BgHcm 0.84x | Dest 41.58 / Dir 45.88
+GEREL: 35.90 TL | 1G -1.97% | 20G -19.3% | YBB +87.1% | RS20 -17.2 | Vol 75% | BgHcm 0.30x | Dest 29.36 / Dir 47.24
+
+Yöntem: Yahoo Finance günlük OHLCV (yfinance). Detaylı tablo: bist_panel.html
+Yatırım tavsiyesi değildir.
