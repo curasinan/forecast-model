@@ -21,7 +21,7 @@ python3 report.py <MODE> $BD    # MODE = preopen | postclose
 ## Sonraki adım
 1. `meta.json` içindeki `subject` alanını e-posta konusu yap.
 2. `email.html` içeriğini `htmlBody`, `email.txt` içeriğini `body` olarak
-   Gmail `create_draft` çağrısına ver. Alıcı: curasinan9@gmail.com
+   Gmail `create_draft` çağrısına ver. Alıcı: `$BIST_BRIEF_RECIPIENT`
 3. **Taslak oluştur, GÖNDERME.**
 4. Kısa bir onay notu yaz: tarih, XU100 kapanışı ve değişimi, genişlik,
    tetiklenen sinyal sayıları, taslak ID.
