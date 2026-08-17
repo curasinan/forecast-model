@@ -56,6 +56,11 @@ trading = [
 ibkr = [
     "ib_async>=2.1",
 ]
+climate = [
+    "cdsapi>=0.7.4",
+    "xarray>=2024.1",
+    "netcdf4>=1.6",
+]
 mcp = [
     "mcp>=1.27,<2",
 ]
@@ -65,7 +70,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*", "weather*", "mcp_server*", "legacy*"]
+include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*", "weather*", "mcp_server*", "legacy*", "climate*"]
 
 [tool.ruff]
 line-length = 100
