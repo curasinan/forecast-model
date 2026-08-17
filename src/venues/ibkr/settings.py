@@ -41,6 +41,13 @@ class IBKRSettings(BaseSettings):
     max_data_lines: int = 100
     record_interval_minutes: int = 10
     market_data_type: int = 4  # 4 = delayed-frozen; works without paid subscriptions
+    # Gateway auto-restart window in THIS MACHINE'S LOCAL clock, 'HH:MM-HH:MM'
+    # (may cross midnight, boundaries inclusive). Connection events inside it are
+    # classified expected=True. The default is only a guess at IB Gateway's
+    # ~midnight US-Eastern daily restart seen from Turkey (UTC+3, so 00:00 ET is
+    # ~07:00 local, +-1h across US DST): ADJUST IT (IBKR_RESTART_WINDOW_LOCAL)
+    # to match the restart time actually configured in your Gateway.
+    restart_window_local: str = "06:45-08:15"
 
     @property
     def resolved_data_root(self) -> Path:

@@ -40,15 +40,13 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.venues.ibkr.clients import connect_ib
 from src.venues.ibkr.contracts import ContractResolver
+from src.venues.ibkr.gateway import ConnectionEvent, GatewaySession, append_event_jsonl
 from src.venues.ibkr.settings import IBKRSettings
 
 logger = logging.getLogger(__name__)
 
 QUOTE_BATCH_SIZE = 50
-BACKOFF_INITIAL_S = 1.0
-BACKOFF_CAP_S = 60.0
 _DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed"}
 _LOGGING_CONFIGURED = False
 
@@ -90,6 +88,12 @@ def setup_logging(log_dir: str | Path = "logs") -> None:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _log_event(event: ConnectionEvent) -> None:
+    """Logging sink for GatewaySession events (JSONL sink handles structure)."""
+    logger.warning("gateway event: kind=%s expected=%s downtime_s=%s detail=%s",
+                   event.kind, event.expected, event.downtime_seconds, event.detail)
 
 
 def _nan_to_none(value) -> float | None:
@@ -154,6 +158,14 @@ class QuoteRecorder:
         self.settings = settings
         self.snapshot_path = Path(snapshot_path)
         self.resolver = ContractResolver(settings)
+        self.session = GatewaySession(
+            settings, "data_collector", connect_validator=self._validate_connection
+        )
+        # Listings may have changed while the session was down (contracts.py
+        # reconnect policy); universe() re-seeds from the snapshot next sweep.
+        self.session.on_reconnect(self.resolver.flush_all)
+        self.session.on_event(_log_event)
+        self.session.on_event(append_event_jsonl)  # default: logs/ibkr_events.jsonl
         self.ib = None
 
     # -- universe ------------------------------------------------------------
@@ -183,46 +195,21 @@ class QuoteRecorder:
         logger.warning("ibkr session: account=%s mode=%s role=data_collector read_only=True",
                        account, mode)
 
-    def _connect_with_backoff(self) -> None:
-        """Connect as data_collector (clientId 2), retrying 1s -> 60s doubling.
+    def _validate_connection(self, ib) -> None:
+        """Runs inside GatewaySession after every successful (re)connect.
 
         A mode mismatch is a configuration error, not a connectivity blip:
-        it raises out of the loop instead of retrying.
+        it raises out of the session's retry loop instead of being retried.
         """
-        delay = BACKOFF_INITIAL_S
-        while True:
-            try:
-                ib = connect_ib("data_collector", self.settings)
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:
-                logger.warning("connect failed (%s); retrying in %.0fs", exc, delay)
-                time.sleep(delay)
-                delay = min(delay * 2.0, BACKOFF_CAP_S)
-                continue
-            self._check_mode(ib)
-            ib.reqMarketDataType(self.settings.market_data_type)
-            self.ib = ib
-            return
-
-    def _reconnect(self) -> None:
-        if self.ib is not None:
-            try:
-                self.ib.disconnect()
-            except Exception:
-                pass
-            self.ib = None
-        self._connect_with_backoff()
-        # Listings may have changed while the session was down (contracts.py
-        # reconnect policy); universe() re-seeds from the snapshot next sweep.
-        self.resolver.flush_all()
+        self._check_mode(ib)
+        ib.reqMarketDataType(self.settings.market_data_type)
 
     # -- sweeping ------------------------------------------------------------
     def sweep(self) -> tuple[list[dict], int]:
         """One full-universe pass of transient snapshot batches (no file I/O)."""
         ib = self.ib
         if ib is None:
-            raise RuntimeError("not connected; call run() or _connect_with_backoff() first")
+            raise RuntimeError("not connected; call run() or session.ensure_connected() first")
         from ib_async import Contract  # lazy: conId-only construction (spec Stage 3.2)
 
         ib.reqMarketDataType(self.settings.market_data_type)
@@ -268,19 +255,25 @@ class QuoteRecorder:
 
     # -- lifecycle -----------------------------------------------------------
     def run(self, once: bool = False) -> None:
-        """Sweep every record_interval_minutes until interrupted."""
+        """Sweep every record_interval_minutes until interrupted.
+
+        Connection supervision is delegated to GatewaySession: health is
+        probed (active heartbeat) before each sweep, and a mid-sweep
+        connection exception simply loops back into ensure_connected(),
+        which reconnects with backoff and replays the resubscription hooks.
+        """
         interval_s = self.settings.record_interval_minutes * 60.0
         try:
-            self._connect_with_backoff()
             while True:
                 started = time.monotonic()
+                # Config errors (mode mismatch) propagate out loudly here.
+                self.ib = self.session.ensure_connected()
                 try:
                     self.record_once()
                 except KeyboardInterrupt:
                     raise
                 except Exception as exc:
-                    logger.warning("sweep failed (%s); reconnecting", exc)
-                    self._reconnect()
+                    logger.warning("sweep failed (%s); routing through gateway session", exc)
                     continue
                 if once:
                     return
@@ -293,10 +286,6 @@ class QuoteRecorder:
             self.close()
 
     def close(self) -> None:
-        if self.ib is not None:
-            try:
-                self.ib.disconnect()
-            except Exception:
-                pass
-            self.ib = None
+        self.session.close()
+        self.ib = None
         self.resolver.close()
