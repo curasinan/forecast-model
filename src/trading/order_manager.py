@@ -5,7 +5,9 @@ Translates our EdgeSignal + risk-adjusted size into:
 - BUY NO  (when edge < 0, our prob < market)
 
 Handles order creation, placement, cancellation, and status tracking.
-In dry-run mode, simulates order execution locally.
+In dry-run mode, simulates order execution locally. The live Polymarket
+CLOB path was retired to legacy/polymarket_onchain (2026-08-16); live
+methods raise RuntimeError.
 """
 
 import logging
@@ -18,6 +20,11 @@ from src.models.prediction import EdgeSignal
 from src.trading.wallet import PolymarketWallet
 
 logger = logging.getLogger(__name__)
+
+_RETIRED_MSG = (
+    "live Polymarket execution retired to legacy/polymarket_onchain (2026-08-16); "
+    "live trading is migrating to IBKR -- see src/venues/"
+)
 
 
 class OrderSide(str, Enum):
@@ -157,58 +164,14 @@ class OrderManager:
             return False
 
     def _place_live_order(self, order: TradeOrder) -> bool:
-        """Place a real order on Polymarket's CLOB."""
-        client = self._wallet.get_client()
-        if not client:
-            logger.error("No CLOB client available")
-            order.status = OrderStatus.REJECTED
-            return False
+        """Retired: live Polymarket order placement moved to legacy/.
 
-        if not order.token_id:
-            logger.error(f"No token ID for {order.question_id}")
-            order.status = OrderStatus.REJECTED
-            return False
-
-        try:
-            from py_clob_client.clob_types import OrderArgs, OrderType
-            from py_clob_client.order_builder.constants import BUY
-
-            args = OrderArgs(
-                token_id=order.token_id,
-                price=order.price,
-                size=order.size,
-                side=BUY,
-            )
-
-            signed_order = client.create_order(args)
-            resp = client.post_order(signed_order, OrderType.GTC)
-
-            if resp and resp.get("success"):
-                order.status = OrderStatus.PLACED
-                order.clob_order_id = resp.get("orderID", "")
-                self._orders.append(order)
-                logger.info(
-                    f"[LIVE] Order placed: {order.order_id} -> "
-                    f"CLOB ID: {order.clob_order_id}"
-                )
-                return True
-            else:
-                order.status = OrderStatus.REJECTED
-                error = resp.get("errorMsg", "Unknown error") if resp else "No response"
-                order.reason += f" | API error: {error}"
-                self._orders.append(order)
-                logger.error(f"[LIVE] Order rejected: {error}")
-                return False
-
-        except Exception as e:
-            order.status = OrderStatus.REJECTED
-            order.reason += f" | Exception: {e}"
-            self._orders.append(order)
-            logger.error(f"[LIVE] Order failed: {e}")
-            return False
+        Always raises; see legacy/polymarket_onchain/clob_orders.py.
+        """
+        raise RuntimeError(_RETIRED_MSG)
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an open order."""
+        """Cancel an open order (simulated orders only; live path is retired)."""
         order = next((o for o in self._orders if o.order_id == order_id), None)
         if not order:
             return False
@@ -217,16 +180,7 @@ class OrderManager:
             order.status = OrderStatus.CANCELLED
             return True
 
-        client = self._wallet.get_client()
-        if client and order.clob_order_id:
-            try:
-                client.cancel(order.clob_order_id)
-                order.status = OrderStatus.CANCELLED
-                return True
-            except Exception as e:
-                logger.error(f"Cancel failed: {e}")
-                return False
-        return False
+        raise RuntimeError(_RETIRED_MSG)
 
     def get_trade_summary(self) -> dict:
         """Summary statistics of all orders."""

@@ -1,16 +1,10 @@
-"""Wallet management — Polymarket CLOB API client initialization.
+"""Wallet state — dry-run simulation only.
 
-Handles:
-- ClobClient initialization with private key
-- API credential derivation/creation
-- Balance checking (USDCe + outcome tokens)
-- Dry-run mode (no wallet needed)
-
-Requirements for live trading:
-- py-clob-client installed (`pip install py-clob-client`)
-- Private key for a Polygon wallet
-- USDCe balance on Polygon
-- Small MATIC balance for gas
+The authenticated Polymarket CLOB client was retired to
+legacy/polymarket_onchain (2026-08-16); the live path was dead code
+(token ids were always empty, no live fill ever happened). This module
+keeps the dry-run balance simulation the executor and order manager use.
+Live trading is migrating to IBKR — see src/venues/.
 """
 
 import logging
@@ -18,10 +12,10 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# Polymarket contract addresses on Polygon
-USDCE_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
-POLYGON_CHAIN_ID = 137
-CLOB_HOST = "https://clob.polymarket.com"
+_RETIRED_MSG = (
+    "live Polymarket execution retired to legacy/polymarket_onchain (2026-08-16); "
+    "live trading is migrating to IBKR -- see src/venues/"
+)
 
 
 @dataclass
@@ -34,11 +28,10 @@ class WalletBalance:
 
 
 class PolymarketWallet:
-    """Manages Polymarket CLOB API connection and wallet state.
+    """Simulated wallet state for dry-run trading.
 
-    Supports two modes:
-    - dry_run=True: No wallet needed, simulates all operations
-    - dry_run=False: Requires private key and funded wallet
+    dry_run=True is the only supported mode; live mode raises because the
+    Polymarket write path is retired.
     """
 
     def __init__(
@@ -50,7 +43,6 @@ class PolymarketWallet:
         self._private_key = private_key
         self._funder_address = funder_address
         self._dry_run = dry_run
-        self._client = None
         self._connected = False
         self._simulated_balance = WalletBalance(usdce=1000.0, matic=1.0)
 
@@ -63,47 +55,16 @@ class PolymarketWallet:
         return self._connected or self._dry_run
 
     def connect(self) -> bool:
-        """Initialize the CLOB client and derive API credentials.
+        """Mark the simulated wallet connected (dry-run only).
 
-        Returns True if connection successful, False otherwise.
+        Raises RuntimeError in live mode: that path is retired.
         """
         if self._dry_run:
             logger.info("Wallet running in DRY-RUN mode (no real trades)")
             self._connected = True
             return True
 
-        if not self._private_key:
-            logger.error("Private key required for live trading")
-            return False
-
-        try:
-            from py_clob_client.client import ClobClient
-
-            self._client = ClobClient(
-                CLOB_HOST,
-                key=self._private_key,
-                chain_id=POLYGON_CHAIN_ID,
-                signature_type=1,
-                funder=self._funder_address or None,
-            )
-
-            # Derive or create API credentials
-            creds = self._client.create_or_derive_api_creds()
-            self._client.set_api_creds(creds)
-
-            self._connected = True
-            logger.info("Wallet connected to Polymarket CLOB")
-            return True
-
-        except ImportError:
-            logger.error(
-                "py-clob-client not installed. "
-                "Run: pip install py-clob-client"
-            )
-            return False
-        except Exception as e:
-            logger.error(f"Wallet connection failed: {e}")
-            return False
+        raise RuntimeError(_RETIRED_MSG)
 
     def get_balance(self) -> WalletBalance:
         """Get current wallet balances."""
@@ -115,11 +76,13 @@ class PolymarketWallet:
         return WalletBalance()
 
     def get_client(self):
-        """Get the underlying ClobClient for direct API calls.
+        """Retired: there is no live CLOB client anymore.
 
-        Returns None in dry-run mode.
+        Returns None in dry-run mode; raises RuntimeError in live mode.
         """
-        return self._client
+        if self._dry_run:
+            return None
+        raise RuntimeError(_RETIRED_MSG)
 
     def simulate_trade(self, side: str, price: float, size: float) -> bool:
         """Update simulated balance for dry-run mode.
