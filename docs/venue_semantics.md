@@ -101,11 +101,76 @@ order-size/position limits, paper parity.
 
 ### 8. Min/max order sizes and per-contract position limits
 
-- Claim: — (UNVERIFIED. Observed on sample tradable contract:
-  `multiplier='1'`, `minTick=0.01`; whatIf probes used quantity 1.)
-- Evidence: —
-- Date verified: —
+- Claim: **minimum order size = 1 contract, size increment = 1** (verified
+  on GTM/GT/ACD/USCE/HCAB/HLF/HCAT4 OPT details: `minSize=1.0`,
+  `sizeIncrement=1.0`). Max size / position limits still unverified.
+- Evidence: reqContractDetails full-field dump, 2026-08-18.
+- Date verified: 2026-08-18 (min/increment only)
 - Invalidation: exchange rule change.
+
+### 8b. Settlement timing per climate contract (API-side evidence)
+
+`realExpirationDate` vs `contractMonth` encodes each product's publication
+lag (all with `lastTradeTime` in US/Central; trading hours ~23h/day):
+
+| Symbol | Contract month | Real expiration | Implied lag |
+|---|---|---|---|
+| GTM Dec-2026 | 202612 | 2027-02-12 10:00 | ~6 weeks (monthly temp publication) |
+| GT 2026 (annual) | 202612 | 2027-01-08 10:00 | ~1 week |
+| ACD 2026 (annual CO2) | 202612 | 2027-01-05 08:00 | ~days (Mauna Loa cadence) |
+| USCE 2026 (US emissions) | 202612 | 2027-04-30 16:00 | ~4 months (accounting lag) |
+| HCAB/HLF 2026 (hurricanes) | 202612 | 2026-12-31 12:59 | season end + 1 month; too soon for HURDAT reanalysis -> operational counts |
+| HCAT4 Sep-2026 | 202609 | 2026-09-30 23:59 | in-season monthly window |
+
+- Evidence: reqContractDetails dump 2026-08-18 (scratchpad probe; conIds
+  830396294, 712857050, 712856754, 732957203, 871016074, 871016195,
+  902537007).
+- Date verified: 2026-08-18
+- Invalidation: per-listing; re-read from contract details, never assume.
+
+## Climate contract resolution oracles (verified 2026-08-18)
+
+Sources: the venue's own Terms & Conditions PDFs at
+`data.forecastex.com/regulatory/` plus the ForecastEx LLC Rulebook
+(Feb 17, 2026) and CFTC filings. Full evidence trail with verbatim quotes
+and URLs: `docs/climate_oracle_research.md`. Cross-checked against the
+API-side settlement lags in section 8b.
+
+| Family | Settling series (exact) | Baseline / units | Strike rule | Vintage | Early res.? |
+|---|---|---|---|---|---|
+| GT (annual temp) | NOAA NCEI annual Global Climate Report, land+ocean anomaly | 1901-2000 avg, degC (Celsius governs) | strictly > | first release (no reopen after settle) | No |
+| GTM (monthly temp) | NOAA NCEI Climate at a Glance, global land+ocean monthly | 1901-2000 avg, degC | strictly > | first-published monthly value | No |
+| GTTA/GTTM (thresholds) | same series, re-based to pre-industrial 1850-1900 via venue offset **currently +0.16 degC** (may change with NOAA methodology) | pre-industrial, degC | strictly >, cumulative ("any year/month by [year]") | current revised table at each check | **Yes** (Rule 413(b)) |
+| ACD (annual CO2) | NOAA GML Mauna Loa ANNUAL MEAN (`co2_annmean_mlo.txt`) | absolute ppm | strictly > | first release (Jan 5, 8:00 CT) | No |
+| MACD (monthly CO2, unlisted) | NOAA GML Mauna Loa monthly (5th of month, 8:00 CT) | absolute ppm | strictly > | first release | No |
+| HCAB (hurricane count) | NHC Tropical Cyclone Archive public advisories -- **NOT HURDAT2 reanalysis** | integer count, Cat1+ (>=64kt) forming in the **calendar year** (not the Jun-Nov season) | **inclusive** "at least X" (>=) | advisories as issued; post-settlement reanalysis irrelevant | **Yes** |
+| HLF (landfall) | NHC advisories; landfall = eye intersects land, interpolated between advisories if needed | **strikes are REGIONS, not counts** (FL/TX/NC/LA, US counties, Bahamas/Cuba/Mexico/DR/Honduras); Cat3+ AT time of landfall; within region **or 50 straight-line miles of its border** | binary per region | as issued | Yes |
+| HCAT4 | NHC advisories; Cat 4+ in the US | binary | as issued | as issued | Yes |
+
+Cross-cutting rulebook facts:
+- **Rule 603(e): "Settlement is irrevocable and unconditional"** -- the
+  value as published at Resolution Time governs; later source revisions
+  cannot reopen a settled contract. Pre-settlement data errors go to Event
+  Review (Rule 415), whose determinations are final.
+- Rule 413(a): the venue may replace a degraded Source Agency.
+- Resolution delayed if the source delays publication (all families).
+- Settlement no later than the day after Expiration Time.
+- **Strike-semantics trap: temperature/carbon are strictly-greater-than;
+  hurricane counts are at-least (inclusive).** Model code must not assume
+  one convention.
+- GTTM T&C contains a drafting inconsistency (its Underlying paragraph
+  says "any year", its Sample Question and Resolution Time say monthly) --
+  venue drafting bug, recorded; monthly reading is the coherent one.
+- Sibling products found with published T&Cs but no current chains: TROP
+  (tropical storms >=34kt), MHC/MHCMA (monthly major hurricanes), HLFRE
+  (regional landfall), LHL (live hurricane location by peak gust).
+- IBKR serves a per-conid rules endpoint
+  (`tws.proxy/public/forecasttrader/contract/rules`) whose
+  `market_rules_link` points at the governing T&C PDF -- a programmatic
+  oracle-discovery hook for the resolver (Stage 5+ item).
+- Modeling note: `Market.strike` is a genuine numeric threshold for
+  temperature/carbon/count families but an opaque REGION CODE for HLF --
+  do not feed HLF strikes into numeric ladder features.
 
 ## Additional verified facts
 
