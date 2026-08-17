@@ -52,3 +52,6 @@ logs/*.lock
 
 # Globally-installed tool with its own git repo (not project code)
 context-hub/
+
+# Credential files must never live in the repo
+.cdsapirc
