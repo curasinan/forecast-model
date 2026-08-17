@@ -3,6 +3,10 @@
 Per the plan in ``build-a-feature-engineering-zippy-kettle.md``, this exercises
 all seven verification steps. The DB is read-only here; tests skip cleanly if
 ``data/polymarket.db`` is empty.
+
+Exception: the performance check (section 6) runs against a synthetic DB of
+fixed size built in tmp_path, so its workload — and therefore its time
+budget — does not drift as the live DB accumulates snapshots.
 """
 
 from __future__ import annotations
@@ -208,26 +212,119 @@ def test_spread_avg_24h_matches_sql(db, populated_market, evaluation_T):
 # 6. Performance
 # --------------------------------------------------------------------------- #
 
+# The perf check must time a FIXED workload. Running over every market in the
+# live DB made the test degrade as collector runs accumulated data, failing on
+# volume rather than on code. Instead we build a synthetic DB whose schema
+# (columns, UNIQUE constraint, index) mirrors collectors/collect_snapshots.py.
+#
+# Cost is ~linear in markets WITH history (~7ms each on dev hardware, nearly
+# independent of snapshots-per-market) while history-less ids are ~free, so
+# the pool mixes both — like the live pool, where most markets have no
+# snapshots before the frozen evaluation date. 200 dense markets ≈ 1.5-2s.
+PERF_N_MARKETS = 1_000  # > IN_CLAUSE_CHUNK (500), so query chunking is exercised
+PERF_DENSE_EVERY = 5  # every 5th id has history (200 dense), spread over chunks
+PERF_SNAPS_PER_MARKET = 25  # every 4h over (T-96h, T]; every lookback resolves
+PERF_T = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+PERF_TIME_BUDGET_S = 5.0  # ~2.5-3x headroom over dev-hardware measurement
 
-def test_batch_under_2s_for_full_pool(db, evaluation_T):
-    conn = sqlite3.connect(db)
+
+def _perf_market_id(i: int) -> str:
+    return f"perf-{i:04d}"
+
+
+def _perf_is_dense(i: int) -> bool:
+    return i % PERF_DENSE_EVERY == 0
+
+
+@pytest.fixture(scope="module")
+def perf_db(tmp_path_factory) -> Path:
+    """Synthetic fixed-size DB: PERF_N_MARKETS ids, every PERF_DENSE_EVERY-th
+    with PERF_SNAPS_PER_MARKET snapshots at/before PERF_T, the rest with no
+    history. Values are deterministic functions of the market/snapshot index —
+    no randomness, so every run times the exact same workload."""
+    path = tmp_path_factory.mktemp("perf") / "perf.db"
+    conn = sqlite3.connect(path)
     try:
-        ids = [str(r[0]) for r in conn.execute(
-            "SELECT market_id FROM snapshots GROUP BY market_id"
-        ).fetchall()]
+        conn.execute(
+            """
+            CREATE TABLE snapshots (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id   TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                best_bid    REAL,
+                best_ask    REAL,
+                bid_depth   REAL,
+                ask_depth   REAL,
+                midpoint    REAL,
+                spread      REAL,
+                last_price  REAL,
+                volume_24h  REAL,
+                UNIQUE (market_id, timestamp)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX idx_snapshots_market_id ON snapshots (market_id)"
+        )
+        conn.execute("CREATE TABLE markets (id TEXT PRIMARY KEY, end_date TEXT)")
+
+        end_date = (PERF_T + timedelta(days=30)).isoformat()
+        conn.executemany(
+            "INSERT INTO markets (id, end_date) VALUES (?, ?)",
+            ((_perf_market_id(i), end_date) for i in range(PERF_N_MARKETS)),
+        )
+
+        def snapshot_rows():
+            for i in range(PERF_N_MARKETS):
+                if not _perf_is_dense(i):
+                    continue
+                base = 0.05 + 0.9 * ((i * 37) % PERF_N_MARKETS) / PERF_N_MARKETS
+                for k in range(PERF_SNAPS_PER_MARKET):
+                    ts = (PERF_T - timedelta(hours=4 * k)).isoformat()
+                    mid = base + 0.001 * k
+                    yield (
+                        _perf_market_id(i), ts,
+                        mid - 0.01, mid + 0.01,
+                        100.0 + i, 80.0 + i,
+                        mid, 0.02, mid,
+                        1000.0 + i,
+                    )
+
+        conn.executemany(
+            "INSERT INTO snapshots (market_id, timestamp, best_bid, best_ask, "
+            "bid_depth, ask_depth, midpoint, spread, last_price, volume_24h) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            snapshot_rows(),
+        )
+        conn.commit()
     finally:
         conn.close()
-    if len(ids) < 100:
-        pytest.skip("Not enough markets for a useful perf check")
+    return path
 
+
+def test_batch_under_time_budget_for_fixed_pool(perf_db):
     import time
 
-    started = time.time()
-    df = compute_features_batch(ids, evaluation_T, db)
-    elapsed = time.time() - started
-    assert len(df) == len(ids)
-    # Allow some headroom on slower hardware; the plan target is <= 2s.
-    assert elapsed < 5.0, f"batch over {len(ids)} markets took {elapsed:.2f}s"
+    ids = [_perf_market_id(i) for i in range(PERF_N_MARKETS)]
+
+    started = time.perf_counter()
+    df = compute_features_batch(ids, PERF_T, perf_db)
+    elapsed = time.perf_counter() - started
+
+    assert list(df["market_id"]) == ids
+    # The budget is only meaningful if the timed run did real work: a
+    # mis-built fixture (wrong timestamp format, empty window) would produce
+    # all-null rows and a vacuously fast pass.
+    dense = df.iloc[[i for i in range(PERF_N_MARKETS) if _perf_is_dense(i)]]
+    empty = df.iloc[[i for i in range(PERF_N_MARKETS) if not _perf_is_dense(i)]]
+    assert dense["price_now"].notna().all()
+    assert dense["momentum_72h"].notna().all()
+    assert (dense["snapshot_count"] == PERF_SNAPS_PER_MARKET).all()
+    assert empty["price_now"].isna().all()
+    assert (empty["snapshot_count"] == 0).all()
+    assert elapsed < PERF_TIME_BUDGET_S, (
+        f"batch over {PERF_N_MARKETS} markets took {elapsed:.2f}s"
+    )
 
 
 # --------------------------------------------------------------------------- #
