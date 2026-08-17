@@ -27,6 +27,7 @@ from collectors.collect_snapshots import (
     init_db,
     is_stale_book,
 )
+from src.venues.polymarket import readonly_clob_client
 from weather.storage import init_weather_db
 
 log = logging.getLogger("collect_weather_snapshots")
@@ -83,9 +84,7 @@ def collect_weather_snapshots(
     delay_ms: int = 100,
     limit: int | None = None,
 ) -> dict[str, int]:
-    from py_clob_client.client import ClobClient
-
-    client = ClobClient(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
+    client = readonly_clob_client(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
     candidates = weather_snapshot_candidates(weather_db, polymarket_db)
     if limit is not None:
         candidates = candidates[:limit]

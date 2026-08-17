@@ -23,6 +23,7 @@ from typing import Any
 
 from collectors._lock import LockHeld, PidLock
 from collectors.collect_markets import DB_PATH, get_snapshot_candidates
+from src.venues.polymarket import readonly_clob_client
 
 # --- Configuration ----------------------------------------------------------
 
@@ -271,9 +272,7 @@ def collect_snapshots(
 
     Returns a summary dict with counts of stored / stale / errored markets.
     """
-    from py_clob_client.client import ClobClient
-
-    client = ClobClient(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
+    client = readonly_clob_client(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
 
     candidates = get_snapshot_candidates(db_path)
     if limit is not None:

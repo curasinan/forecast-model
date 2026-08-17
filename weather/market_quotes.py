@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.venues.polymarket import readonly_clob_client
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_POLYMARKET_DB = REPO_ROOT / "data" / "polymarket.db"
 
@@ -123,13 +125,12 @@ def live_clob_quote(
     if token_id is None:
         return None
     try:
-        from py_clob_client.client import ClobClient
+        client = readonly_clob_client(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
     except ImportError:
         log.debug("py_clob_client not installed; live quote unavailable")
         return None
 
     try:
-        client = ClobClient(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
         book = client.get_order_book(token_id)
         price_resp = client.get_price(token_id, "BUY")
     except Exception as exc:  # noqa: BLE001

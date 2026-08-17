@@ -53,6 +53,9 @@ web = [
 trading = [
     "py-clob-client>=0.17",
 ]
+ibkr = [
+    "ib_async>=2.1",
+]
 mcp = [
     "mcp>=1.27,<2",
 ]
@@ -62,11 +65,30 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*", "weather*", "mcp_server*"]
+include = ["src*", "collectors*", "features*", "decision*", "model*", "monitoring*", "analysis*", "weather*", "mcp_server*", "legacy*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Unrelated sub-projects and vendored tools are not held to this repo's lint.
+extend-exclude = ["bist_brief", "learning", "context-hub", "notebooks"]
+
+[tool.ruff.lint]
+# Only the venue-import ban; no other rules beyond ruff's defaults.
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"ib_async".msg = "Venue SDKs may only be imported under src/venues/ (see src/venues/base.py)"
+"ibapi".msg = "Use ib_async, and only under src/venues/"
+"py_clob_client".msg = "Only src/venues/polymarket.py and legacy/ may touch the Polymarket client"
+"web3".msg = "On-chain code lives in legacy/polymarket_onchain/ only"
+"eth_account".msg = "On-chain code lives in legacy/polymarket_onchain/ only"
+
+[tool.ruff.lint.per-file-ignores]
+"src/venues/**" = ["TID251"]
+"legacy/**" = ["TID251"]
+# Standalone Stage 0 diagnostic, exempt by design (migration spec Stage 0).
+"scripts/verify_ibkr_entitlements.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
