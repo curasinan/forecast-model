@@ -306,9 +306,12 @@ class IBKRAdapter(VenueAdapter):
             title=row["long_name"] or row["local_symbol"],
             no_id=no_id,
             expiry=_parse_expiry(row["expiry"]),
-            # TODO(stage-6): populate from the ForecastEx event calendar --
-            # resolution timing is scheduled and known in advance.
-            scheduled_resolution_time=None,
+            # ForecastEx resolution timing is scheduled, not estimated (the
+            # venue's structural advantage). The contract's last-trade date is
+            # the best venue-native approximation of it; the underlying macro
+            # release calendar (BLS/BEA/FOMC timestamps) is finer-grained and
+            # is a Stage 6 USER-DECISION data source, not wired yet.
+            scheduled_resolution_time=_parse_expiry(row["expiry"]),
             strike=row["strike"],
             tick_size=row["min_tick"],
             multiplier=float(row["multiplier"]) if row["multiplier"] else 1.0,
