@@ -30,15 +30,16 @@ param(
     [string]$TaskPath  = "\IBKR\"
 )
 
-# S4U = "run whether user is logged on or not" WITHOUT storing a password.
-# The recorder must not depend on an interactive session. Known caveat:
-# password-less / Microsoft-account sign-ins sometimes refuse S4U at run
-# time (LastTaskResult 0x80070569 or 0x41303); the fallback procedure is in
-# docs/ibkr_runbook.md ("Durability" section). Note IB Gateway itself is a
-# GUI app and still needs the user session it was logged in from.
+# Interactive = run only while the user is logged on. This is NOT a
+# durability loss: IB Gateway is a GUI app that only exists in the logged-in
+# session, so a recorder running without a login has nothing to connect to.
+# (S4U was tried first and empirically never executed the action on this
+# machine: instant 0x0 "runs" with zero side effects and a stuck Queued
+# state -- verified 2026-08-17; the launcher runs fine outside the
+# scheduler, isolating the failure to the S4U task context.)
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
-    -LogonType S4U `
+    -LogonType Interactive `
     -RunLevel Limited
 
 function Register-IbkrTask {
@@ -75,7 +76,7 @@ $recorderSeed = $now.AddSeconds(-$now.Second).AddMilliseconds(-$now.Millisecond)
 Write-Host "IBKR Recorder keep-alive first tick at: $recorderSeed"
 
 $recorderTriggers = @(
-    New-ScheduledTaskTrigger -AtStartup
+    New-ScheduledTaskTrigger -AtLogOn
     New-ScheduledTaskTrigger `
         -Once `
         -At $recorderSeed `
@@ -84,8 +85,9 @@ $recorderTriggers = @(
 )
 
 # IgnoreNew == while an instance is running, every keep-alive tick is a
-# no-op. [TimeSpan]::Zero serializes as PT0S = NO execution time limit
-# (the recorder is meant to run forever).
+# no-op. Time limit is 3650 days rather than [TimeSpan]::Zero: PT0S is
+# interpreted as "stop immediately" by some Windows builds (observed here
+# 2026-08-17 as instant 0x0 runs), not as "unlimited".
 $recorderSettings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -AllowStartIfOnBatteries `
@@ -93,7 +95,7 @@ $recorderSettings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit ([TimeSpan]::Zero)
+    -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
 $launcher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_recorder.ps1'
 $recorderAction = New-ScheduledTaskAction `
