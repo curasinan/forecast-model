@@ -37,7 +37,7 @@ visible; nothing here is admissible from marketing or spec text alone.
   only -- NOT yet observed empirically (no line-limit rejection seen).
   This limit is why recorder v1 does transient snapshot sweeps in 50-conId
   batches over the ~2,900-contract universe instead of holding streaming
-  subscriptions; streaming a prioritized subset is the Stage 5 follow-up.
+  subscriptions; streaming a prioritized subset via `src/venues/ibkr/subscriptions.py` (SubscriptionManager: line-budget accounting, priority eviction, subscribe-rate token bucket) is the wiring path when microstructure data is needed.
 - Evidence: IBKR documentation default; not yet measured on this account.
 - Date verified: -- (treat the number as approximate until a limit error
   or Client Portal page confirms it)

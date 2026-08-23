@@ -92,8 +92,10 @@ extend-select = ["TID251"]
 [tool.ruff.lint.per-file-ignores]
 "src/venues/**" = ["TID251"]
 "legacy/**" = ["TID251"]
-# Standalone Stage 0 diagnostic, exempt by design (migration spec Stage 0).
+# Standalone diagnostics that talk to the Gateway directly, exempt by design
+# (same class as the Stage 0 entitlement gate; read-only, run by the operator).
 "scripts/verify_ibkr_entitlements.py" = ["TID251"]
+"scripts/probe_ibkr_history.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

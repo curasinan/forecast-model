@@ -9,7 +9,9 @@ when the snapshot completes, so a sweep never holds more than one batch
 worth of lines and needs no subscription manager. The cost is temporal
 resolution: one delayed snapshot per contract per interval, no
 intra-interval ticks. Streaming subscriptions for a prioritized subset
-plus depth recording (reqMktDepth) is the Stage 5 follow-up.
+plus depth recording (reqMktDepth) is the follow-up when microstructure data
+is needed; SubscriptionManager (src/venues/ibkr/subscriptions.py) provides the
+line-budget accounting, priority eviction, and subscribe-rate limiter for it.
 
 Layout deviation from the migration spec: parquet files are partitioned
 by date ONLY (``quotes/date=YYYY-MM-DD/quotes-HHMMSSZ.parquet``) with

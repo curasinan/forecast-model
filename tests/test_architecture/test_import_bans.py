@@ -32,7 +32,10 @@ ALLOWED_DIR_PREFIXES = (
     ("src", "venues"),
     ("legacy",),
 )
-ALLOWED_FILES = frozenset({("scripts", "verify_ibkr_entitlements.py")})
+ALLOWED_FILES = frozenset({
+    ("scripts", "verify_ibkr_entitlements.py"),
+    ("scripts", "probe_ibkr_history.py"),  # Gateway diagnostic, same class
+})
 
 
 def _is_allowed(rel_path: Path) -> bool:
