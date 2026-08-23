@@ -23,8 +23,8 @@ are built, tested and running. Stage 6 audit done; user chose the
 **climate lane first**. Climate steps 1–4 (oracles, NOAA ledger, CDS
 hindcast, GTM EMOS + strike ladder + diagnostics) are in tree. Polymarket
 **runtime** (collectors, scheduled jobs, MCP Gamma/CLOB tools, scan/trade
-CLIs) is gated off. Next: live paper book on the GTM ladder (blocked on
-paper-account provisioning), then executor rewiring onto VenueAdapter.
+CLIs) is gated off. Executor is rewired onto VenueAdapter with a paper-only IBKR order path.
+Next: live paper book on the GTM ladder (blocked on paper-account provisioning).
 
 ---
 
@@ -45,7 +45,7 @@ paper-account provisioning), then executor rewiring onto VenueAdapter.
 - [U] Legal entity name -- read off Client Portal, record in venue_semantics.md.
 - [ ] Coupon rate -- verify from statements / a real position (paper phase).
 
-### Stage 1 -- Venue abstraction  `[~]`
+### Stage 1 -- Venue abstraction  `[x]`
 - [x] `src/domain/` (MarketId, FeeModel/FlatCommissionFeeModel,
       CarryModel/ForecastExCouponCarry with staleness guards, Market incl.
       scheduled_resolution_time, Quote, OrderBook, OrderRequest ...).
@@ -53,10 +53,10 @@ paper-account provisioning), then executor rewiring onto VenueAdapter.
 - [x] `src/venues/polymarket.py` read-only research adapter + the sanctioned
       `readonly_clob_client()`; the three collectors repointed through it.
 - [x] Import ban: ruff TID251 + `tests/test_architecture/test_import_bans.py`.
-- [ ] **TradingExecutor / OrderManager NOT yet rewired onto VenueAdapter**
-      (`src/trading/executor.py` still on the dry-run wallet path;
-      `edge_to_order` still assumes NO = 1 - YES). Remaining Stage 1/4
-      wiring -- required before any paper trading.
+- [x] **TradingExecutor / OrderManager rewired onto VenueAdapter** (commit
+      ef4e31f, 2026-08-23): TradeIntent input, fee/carry/holding-period
+      re-pricing, NO leg at its own quote or FeeModel complement, whole-
+      contract rounding, simulated vs venue paths, sync() via get_order.
 
 ### Stage 2 -- Connection layer  `[x]`
 - [x] ib_async 2.1.0 (works on Python 3.14.2).
@@ -86,12 +86,12 @@ paper-account provisioning), then executor rewiring onto VenueAdapter.
       (symbol, expiry, strike). Underlyings are non-tradable IND rows.
 - [x] Complement-pricing audit documented; math reparameterised via FeeModel.
 
-### Stage 4 -- Fees, carry, settlement  `[~]`
+### Stage 4 -- Fees, carry, settlement  `[~]` (coupon verification open)
 - [x] EV and Kelly extended with fee_model / carry_model / holding_days
       (bit-identical defaults; Kelly with carry f = p*c/(c-r) - q*c/(1+r-c)).
 - [x] Live Polymarket on-chain path retired to `legacy/polymarket_onchain/`.
-- [ ] Wire fee/carry/holding-days into executor + risk-manager call sites
-      (part of the executor rewiring above).
+- [x] Fee/carry/holding-days wired into the executor's re-pricing (net EV +
+      fee/carry-aware half-Kelly feed the existing risk checks) -- ef4e31f.
 - [ ] Coupon-rate verification (CarryModel refuses stale/unverified rates).
 
 ### Stage 5 -- Market data & pacing  `[~]`
@@ -124,7 +124,11 @@ paper-account provisioning), then executor rewiring onto VenueAdapter.
 - [x] `IBKRSettings`: IBKR_PORT and IBKR_TRADING_MODE REQUIRED, no default.
 - [x] Mode-mismatch guard (DU/DF prefix = paper) + WARNING log at connect.
 - [U] Paper account provisioning (Client Portal -> Paper Trading Account).
-- [ ] Paper entrypoint on the rewired executor.
+- [x] Paper entrypoint `scripts/run_ibkr_paper.py` (GTM signals -> executor
+      on IBKRAdapter; refuses unless IBKR_TRADING_MODE=paper AND the account
+      is DU/DF; adapter transmits only on a verified paper account;
+      --simulate for local fills). Untested against a real paper session
+      until the account exists.
 
 ### Stage 8 -- Deliverables
 - [x] Stage 0 script + reports; venue_semantics.md; feature_migration_audit.md;
@@ -264,10 +268,11 @@ remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`. Leftover
 
 ## 6. Git state at checkpoint
 
-Committed on `main` through `d976323` (2026-08-23): `1ff5f52` GTM model +
+Committed on `main` through `ef4e31f` (2026-08-23): `ef4e31f` executor
+rewiring + paper order path, `d3dac8d` checkpoint, `1ff5f52` GTM model +
 report, `d976323` Polymarket runtime gate, preceded by `597d96f` (backfills),
 `7e8242f`, `e8ec379`, `99ace7a`, `c7d0e19`, `7f6d532`, `5cfddd7`, `aaa732a`.
-Last push was `b81fd19` -- run `git push origin main`.
+Last push was `d3dac8d` -- run `git push origin main`.
 Untracked and intentionally NOT part of the migration: `.agents/`,
 `bist_brief/*`, `archive (1).zip`, `logs/`.
 
@@ -281,6 +286,6 @@ Untracked and intentionally NOT part of the migration: `.agents/`,
 5. Read the legal entity name off Client Portal for venue_semantics.md.
 6. `git push origin main` (everything is committed through d976323).
 7. Optional: configure Telegram ALERT_METHOD so health alerts leave log-only mode.
-8. Remaining engineering (not a user action): rewire `TradingExecutor` onto
-   `VenueAdapter` once the paper account exists; coupon-rate verification;
-   final migration report (Stage 8).
+8. Remaining engineering (not a user action): coupon-rate verification;
+   streaming/depth recorder + historical-bars probe (Stage 5); final
+   migration report (Stage 8).
