@@ -23,8 +23,12 @@ are built, tested and running. Stage 6 audit done; user chose the
 **climate lane first**. Climate steps 1–4 (oracles, NOAA ledger, CDS
 hindcast, GTM EMOS + strike ladder + diagnostics) are in tree. Polymarket
 **runtime** (collectors, scheduled jobs, MCP Gamma/CLOB tools, scan/trade
-CLIs) is gated off. Executor is rewired onto VenueAdapter with a paper-only IBKR order path.
-Next: live paper book on the GTM ladder (blocked on paper-account provisioning).
+CLIs) is gated off. Executor is rewired onto VenueAdapter with a paper-only IBKR order path;
+subscription manager, Gateway probe, and the final migration report are in
+tree. Every engineering item that does not need a live Gateway or the paper
+account is DONE. Next: live paper book on the GTM ladder (blocked on
+paper-account provisioning) and running the Stage-5 probe (blocked on a
+Gateway re-login -- recorder has been dark since 2026-08-17).
 
 ---
 
@@ -103,11 +107,14 @@ Next: live paper book on the GTM ladder (blocked on paper-account provisioning).
       (date partition + con_id column; per-conid partitioning rejected as
       thousands of tiny files). Heartbeat at `...\state\recorder_state.json`.
       RUNNING under Task Scheduler since 2026-08-17 23:55.
-- [ ] Streaming tick + depth recorder with a subscription-line manager
-      (account has ~100 lines vs 2,900 contracts; a depth feed exists per
-      reqMktDepthExchanges).
-- [ ] Historical-bars probe (reqHistoricalData availability/depth).
-- [~] `docs/operating_costs.md` skeleton (live feed cost unknown; delayed is free).
+- [x] `src/venues/ibkr/subscriptions.py` SubscriptionManager: line-budget
+      accounting, lowest-priority/LRU eviction (raises LineBudgetExceeded,
+      never silently drops), subscribe-rate token bucket. Wiring a streaming/
+      depth recorder onto it is the only remaining Stage-5 build.
+- [~] Historical-bars/depth probe WRITTEN (`scripts/probe_ibkr_history.py`);
+      must be RUN against a live Gateway to fill `docs/stage5_probe_findings.md`.
+- [x] `docs/operating_costs.md` filled (delayed free, $0.01 commission, ~100
+      line budget); only the live-feed subscription PRICE stays UNKNOWN.
 
 ### Stage 6 -- Modelling consequences  `[x]` audit; decision made
 - [x] `docs/feature_migration_audit.md` (30+ verdicts, 13 flagged decisions).
@@ -134,8 +141,9 @@ Next: live paper book on the GTM ladder (blocked on paper-account provisioning).
 - [x] Stage 0 script + reports; venue_semantics.md; feature_migration_audit.md;
       operating_costs.md (skeleton); src/venues/*; recorder running;
       ibkr_runbook.md; climate_oracle_research.md.
-- [ ] Final migration report (every invalidated assumption with file:line;
-      seeds: dead live-order path executor.py:236, OrderStatus.FILLED never
+- [x] Final migration report `docs/migration_report.md` (11 invalidated
+      assumptions with re-verified file:line, stage table, honest gaps).
+- (historical) seed list: dead live-order path executor.py:236, FILLED never
       set, complement-pricing inventory, CLI mode default in trade.py, VPIN
       inert, liquidity check no-op, three id schemes, no gas code existed,
       the spec's embedded-$1.01 fee claim contradicted by whatIf).
@@ -268,15 +276,20 @@ remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`. Leftover
 
 ## 6. Git state at checkpoint
 
-Committed on `main` through `ef4e31f` (2026-08-23): `ef4e31f` executor
+Committed on `main` through `ad58918` (2026-08-23): `ad58918` Stage 5/8
+finish (subscription manager, probe, migration report), `b548283`+`ef4e31f` executor
 rewiring + paper order path, `d3dac8d` checkpoint, `1ff5f52` GTM model +
 report, `d976323` Polymarket runtime gate, preceded by `597d96f` (backfills),
 `7e8242f`, `e8ec379`, `99ace7a`, `c7d0e19`, `7f6d532`, `5cfddd7`, `aaa732a`.
-Last push was `d3dac8d` -- run `git push origin main`.
+Last push was `d3dac8d` -- run `git push origin main` (5 commits ahead).
 Untracked and intentionally NOT part of the migration: `.agents/`,
 `bist_brief/*`, `archive (1).zip`, `logs/`.
 
 ## 7. Open user actions (priority order)
+
+0. **Recorder has been dark since 2026-08-17** -- log IB Gateway back in
+   (weekly re-login; the supervisor resumes automatically). Every dark day
+   is unrecoverable training data. Then run `scripts/probe_ibkr_history.py`.
 
 1. (done 2026-08-23) CDS licences accepted; hindcast + ERA5 backfilled.
 2. Provision the paper account; run the paper-parity compare.
