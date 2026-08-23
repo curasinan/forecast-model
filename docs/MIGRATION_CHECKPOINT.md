@@ -27,8 +27,9 @@ CLIs) is gated off. Executor is rewired onto VenueAdapter with a paper-only IBKR
 subscription manager, Gateway probe, and the final migration report are in
 tree. Every engineering item that does not need a live Gateway or the paper
 account is DONE. Next: live paper book on the GTM ladder (blocked on
-paper-account provisioning) and running the Stage-5 probe (blocked on a
-Gateway re-login -- recorder has been dark since 2026-08-17).
+paper-account provisioning). Gateway re-logged-in 2026-08-23 19:25; recorder
+resumed; Stage-5 probe run (hourly history back to 2026-01-17 exists ->
+optional backfill of the 08-17..23 gap).
 
 ---
 
@@ -111,8 +112,11 @@ Gateway re-login -- recorder has been dark since 2026-08-17).
       accounting, lowest-priority/LRU eviction (raises LineBudgetExceeded,
       never silently drops), subscribe-rate token bucket. Wiring a streaming/
       depth recorder onto it is the only remaining Stage-5 build.
-- [~] Historical-bars/depth probe WRITTEN (`scripts/probe_ibkr_history.py`);
-      must be RUN against a live Gateway to fill `docs/stage5_probe_findings.md`.
+- [x] Historical-bars/depth probe RUN 2026-08-23 (`docs/stage5_probe_findings.md`,
+      venue_semantics Q4/Q7): depth = ONE level per side (top-of-book only);
+      daily bars unavailable but HOURLY BID_ASK/MIDPOINT history exists back
+      to 2026-01-17 -> recorder gaps are backfillable via HistoricalPacer
+      (follow-up build: prioritized subset, a few hours of pacing).
 - [x] `docs/operating_costs.md` filled (delayed free, $0.01 commission, ~100
       line budget); only the live-feed subscription PRICE stays UNKNOWN.
 
@@ -287,9 +291,9 @@ Untracked and intentionally NOT part of the migration: `.agents/`,
 
 ## 7. Open user actions (priority order)
 
-0. **Recorder has been dark since 2026-08-17** -- log IB Gateway back in
-   (weekly re-login; the supervisor resumes automatically). Every dark day
-   is unrecoverable training data. Then run `scripts/probe_ibkr_history.py`.
+0. (done 2026-08-23 19:25) Gateway re-login; recorder resumed; probe run.
+   Optional follow-up build: backfill 2026-08-17..23 hourly quotes via
+   reqHistoricalData + HistoricalPacer (history exists since 2026-01-17).
 
 1. (done 2026-08-23) CDS licences accepted; hindcast + ERA5 backfilled.
 2. Provision the paper account; run the paper-parity compare.

@@ -15,8 +15,8 @@ Rules for this file:
 Status: **Stage 0 ran 2026-08-16 against the LIVE session (exit 0).**
 Reports: `docs/stage0_report_2026-08-16_live.md` (+ `_followup`).
 Universe snapshot: `data/ibkr_universe_live.json`.
-Still open: legal entity confirmation, coupon rate, historical bars,
-order-size/position limits, paper parity.
+Still open: legal entity confirmation, coupon rate, max order size /
+position limits, paper parity. (Historical bars and depth answered 2026-08-23.)
 
 ## The 8 questions from the migration spec
 
@@ -57,11 +57,16 @@ order-size/position limits, paper parity.
 
 ### 4. Native order book with depth, or top of book only?
 
-- Claim: a depth feed EXISTS — `reqMktDepthExchanges` lists FORECASTX for
-  secTypes OPT and FOP. Actual level count/quality unmeasured (Stage 5 task).
-- Evidence: Stage 0 report section 6, 2026-08-16.
-- Date verified: 2026-08-16
-- Invalidation: exchange adds/removes depth feed.
+- Claim: **effectively top-of-book only.** `reqMktDepthExchanges` lists
+  FORECASTX (OPT/FOP) and `reqMktDepth(numRows=5)` answers, but returns
+  exactly ONE level per side on quoted contracts (e.g. GTM bid 0.86 x 10,
+  UNR bid 0.92 x 10) and zero levels on unquoted ones. Size at the top is
+  visible; there is no resting ladder beyond L1 to record. This validates
+  the snapshot-sweep recorder over a streaming depth recorder.
+- Evidence: `scripts/probe_ibkr_history.py` -> `docs/stage5_probe_findings.md`,
+  2026-08-23 (GTM 830396294, UNR 753739783, RGDP 712857395).
+- Date verified: 2026-08-23
+- Invalidation: exchange introduces multi-level depth; re-run the probe.
 
 ### 5. Current coupon rate and which contracts it applies to
 
@@ -92,12 +97,23 @@ order-size/position limits, paper parity.
 
 ### 7. Historical bar data via reqHistoricalData — available? How far back?
 
-- Claim: — (UNVERIFIED; probe to be added in Stage 5 with the pacing layer.
-  Note: `ushmds` historical-data farm showed "not connected" during the
-  2026-08-16 session — availability may be entitlement-gated.)
-- Evidence: —
-- Date verified: —
-- Invalidation: IBKR data policy change.
+- Claim: **daily (EOD) bars: NOT available** — every 1-day request for
+  TRADES/MIDPOINT/BID_ASK returns error 162 "No data of type EODChart is
+  available for the exchange 'FORECASTX' and the security type 'Option'".
+  **Intraday bars: AVAILABLE** — BID_ASK at 1-hour bars over '2 D' returned
+  the full 48 bars on quoted contracts (GTM, UNR); unquoted far-dated
+  contracts (RGDP 2031) return "HMDS query returned no data".
+  `reqHeadTimeStamp`: MIDPOINT/BID_ASK history begins **2026-01-17**
+  (~7 months before the probe); TRADES head = first trade (GTM 2026-05-07,
+  UNR 2026-04-22; none for RGDP).
+  Consequence: hourly quote history since 2026-01-17 can be BACKFILLED
+  through the HistoricalPacer (BID_ASK counts double: ~30 requests/10 min),
+  which recovers recorder gaps (e.g. the 2026-08-17..23 outage). Full-
+  universe backfill is ~20k requests (~5 days of pacing); a prioritized
+  subset (climate-lane contracts) is a few hours -- scope as a follow-up.
+- Evidence: `docs/stage5_probe_findings.md`, 2026-08-23.
+- Date verified: 2026-08-23
+- Invalidation: IBKR HMDS policy change; re-run the probe.
 
 ### 8. Min/max order sizes and per-contract position limits
 
