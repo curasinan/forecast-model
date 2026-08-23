@@ -109,13 +109,20 @@ class TestAdapterReadOnly:
         with pytest.raises(ValueError):
             IBKRAdapter(make_settings(data_root=str(tmp_path)), role=role, read_only=False)
 
-    def test_even_live_trading_cannot_transmit(self, tmp_path):
+    def test_even_live_trading_cannot_transmit_on_a_live_account(self, tmp_path):
+        """Transmission is gated on the VERIFIED account mode: a writable
+        adapter that is not connected to a paper account refuses in code."""
         adapter = IBKRAdapter(
             make_settings(trading_mode="live", data_root=str(tmp_path)),
             role="live_trading",
             read_only=False,
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(VenueError, match="disabled in code"):
+            adapter.place_order(make_request())  # mode is None: not paper -> refused
+        adapter.ib = FakeIB(["U0000000"])
+        adapter.connect()
+        assert adapter.mode == "live"
+        with pytest.raises(VenueError, match="disabled in code"):
             adapter.place_order(make_request())
 
     def test_cancel_order_raises_on_read_only(self, tmp_path):

@@ -153,10 +153,8 @@ def show_portfolio(executor):
     print("PORTFOLIO STATE")
     print("=" * 50)
 
-    w = portfolio["wallet"]
-    print(f"  Wallet: {'DRY-RUN' if w['dry_run'] else 'LIVE'}")
-    print(f"  Connected: {w['connected']}")
-    print(f"  USDCe: ${w['balance']['usdce']:.2f}")
+    print(f"  Venue: {portfolio['venue']} ({'SIMULATED' if portfolio['simulated'] else 'LIVE'})")
+    print(f"  Simulated balance: ${portfolio['simulated_balance']:.2f}")
 
     r = portfolio["risk"]
     print(f"\n  Bankroll: ${r['bankroll']:.2f}")
@@ -211,9 +209,15 @@ async def main():
     )
 
     # Create executor
+    # Retired research venue: the Polymarket adapter is read-only, so every
+    # order simulates regardless of --live (live Polymarket execution was
+    # retired 2026-08-16; IBKR is the venue -- see scripts/run_ibkr_paper.py).
+    from src.venues.polymarket import PolymarketAdapter
+
+    if not dry_run:
+        print("NOTE: live Polymarket execution is retired; running simulated.")
     executor = TradingExecutor(
-        dry_run=dry_run,
-        private_key=private_key,
+        venue=PolymarketAdapter(),
         bankroll=args.bankroll,
         risk_limits=risk_limits,
     )

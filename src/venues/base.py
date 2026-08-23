@@ -97,6 +97,11 @@ class VenueAdapter(abc.ABC):
     @abc.abstractmethod
     def cancel_order(self, order_id: str) -> bool: ...
 
+    def get_order(self, order_id: str) -> Order | None:
+        """Look up one order by the venue's native id (open or recently done).
+        Default: unsupported -> None. Adapters with order history override."""
+        return None
+
     # -- economics ---------------------------------------------------------
     @abc.abstractmethod
     def fee_model(self) -> FeeModel: ...

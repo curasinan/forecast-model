@@ -39,6 +39,9 @@ class Market(BaseModel):
     scheduled_resolution_time: datetime | None = None
     strike: float | None = None
     tick_size: float | None = None
+    # Smallest tradable quantity step (IBKR ForecastEx: 1 whole contract,
+    # verified 2026-08-18; Polymarket tokens: None = fractional).
+    size_increment: float | None = None
     multiplier: float = 1.0
     currency: str = "USD"
     venue_meta: dict = Field(default_factory=dict)

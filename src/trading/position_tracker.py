@@ -86,6 +86,20 @@ class PositionTracker:
                     filled_at TEXT
                 )
             """)
+            # Venue-neutral columns added by the IBKR migration (2026-08-23);
+            # ALTER-in-place so an existing predictions.db keeps its history.
+            self._ensure_columns(conn, "trade_log", {
+                "market_id": "TEXT", "venue": "TEXT", "venue_order_id": "TEXT",
+                "filled_size": "REAL",
+            })
+            self._ensure_columns(conn, "positions", {"market_id": "TEXT", "venue": "TEXT", "order_id": "TEXT"})
+
+    @staticmethod
+    def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, ctype in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ctype}")
 
     def record_trade(self, order: TradeOrder) -> None:
         """Record a filled/simulated trade."""
@@ -93,8 +107,9 @@ class PositionTracker:
             conn.execute(
                 """INSERT OR REPLACE INTO trade_log
                    (order_id, question_id, outcome, side, price, size,
-                    cost_usd, status, reason, created_at, filled_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cost_usd, status, reason, created_at, filled_at,
+                    market_id, venue, venue_order_id, filled_size)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     order.order_id,
                     order.question_id,
@@ -107,6 +122,10 @@ class PositionTracker:
                     order.reason,
                     order.created_at.isoformat(),
                     order.filled_at.isoformat() if order.filled_at else None,
+                    getattr(order, "market_id", "") or "",
+                    getattr(order, "venue", "") or "",
+                    getattr(order, "venue_order_id", "") or "",
+                    float(getattr(order, "filled_size", 0.0) or 0.0),
                 ),
             )
 
@@ -115,12 +134,18 @@ class PositionTracker:
             self._open_position(order)
 
     def _open_position(self, order: TradeOrder) -> None:
-        """Record a new open position."""
+        """Record a new open position (idempotent per order_id)."""
         with sqlite3.connect(self._db_path) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM positions WHERE order_id = ? LIMIT 1", (order.order_id,)
+            ).fetchone()
+            if exists:
+                return
             conn.execute(
                 """INSERT INTO positions
-                   (question_id, outcome, entry_price, size, cost_basis, opened_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (question_id, outcome, entry_price, size, cost_basis, opened_at,
+                    market_id, venue, order_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     order.question_id,
                     order.outcome,
@@ -128,6 +153,9 @@ class PositionTracker:
                     order.size,
                     order.cost_usd,
                     datetime.now().isoformat(),
+                    getattr(order, "market_id", "") or "",
+                    getattr(order, "venue", "") or "",
+                    order.order_id,
                 ),
             )
 

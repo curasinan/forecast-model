@@ -1,7 +1,7 @@
 """IBKR ForecastEx adapter behind the venue-neutral VenueAdapter port.
 
 Read-only by design in this build: only role='live_trading' may construct a
-writable adapter, and even then order transmission raises NotImplementedError
+writable adapter, and even then order transmission only works on a PAPER account
 -- enabling it is a manual, deliberate act by the account holder after paper
 validation, never a commit in this migration.
 """
@@ -91,6 +91,8 @@ class IBKRAdapter(VenueAdapter):
         self.role = role
         self.ib = None
         self._resolver: ContractResolver | None = None
+        self.account: str | None = None
+        self.mode: str | None = None  # 'paper' | 'live', set by connect()
 
     @property
     def resolver(self) -> ContractResolver:
@@ -120,6 +122,8 @@ class IBKRAdapter(VenueAdapter):
                 f"connected account {account} is a {mode} account but IBKR_TRADING_MODE="
                 f"{self.settings.trading_mode!r}; refusing to continue on the wrong session"
             )
+        self.account = account
+        self.mode = mode
         logger.warning(
             "ibkr session: account=%s mode=%s role=%s read_only=%s",
             account, mode, self.role, self.read_only,
@@ -254,10 +258,73 @@ class IBKRAdapter(VenueAdapter):
 
     # -- orders ------------------------------------------------------------
     def _place_order(self, request: OrderRequest) -> OrderAck:
-        raise NotImplementedError(
-            "live order transmission is enabled manually by the account holder after "
-            "paper validation -- never in a commit"
+        """Transmit an order -- PAPER accounts only.
+
+        Live transmission is enabled manually by the account holder after
+        paper validation; no code path in this repository can do it. The
+        check is on the verified account mode (DU/DF prefix), not on
+        configuration, so a mis-set IBKR_TRADING_MODE cannot open the door
+        (connect() already refuses on a mode mismatch).
+        """
+        if self.mode != "paper":
+            raise VenueError(
+                "live order transmission is disabled in code: connected account is "
+                f"{self.account!r} (mode={self.mode!r}); enable live trading manually, "
+                "after paper validation, outside this repository"
+            )
+        from ib_async import Contract, LimitOrder, MarketOrder  # sanctioned: src/venues/
+
+        ib = self._require_ib()
+        contract = Contract(conId=request.market_id.con_id, exchange="FORECASTX")
+        qualified = ib.qualifyContracts(contract)
+        if not qualified:
+            return OrderAck(order_id="", accepted=False,
+                            detail=f"could not qualify conId {request.market_id.con_id}")
+        action = "BUY" if request.side == "BUY" else "SELL"
+        qty = float(request.quantity)
+        if request.order_type == "LMT":
+            if request.limit_price is None:
+                return OrderAck(order_id="", accepted=False, detail="LMT order without limit_price")
+            order = LimitOrder(action, qty, float(request.limit_price), tif=request.tif)
+        else:
+            order = MarketOrder(action, qty, tif=request.tif)  # explicit tif: error 10349 otherwise
+        trade = ib.placeOrder(contract, order)
+        ib.sleep(1.0)  # let the first status round-trip arrive
+        status = trade.orderStatus.status
+        accepted = status not in ("Inactive", "Cancelled", "ApiCancelled")
+        return OrderAck(
+            order_id=str(trade.order.orderId),
+            accepted=accepted,
+            detail=status,
+            raw={"status": status, "perm_id": getattr(trade.order, "permId", None),
+                 "account": self.account, "mode": self.mode},
         )
+
+    def get_order(self, order_id: str) -> Order | None:
+        """Order state from this session's trade history (open or done)."""
+        ib = self._require_ib()
+        for trade in ib.trades():
+            if str(trade.order.orderId) != str(order_id):
+                continue
+            contract, order, status = trade.contract, trade.order, trade.orderStatus
+            is_limit = order.orderType == "LMT"
+            request = OrderRequest(
+                market_id=MarketId.ibkr(contract.conId),
+                side="BUY" if order.action.upper() == "BUY" else "SELL",
+                leg="NO" if getattr(contract, "right", "") == "P" else "YES",
+                quantity=float(order.totalQuantity),
+                order_type="LMT" if is_limit else "MKT",
+                limit_price=float(order.lmtPrice) if is_limit else None,
+                tif="GTC" if order.tif == "GTC" else "DAY",
+            )
+            return Order(
+                order_id=str(order.orderId),
+                request=request,
+                status=_STATUS_MAP.get(status.status, "pending"),
+                filled_quantity=float(status.filled or 0.0),
+                avg_fill_price=float(status.avgFillPrice) if status.avgFillPrice else None,
+            )
+        return None
 
     def cancel_order(self, order_id: str) -> bool:
         if self.read_only:
@@ -315,6 +382,7 @@ class IBKRAdapter(VenueAdapter):
             strike=row["strike"],
             tick_size=row["min_tick"],
             multiplier=float(row["multiplier"]) if row["multiplier"] else 1.0,
+            size_increment=1.0,  # minSize=sizeIncrement=1 contract (verified 2026-08-18)
             currency=row["currency"] or "USD",
             venue_meta={
                 "local_symbol": row["local_symbol"],
