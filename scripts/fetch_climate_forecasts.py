@@ -150,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--pilot", action="store_true", help="small end-to-end validation run")
     mode.add_argument("--hindcast", metavar="YEARS", help="bulk SEAS5 backfill, e.g. 1993-2016")
+    mode.add_argument("--era5", metavar="YEARS",
+                      help="ERA5 monthly reference backfill for the same years as the hindcast")
     parser.add_argument("--root", default=None, help="data root override (else CLIMATE_DATA_ROOT)")
     parser.add_argument(
         "--soft-timeout",
@@ -173,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
               f"{[f'{y}-{m:02d}' for y, m in inits]}, leads {LEADS}")
         tasks += [_era5_task(root, y) for y in era_years]
         tasks += [_seas5_task(root, y, [m], f"{y}{m:02d}") for y, m in inits]
+    elif args.era5:
+        years = parse_years(args.era5)
+        print(f"era5: monthly reference years {years[0]}..{years[-1]} ({len(years)} requests)")
+        tasks += [_era5_task(root, y) for y in years]
     else:
         years = parse_years(args.hindcast)
         print(f"hindcast: SEAS5 years {years[0]}..{years[-1]} ({len(years)} one-year requests)")
