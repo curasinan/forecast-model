@@ -1,6 +1,6 @@
 # Migration Checkpoint -- Polymarket -> IBKR ForecastEx
 
-**Checkpoint date: 2026-08-18.** Purpose: let any future session (new model,
+**Checkpoint date: 2026-08-23.** Purpose: let any future session (new model,
 fresh context, resumed after a break) pick up exactly here. Read this first,
 then `docs/venue_semantics.md` (verified venue facts) and
 `docs/feature_migration_audit.md` (per-feature verdicts). The original spec
@@ -19,11 +19,12 @@ Stage 0 gate PASSED on the live account (2,964 ForecastEx contracts,
 2,900 tradable). Venue abstraction, IBKR adapter package, pacing limiter,
 fee/carry-aware sizing math, import ban, legacy retirement, gateway
 supervisor, health monitoring and a Task-Scheduler-managed quote recorder
-are built, tested (574 tests passing) and running. Stage 6 audit done;
-user chose the **climate lane first**. Climate step 1 (resolution oracles)
-and step 2 (NOAA label ledger live, CDS forecast pipeline built) done.
-Next (data all in place): GTM model ->
-re-scoped go-live gates -> executor rewiring -> paper loop.
+are built, tested and running. Stage 6 audit done; user chose the
+**climate lane first**. Climate steps 1–4 (oracles, NOAA ledger, CDS
+hindcast, GTM EMOS + strike ladder + diagnostics) are in tree. Polymarket
+**runtime** (collectors, scheduled jobs, MCP Gamma/CLOB tools, scan/trade
+CLIs) is gated off. Next: live paper book on the GTM ladder (blocked on
+paper-account provisioning), then executor rewiring onto VenueAdapter.
 
 ---
 
@@ -165,13 +166,33 @@ re-scoped go-live gates -> executor rewiring -> paper loop.
       398 init months 1993-01..2026-08, leads 1-6; **25 members for 1993-2016
       hindcasts, 51 from 2017 (SEAS5 design, not a gap)**. ERA5 1993-2025 ->
       `reference/era5_global_mean.parquet` 396 monthly rows, gap-free.
-- [ ] Step 4 -- GTM model: EMOS-style post-processing of the SEAS5 ensemble
-      onto the NOAA anomaly target (via an ERA5 -> NOAA mapping), strike
-      ladder through the implied CDF; strictly-greater semantics.
-- [ ] Step 5 -- re-scope go-live gates for ~6-12 resolutions/yr
-      (weather/paper_criteria.py values unreachable at this cadence);
-      re-derive edge gates from observed ForecastEx spreads + $0.01 commission.
-- [ ] Step 6 -- executor rewiring + paper loop.
+- [x] **Step 4 -- GTM model** (2026-08-23): ERA5→NOAA monthly-intercept
+      bridge (`climate/bridge.py`), training frame (`climate/dataset.py`,
+      lead-1 = init month), per-lead Gaussian EMOS (`climate/emos.py`),
+      strictly-greater strike ladder vs recorder quotes (`climate/ladder.py`),
+      fit + expanding-window diagnostics (`climate/fit.py`,
+      `scripts/fit_gtm_emos.py`). Tests under `tests/test_climate/`.
+      **FIT RUN 2026-08-23** (commit 1ff5f52, `docs/gtm_model_report.md`):
+      trend variant operational (`models/gtm_emos.json`; `_notrend` kept);
+      bridge R2 0.983 / resid 0.036C; OOS expanding-window skill vs
+      trend-climatology 0.49 (lead 1) .. 0.26 (lead 6), PIT near-flat,
+      coverage 50%/90% = 0.535/0.882. Hindcast model gate PASSES.
+- [x] **Step 5 -- go-live / edge gates re-scoped** (`climate/paper_criteria.py`):
+      weather's 200 buckets / 90 days is unreachable at ~12 GTM resolutions/yr.
+      Hindcast CRPS skill vs trend climatology is the model gate; live paper
+      is 365 days + 12 resolved months (opt-in). min_edge floor = $0.01
+      commission + 1 tick = 0.02; price band 0.05–0.95.
+- [~] **Step 6 -- paper loop + executor**: research-only GTM paper loop
+      (`climate/paper.py`, `scripts/run_gtm_paper.py`) scores the latest
+      recorder sweep against the fitted EMOS and writes signals — **no
+      orders**. First run 2026-08-23: 52 GTM contracts, 23 pass the
+      research edge gate, go_live=False (live paper gate of 365 days +
+      12 resolved months is now REQUIRED by default; `--hindcast-gate-only`
+      shows the model gate). Dec-2026 ladder shows a ~60-point
+      model-vs-market gap (model mu 1.44C, lead 5) -- paper-track, do not
+      trust as edge; see gtm_model_report.md section 5. `TradingExecutor` / `OrderManager` remain on the retired
+      Polymarket dry-run wallet path; rewiring onto `VenueAdapter` still
+      waits on paper-account provisioning (Stage 7 [U]).
 
 ---
 
@@ -215,12 +236,19 @@ python scripts/check_ibkr_recorder.py
 python scripts/collect_climate_labels.py [--backfill]
 # Climate forecasts (needs CDS licences accepted)
 python scripts/fetch_climate_forecasts.py --pilot | --hindcast 2000-2025
+# GTM EMOS fit + diagnostics (writes under %LOCALAPPDATA%\climate_data)
+python scripts/fit_gtm_emos.py [--trend]
+# GTM paper signals vs latest IBKR recorder sweep (no orders)
+python scripts/run_gtm_paper.py
 # Tests / lint
 python -m pytest -q ; python -m ruff check .
+
+# Polymarket collectors/trade CLIs exit 2 unless POLYMARKET_RUNTIME=1
 ```
 
 Task Scheduler: `Get-ScheduledTask -TaskPath '\IBKR\' | Get-ScheduledTaskInfo`;
-remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`.
+remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`. Leftover
+`\Polymarket\` collector jobs: `scripts/scheduling/unregister_polymarket_tasks.ps1`.
 
 ## 5. Data locations (all outside the OneDrive repo on purpose)
 
@@ -229,21 +257,30 @@ remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`.
 - `%LOCALAPPDATA%\ibkr_ticks\contracts_cache.db` -- resolver cache
 - `%LOCALAPPDATA%\climate_data\labels\labels_ledger.parquet` -- NOAA labels
 - `%LOCALAPPDATA%\climate_data\raw|forecasts|reference\` -- CDS downloads + reductions
+- `%LOCALAPPDATA%\climate_data\models\gtm_emos.json` -- fitted GTM EMOS
+- `%LOCALAPPDATA%\climate_data\reports\gtm_emos_diagnostics.md` -- Step 4 report
+- `%LOCALAPPDATA%\climate_data\paper\gtm_signals.json` -- latest paper ladder
 - `logs\ibkr_recorder.log`, `logs\ibkr_recorder_task.log`, `logs\ibkr_events.jsonl`
 
 ## 6. Git state at checkpoint
 
-Committed on `main` through `7f6d532` (climate pipelines). Commits after
-the last push (`b81fd19`): `aaa732a`, `5cfddd7`, `99ace7a`, `c7d0e19`,
-`7f6d532`, plus this checkpoint -- run `git push origin main`.
+Committed on `main` through `d976323` (2026-08-23): `1ff5f52` GTM model +
+report, `d976323` Polymarket runtime gate, preceded by `597d96f` (backfills),
+`7e8242f`, `e8ec379`, `99ace7a`, `c7d0e19`, `7f6d532`, `5cfddd7`, `aaa732a`.
+Last push was `b81fd19` -- run `git push origin main`.
 Untracked and intentionally NOT part of the migration: `.agents/`,
-`bist_brief/news_frag.py`, `bist_brief/news_html.frag`.
+`bist_brief/*`, `archive (1).zip`, `logs/`.
 
 ## 7. Open user actions (priority order)
 
 1. (done 2026-08-23) CDS licences accepted; hindcast + ERA5 backfilled.
 2. Provision the paper account; run the paper-parity compare.
 3. Add `collect_climate_labels.py` as a daily scheduled task (elevated PS).
-4. Read the legal entity name off Client Portal for venue_semantics.md.
-5. `git push origin main`.
-6. Optional: configure Telegram ALERT_METHOD so health alerts leave log-only mode.
+4. Unregister leftover `\Polymarket\` Task Scheduler jobs if they still exist
+   (`scripts/scheduling/unregister_polymarket_tasks.ps1`, elevated).
+5. Read the legal entity name off Client Portal for venue_semantics.md.
+6. `git push origin main` (everything is committed through d976323).
+7. Optional: configure Telegram ALERT_METHOD so health alerts leave log-only mode.
+8. Remaining engineering (not a user action): rewire `TradingExecutor` onto
+   `VenueAdapter` once the paper account exists; coupon-rate verification;
+   final migration report (Stage 8).
