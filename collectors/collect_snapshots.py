@@ -457,6 +457,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.collect_snapshots")
     setup_logging()
     args = _parse_args(argv)
     try:

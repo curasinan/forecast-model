@@ -306,6 +306,9 @@ def discover_and_upsert(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.weather.discover_live_markets")
     setup_logging()
     parser = argparse.ArgumentParser(description="Discover live Polymarket weather markets")
     parser.add_argument("--polymarket-db", type=Path, default=POLYMARKET_DB)

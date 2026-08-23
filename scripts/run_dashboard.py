@@ -33,6 +33,9 @@ logging.basicConfig(
 
 
 async def main():
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/run_dashboard.py")
     mode = "interactive"
     if len(sys.argv) > 1:
         if sys.argv[1] == "--once":

@@ -46,6 +46,9 @@ def stations_from_weather_db() -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/run_weather_collect_cycle.py")
     setup_logging()
     parser = argparse.ArgumentParser(description="Weather collect cycle")
     parser.add_argument(

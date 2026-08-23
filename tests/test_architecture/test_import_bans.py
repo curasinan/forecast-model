@@ -21,6 +21,7 @@ SCANNED_DIRS = (
     "monitoring",
     "analysis",
     "weather",
+    "climate",
     "scripts",
     "mcp_server",
 )

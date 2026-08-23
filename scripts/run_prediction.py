@@ -484,6 +484,9 @@ async def show_evaluation(tracker: EvaluationTracker):
 
 
 async def main():
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/run_prediction.py")
     # Parse args
     question_id = None
     run_all = False

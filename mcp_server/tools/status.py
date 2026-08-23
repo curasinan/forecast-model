@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from collectors.collect_markets import DB_PATH as POLYMARKET_DB
-from mcp_server.serializers import err, ok
+from mcp_server.serializers import ok
 from weather.paths import resolve_weather_data_root
 from weather.storage import init_weather_db, weather_db_path
 
@@ -111,7 +111,7 @@ def weather_status(db_path: Path | str | None = None) -> dict[str, Any]:
 
 def status(
     *,
-    ping_network: bool = True,
+    ping_network: bool = False,
     polymarket_db: str | None = None,
     weather_db: str | None = None,
 ) -> dict[str, Any]:

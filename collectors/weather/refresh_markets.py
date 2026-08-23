@@ -267,6 +267,9 @@ def upsert_gamma_markets(markets: list[dict[str, Any]], db_path: Path | str = DB
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.weather.refresh_markets")
     setup_logging()
     parser = argparse.ArgumentParser(description="Refresh weather markets into polymarket.db")
     parser.add_argument("--timeout", type=float, default=45.0)

@@ -339,6 +339,9 @@ def run_paper(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/run_weather_paper.py")
     setup_logging()
     parser = argparse.ArgumentParser(description="Weather paper trading evaluation")
     parser.add_argument("--min-edge", type=float, default=0.05)

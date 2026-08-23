@@ -173,6 +173,9 @@ def collect_weather_snapshots(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.weather.collect_weather_snapshots")
     setup_logging()
     parser = argparse.ArgumentParser(description="Snapshot weather_markets CLOB books")
     parser.add_argument("--limit", type=int, default=None)

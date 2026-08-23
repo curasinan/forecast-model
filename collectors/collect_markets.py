@@ -821,6 +821,9 @@ LOCK_PATH = REPO_ROOT / "logs" / "collect_markets.lock"
 
 
 def main() -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.collect_markets")
     setup_logging()
     try:
         with PidLock(LOCK_PATH):

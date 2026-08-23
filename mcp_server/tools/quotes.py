@@ -14,13 +14,17 @@ from weather.market_quotes import resolve_quote
 def wx_get_quote(
     market_id: str,
     *,
-    allow_live: bool = True,
+    allow_live: bool = False,
     clob_token_ids: str | None = None,
     polymarket_db: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve mid/spread for a weather market (snapshot, then live CLOB)."""
+    """Resolve mid/spread from local snapshots only (live CLOB collection retired)."""
     if not market_id:
         return err("bad_request", "market_id is required")
+    if allow_live:
+        from src.retired_polymarket import retired_mcp_error
+
+        return retired_mcp_error("wx_get_quote(allow_live=true)")
     db = Path(polymarket_db) if polymarket_db else Path(POLYMARKET_DB)
     try:
         q = resolve_quote(
@@ -36,7 +40,7 @@ def wx_get_quote(
             "quote_missing",
             f"No snapshot/live quote for {market_id}",
             market_id=market_id,
-            hint="Run wx_snapshot_books or ensure CLOB is reachable.",
+            hint="Local snapshot missing. Live CLOB collection is retired.",
         )
     return ok(
         {
@@ -59,25 +63,10 @@ def wx_snapshot_books(
     polymarket_db: str | None = None,
     weather_db: str | None = None,
 ) -> dict[str, Any]:
-    """Snapshot CLOB books for markets in weather_markets."""
-    try:
-        from collectors.weather.collect_weather_snapshots import collect_weather_snapshots
-    except Exception as exc:  # noqa: BLE001
-        return err("import_failed", str(exc))
-    try:
-        summary = collect_weather_snapshots(
-            polymarket_db=Path(polymarket_db) if polymarket_db else POLYMARKET_DB,
-            weather_db=weather_db,
-            delay_ms=delay_ms,
-            limit=limit,
-        )
-        return ok(summary)
-    except Exception as exc:  # noqa: BLE001
-        return err(
-            "clob_unreachable",
-            str(exc),
-            hint="CLOB may be blocked (timeout/SSL). Quotes need network or existing snapshots.",
-        )
+    """Retired: live CLOB snapshots for weather_markets."""
+    from src.retired_polymarket import retired_mcp_error
+
+    return retired_mcp_error("wx_snapshot_books")
 
 
 def pm_latest_snapshots(

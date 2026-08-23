@@ -9,7 +9,6 @@ from typing import Any
 from collectors.collect_markets import DB_PATH as POLYMARKET_DB
 from collectors.collect_markets import get_snapshot_candidates
 from collectors.weather.discover_live_markets import discover_and_upsert
-from collectors.weather.refresh_markets import fetch_weather_markets, upsert_gamma_markets
 from mcp_server.serializers import clamp_limit, err, ok
 from weather.storage import init_weather_db
 
@@ -57,7 +56,11 @@ def wx_discover_markets(
     polymarket_db: str | None = None,
     weather_db: str | None = None,
 ) -> dict[str, Any]:
-    """Refresh weather_markets from local polymarket.db (and optionally Gamma)."""
+    """Refresh weather_markets from local polymarket.db (Gamma collection retired)."""
+    if not skip_gamma:
+        from src.retired_polymarket import retired_mcp_error
+
+        return retired_mcp_error("wx_discover_markets(skip_gamma=false)")
     try:
         summary = discover_and_upsert(
             polymarket_db=Path(polymarket_db) if polymarket_db else POLYMARKET_DB,
@@ -77,27 +80,10 @@ def wx_refresh_gamma(
     timeout: float = 12.0,
     polymarket_db: str | None = None,
 ) -> dict[str, Any]:
-    """Pull live station-temp markets from Gamma into polymarket.db."""
-    try:
-        markets = fetch_weather_markets(timeout=timeout)
-    except Exception as exc:  # noqa: BLE001
-        return err(
-            "gamma_unreachable",
-            str(exc),
-            hint="Use wx_discover_markets(skip_gamma=true) against local DB.",
-        )
-    if not markets:
-        return err(
-            "gamma_unreachable",
-            "No weather markets fetched; Gamma may be unreachable",
-            hint="Use wx_discover_markets(skip_gamma=true) against local DB.",
-        )
-    db = Path(polymarket_db) if polymarket_db else Path(POLYMARKET_DB)
-    try:
-        n = upsert_gamma_markets(markets, db_path=db)
-    except Exception as exc:  # noqa: BLE001
-        return err("upsert_failed", str(exc), fetched=len(markets))
-    return ok({"upserted": n, "fetched": len(markets), "polymarket_db": str(db)})
+    """Retired: live Gamma pull into polymarket.db."""
+    from src.retired_polymarket import retired_mcp_error
+
+    return retired_mcp_error("wx_refresh_gamma")
 
 
 def pm_list_markets(

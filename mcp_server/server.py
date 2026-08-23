@@ -25,8 +25,8 @@ mcp = FastMCP("polymarket-weather")
 
 
 @mcp.tool(name="status")
-def status_tool(ping_network: bool = True) -> dict[str, Any]:
-    """DB paths, table counts, and Gamma/CLOB connectivity. Call first before analysis."""
+def status_tool(ping_network: bool = False) -> dict[str, Any]:
+    """DB paths and table counts. Network Gamma/CLOB ping is off by default (retired)."""
     return status.status(ping_network=ping_network)
 
 
@@ -60,17 +60,17 @@ def wx_discover_markets(
 
 @mcp.tool()
 def wx_refresh_gamma(timeout: float = 12.0) -> dict[str, Any]:
-    """Pull live station-temp markets from Gamma into polymarket.db (needs network)."""
+    """Retired: live Gamma pull into polymarket.db. Use IBKR climate scripts instead."""
     return markets.wx_refresh_gamma(timeout=timeout)
 
 
 @mcp.tool()
 def wx_get_quote(
     market_id: str,
-    allow_live: bool = True,
+    allow_live: bool = False,
     clob_token_ids: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve mid/spread for one market (snapshot DB, then live CLOB)."""
+    """Resolve mid/spread from local snapshots (live CLOB collection retired)."""
     return quotes.wx_get_quote(
         market_id,
         allow_live=allow_live,
@@ -80,7 +80,7 @@ def wx_get_quote(
 
 @mcp.tool()
 def wx_snapshot_books(limit: int = 100, delay_ms: int = 100) -> dict[str, Any]:
-    """Snapshot CLOB order books for markets already in weather_markets."""
+    """Retired: live CLOB snapshots. Quotes come from the IBKR recorder now."""
     return quotes.wx_snapshot_books(limit=limit, delay_ms=delay_ms)
 
 
@@ -114,7 +114,7 @@ def wx_paper_signals(
     horizon_future_days: int = 7,
     fetch_features: bool = True,
 ) -> dict[str, Any]:
-    """Run weather paper evaluation: EMOS vs market → edge signals."""
+    """Retired: Polymarket weather paper loop. Use scripts/run_gtm_paper.py."""
     return signals.wx_paper_signals(
         min_edge=min_edge,
         require_live_quote=require_live_quote,
@@ -145,7 +145,7 @@ def pm_latest_snapshots(
     market_ids: list[str] | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Latest snapshot mid/spread per market from polymarket.db."""
+    """Latest snapshot mid/spread per market from local polymarket.db (archival)."""
     return quotes.pm_latest_snapshots(market_ids=market_ids, limit=limit)
 
 

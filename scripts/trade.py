@@ -176,6 +176,9 @@ def show_portfolio(executor):
 
 
 async def main():
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/trade.py")
     args = parse_args()
 
     # Determine mode

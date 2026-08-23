@@ -1,117 +1,53 @@
-# Register the two collector jobs with Windows Task Scheduler.
+# RETIRED 2026-08-23 — Polymarket collectors are no longer scheduled.
 #
-# Run from an ELEVATED PowerShell (right-click -> Run as administrator)
-# with the repo root as the current directory:
+# This script used to register collect_markets / collect_snapshots /
+# weather_collect_cycle under \Polymarket\. Those jobs hit Gamma/CLOB.
+# The trading venue is IBKR ForecastEx (climate lane).
+#
+# Running this script now UNREGISTERS the old Polymarket tasks (if present)
+# and prints where to find the IBKR jobs. It does not create new PM tasks.
 #
 #   cd C:\Users\asus\OneDrive\Desktop\new_work
 #   .\scripts\scheduling\register_tasks_windows.ps1
 #
-# The -PythonExe parameter can be overridden if `python` on PATH is not
-# the interpreter you want the tasks to use.
+# IBKR recorder:  .\scripts\scheduling\register_ibkr_tasks.ps1  (elevated)
+# Explicit PM uninstall: .\scripts\scheduling\unregister_polymarket_tasks.ps1
 
 param(
-    [string]$PythonExe = "python.exe",
-    [string]$RepoRoot  = (Get-Location).Path,
-    [string]$TaskPath  = "\Polymarket\"
+    [string]$TaskPath = "\Polymarket\"
 )
 
-function Register-CollectorTask {
-    param(
-        [string]$TaskName,
-        [string]$Module,
-        [Microsoft.Management.Infrastructure.CimInstance[]]$Triggers
-    )
+Write-Host "Polymarket collectors are RETIRED. This script will not register them."
+Write-Host "Unregistering any leftover tasks under $TaskPath ..."
 
-    $action = New-ScheduledTaskAction `
-        -Execute $PythonExe `
-        -Argument "-m $Module" `
-        -WorkingDirectory $RepoRoot
+$taskNames = @("collect_markets", "collect_snapshots", "weather_collect_cycle")
 
-    # IgnoreNew == if a previous instance is still running, do not start
-    # another. This is the scheduler-level overlap guard; the Python
-    # scripts also guard via a PID lock for defence in depth.
-    $settings = New-ScheduledTaskSettingsSet `
-        -MultipleInstances IgnoreNew `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable `
-        -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-
-    # Replace any existing registration with the same name.
-    Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -TaskPath $TaskPath `
-        -Action $action `
-        -Trigger $Triggers `
-        -Settings $settings `
-        -Description "Polymarket collector: $Module" | Out-Null
-
-    Write-Host "Registered: $TaskPath$TaskName"
+foreach ($name in $taskNames) {
+    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $name -ErrorAction SilentlyContinue
+    if ($null -eq $task) {
+        Write-Host "Not registered (skipped): $TaskPath$name"
+        continue
+    }
+    try { Stop-ScheduledTask -TaskPath $TaskPath -TaskName $name -ErrorAction Stop } catch { }
+    Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $name -Confirm:$false
+    Write-Host "Removed: $TaskPath$name"
 }
 
-# --- collect_markets: 06:00 and 18:00 daily ---------------------------------
-$marketsTriggers = @(
-    New-ScheduledTaskTrigger -Daily -At 6:00am
-    New-ScheduledTaskTrigger -Daily -At 6:00pm
-)
-Register-CollectorTask -TaskName "collect_markets" -Module "collectors.collect_markets" -Triggers $marketsTriggers
-
-# --- collect_snapshots: every 15 minutes, forever ---------------------------
-# Seed the first trigger at the NEXT quarter-hour boundary from now, then
-# repeat every 15 minutes indefinitely. Seeding at midnight-tomorrow (a
-# natural-looking choice) would delay the first run by up to 24h.
-$now = Get-Date
-$minutesToNext = 15 - ($now.Minute % 15)
-$seed = $now.AddSeconds(-$now.Second).AddMilliseconds(-$now.Millisecond).AddMinutes($minutesToNext)
-Write-Host "collect_snapshots first fire at: $seed"
-
-$snapshotTrigger = New-ScheduledTaskTrigger `
-    -Once `
-    -At $seed `
-    -RepetitionInterval (New-TimeSpan -Minutes 15) `
-    -RepetitionDuration ([TimeSpan]::FromDays(3650))
-
-Register-CollectorTask -TaskName "collect_snapshots" -Module "collectors.collect_snapshots" -Triggers $snapshotTrigger
-
-# --- weather collect cycle: every 30 minutes --------------------------------
-# discover live weather markets + Open-Meteo forecasts + IEM obs
-$weatherSeedMinutes = 30 - ($now.Minute % 30)
-if ($weatherSeedMinutes -eq 30) { $weatherSeedMinutes = 0 }
-$weatherSeed = $now.AddSeconds(-$now.Second).AddMilliseconds(-$now.Millisecond).AddMinutes($weatherSeedMinutes)
-if ($weatherSeed -le $now) { $weatherSeed = $weatherSeed.AddMinutes(30) }
-Write-Host "weather_collect_cycle first fire at: $weatherSeed"
-
-$weatherTrigger = New-ScheduledTaskTrigger `
-    -Once `
-    -At $weatherSeed `
-    -RepetitionInterval (New-TimeSpan -Minutes 30) `
-    -RepetitionDuration ([TimeSpan]::FromDays(3650))
-
-$weatherAction = New-ScheduledTaskAction `
-    -Execute $PythonExe `
-    -Argument "scripts/run_weather_collect_cycle.py --allow-noncommercial" `
-    -WorkingDirectory $RepoRoot
-
-$settings = New-ScheduledTaskSettingsSet `
-    -MultipleInstances IgnoreNew `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-
-Unregister-ScheduledTask -TaskPath $TaskPath -TaskName "weather_collect_cycle" -Confirm:$false -ErrorAction SilentlyContinue
-Register-ScheduledTask `
-    -TaskName "weather_collect_cycle" `
-    -TaskPath $TaskPath `
-    -Action $weatherAction `
-    -Trigger $weatherTrigger `
-    -Settings $settings `
-    -Description "Weather: discover markets + forecasts + IEM obs" | Out-Null
-Write-Host "Registered: ${TaskPath}weather_collect_cycle"
-Write-Host "NOTE: remove --allow-noncommercial after OPEN_METEO_API_KEY is set."
+try {
+    $svc = New-Object -ComObject Schedule.Service
+    $svc.Connect()
+    $root = $svc.GetFolder("\")
+    $folderName = $TaskPath.Trim("\")
+    $folder = $root.GetFolder($folderName)
+    if ($folder.GetTasks(0).Count -eq 0) {
+        $root.DeleteFolder($folderName, 0)
+        Write-Host "Removed empty task folder: $TaskPath"
+    } else {
+        Write-Host "Task folder $TaskPath not empty; left in place."
+    }
+} catch { }
 
 Write-Host ""
-Write-Host "Done. View in Task Scheduler under '$TaskPath'."
-Write-Host "Tail logs:  Get-Content logs\snapshot_collector.log -Wait -Tail 20"
+Write-Host "IBKR jobs live under \IBKR\ (register_ibkr_tasks.ps1)."
+Write-Host "Climate labels: python scripts/collect_climate_labels.py (schedule separately, elevated)."
+Write-Host "Done."

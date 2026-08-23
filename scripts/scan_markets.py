@@ -23,6 +23,9 @@ console = Console()
 
 
 async def main():
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/scan_markets.py")
     console.print("[bold]Scanning Polymarket for tech/AI markets...[/bold]\n")
 
     collector = PolymarketCollector()
