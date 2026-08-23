@@ -22,7 +22,7 @@ supervisor, health monitoring and a Task-Scheduler-managed quote recorder
 are built, tested (574 tests passing) and running. Stage 6 audit done;
 user chose the **climate lane first**. Climate step 1 (resolution oracles)
 and step 2 (NOAA label ledger live, CDS forecast pipeline built) done.
-Next: CDS licence acceptance -> SEAS5 hindcast backfill -> GTM model ->
+Next (data all in place): GTM model ->
 re-scoped go-live gates -> executor rewiring -> paper loop.
 
 ---
@@ -155,16 +155,16 @@ re-scoped go-live gates -> executor rewiring -> paper loop.
       latest 2025 = 427.35 ppm; acd_monthly). First-print / revision
       discipline + oracle-drift detection (fails if base != 1901-2000).
       [ ] schedule `collect_climate_labels.py` daily (Task Scheduler, elevated).
-- [~] **Step 2b -- CDS forecast pipeline** built (`climate/cds.py`,
-      `climate/reduce.py`, `scripts/fetch_climate_forecasts.py`; SEAS5 =
-      system 51 (empirical, 1981->now), per-member monthly means; ERA5
-      monthly reference; idempotent download cache; cos-lat global mean).
-      [U] **Accept dataset licences on the CDS website** (API returns 403
-      until then): `reanalysis-era5-single-levels-monthly-means` and
-      `seasonal-monthly-single-levels` (each dataset page,
-      `?tab=download#manage-licences`), then
-      `python scripts/fetch_climate_forecasts.py --pilot`.
-- [ ] Step 3 -- SEAS5 hindcast backfill (`--hindcast 2000-2025`, resumable).
+- [x] **Step 2b -- CDS forecast pipeline** (commits 7f6d532, 7e8242f):
+      `climate/cds.py`, `climate/reduce.py`, `scripts/fetch_climate_forecasts.py`
+      (--pilot | --hindcast YEARS | --era5 YEARS); SEAS5 = system 51, per-member
+      monthly means; ERA5 monthly reference; idempotent cache; cos-lat global
+      mean. Licences accepted by user 2026-08-23; pilot 4/4 OK.
+- [x] **Step 3 -- backfills DONE 2026-08-23**: SEAS5 1993-2025 (33/33 one-year
+      requests, 7.6 GB raw) -> `forecasts/seas5_global_mean.parquet` 76,860 rows,
+      398 init months 1993-01..2026-08, leads 1-6; **25 members for 1993-2016
+      hindcasts, 51 from 2017 (SEAS5 design, not a gap)**. ERA5 1993-2025 ->
+      `reference/era5_global_mean.parquet` 396 monthly rows, gap-free.
 - [ ] Step 4 -- GTM model: EMOS-style post-processing of the SEAS5 ensemble
       onto the NOAA anomaly target (via an ERA5 -> NOAA mapping), strike
       ladder through the implied CDF; strictly-greater semantics.
@@ -241,7 +241,7 @@ Untracked and intentionally NOT part of the migration: `.agents/`,
 
 ## 7. Open user actions (priority order)
 
-1. Accept the two CDS dataset licences (unblocks step 2b -> hindcasts).
+1. (done 2026-08-23) CDS licences accepted; hindcast + ERA5 backfilled.
 2. Provision the paper account; run the paper-parity compare.
 3. Add `collect_climate_labels.py` as a daily scheduled task (elevated PS).
 4. Read the legal entity name off Client Portal for venue_semantics.md.
