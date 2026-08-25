@@ -232,29 +232,38 @@ class IBKRAdapter(VenueAdapter):
         # openTrades() rather than openOrders(): the bare order list lacks the
         # contract, and the domain Order needs a MarketId.
         ib = self._require_ib()
-        orders: list[Order] = []
-        for trade in ib.openTrades():
-            contract, order, status = trade.contract, trade.order, trade.orderStatus
-            is_limit = order.orderType == "LMT"
-            request = OrderRequest(
-                market_id=MarketId.ibkr(contract.conId),
-                side="BUY" if order.action.upper() == "BUY" else "SELL",
-                leg="NO" if getattr(contract, "right", "") == "P" else "YES",
-                quantity=float(order.totalQuantity),
-                order_type="LMT" if is_limit else "MKT",
-                limit_price=float(order.lmtPrice) if is_limit else None,
-                tif="GTC" if order.tif == "GTC" else "DAY",
-            )
-            filled = float(status.filled or 0.0)
-            avg = float(status.avgFillPrice) if status.avgFillPrice else None
-            orders.append(Order(
-                order_id=str(order.orderId),
-                request=request,
-                status=_STATUS_MAP.get(status.status, "pending"),
-                filled_quantity=filled,
-                avg_fill_price=avg,
-            ))
-        return orders
+        return [self._trade_to_order(trade) for trade in ib.openTrades()]
+
+    def get_all_open_orders(self) -> list[Order]:
+        """Every resting order visible to this session, own or foreign.
+
+        reqAllOpenOrders() (unlike openTrades()) surfaces GTC orders placed by
+        other client ids -- their orderId is meaningless here, so callers must
+        join on `venue_meta["perm_id"]` instead.
+        """
+        ib = self._require_ib()
+        return [self._trade_to_order(trade) for trade in ib.reqAllOpenOrders()]
+
+    def _trade_to_order(self, trade) -> Order:
+        contract, order, status = trade.contract, trade.order, trade.orderStatus
+        is_limit = order.orderType == "LMT"
+        request = OrderRequest(
+            market_id=MarketId.ibkr(contract.conId),
+            side="BUY" if order.action.upper() == "BUY" else "SELL",
+            leg="NO" if getattr(contract, "right", "") == "P" else "YES",
+            quantity=float(order.totalQuantity),
+            order_type="LMT" if is_limit else "MKT",
+            limit_price=float(order.lmtPrice) if is_limit else None,
+            tif="GTC" if order.tif == "GTC" else "DAY",
+        )
+        return Order(
+            order_id=str(order.orderId),
+            request=request,
+            status=_STATUS_MAP.get(status.status, "pending"),
+            filled_quantity=float(status.filled or 0.0),
+            avg_fill_price=float(status.avgFillPrice) if status.avgFillPrice else None,
+            venue_meta={"perm_id": int(getattr(order, "permId", 0) or 0)},
+        )
 
     # -- orders ------------------------------------------------------------
     def _place_order(self, request: OrderRequest) -> OrderAck:
@@ -306,24 +315,7 @@ class IBKRAdapter(VenueAdapter):
         for trade in ib.trades():
             if str(trade.order.orderId) != str(order_id):
                 continue
-            contract, order, status = trade.contract, trade.order, trade.orderStatus
-            is_limit = order.orderType == "LMT"
-            request = OrderRequest(
-                market_id=MarketId.ibkr(contract.conId),
-                side="BUY" if order.action.upper() == "BUY" else "SELL",
-                leg="NO" if getattr(contract, "right", "") == "P" else "YES",
-                quantity=float(order.totalQuantity),
-                order_type="LMT" if is_limit else "MKT",
-                limit_price=float(order.lmtPrice) if is_limit else None,
-                tif="GTC" if order.tif == "GTC" else "DAY",
-            )
-            return Order(
-                order_id=str(order.orderId),
-                request=request,
-                status=_STATUS_MAP.get(status.status, "pending"),
-                filled_quantity=float(status.filled or 0.0),
-                avg_fill_price=float(status.avgFillPrice) if status.avgFillPrice else None,
-            )
+            return self._trade_to_order(trade)
         return None
 
     def cancel_order(self, order_id: str) -> bool:

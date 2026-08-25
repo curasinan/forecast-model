@@ -123,3 +123,4 @@ class Order(BaseModel):
     status: Literal["pending", "open", "filled", "cancelled", "rejected"]
     filled_quantity: float = 0.0
     avg_fill_price: float | None = None
+    venue_meta: dict = Field(default_factory=dict)
