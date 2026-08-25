@@ -19,7 +19,9 @@ YES and NO legs are SEPARATE contracts, so a NO order targets
 `Market.no_id`; the NO price is whatever the NO leg is quoted at (passed in
 as `no_price`), falling back to the venue's FeeModel complement rule --
 never the Polymarket `1 - yes` identity. Quantities respect
-`Market.size_increment` (1 whole contract at IBKR).
+`Market.size_increment` (1 whole contract at IBKR) and limit prices respect
+`Market.tick_size` (0.01 at ForecastEx; an off-tick price is cancelled by
+the venue with error 110).
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import ROUND_FLOOR, Decimal
 from enum import Enum
 
 from src.domain.fees import FeeModel
@@ -78,6 +81,19 @@ class TradeOrder:
         return self.venue_order_id
 
 
+def snap_to_tick(price: float, tick: float) -> float:
+    """Largest multiple of ``tick`` at or below ``price``, floored at one tick.
+
+    Decimal, not float arithmetic: 0.35 as a binary float is 0.3499999...,
+    and an off-tick price is not merely rounded by the venue -- ForecastEx
+    cancels the order (error 110). A positive price never snaps to zero.
+    """
+    d_price, d_tick = Decimal(str(price)), Decimal(str(tick))
+    steps = (d_price / d_tick).to_integral_value(rounding=ROUND_FLOOR)
+    snapped = steps * d_tick
+    return float(snapped if snapped >= d_tick else d_tick)
+
+
 def edge_to_order(
     edge: EdgeSignal,
     size_usd: float,
@@ -91,6 +107,13 @@ def edge_to_order(
     edge < 0: BUY the NO leg at `no_price` (its own quote) if given, else at
     the venue's complement price (`fee_model.no_price_from_yes`), else the
     Polymarket identity `1 - yes` (research fallback only).
+
+    The limit price is snapped DOWN to `market.tick_size` when the venue
+    publishes one. A mid-derived price like 0.345 is not a valid ForecastEx
+    price (minTick 0.01) and the venue cancels the order outright with error
+    110 -- verified on the paper account 2026-08-25. Rounding DOWN (never up)
+    on a BUY keeps the paid price at or below the intended one, so the edge
+    can only improve.
 
     Size is `size_usd / price`, rounded DOWN to `market.size_increment`
     when the venue trades whole units; cost is recomputed from the rounded
@@ -123,6 +146,10 @@ def edge_to_order(
             f"Model={edge.model_prob:.0%} < Market={yes_price:.0%}, "
             f"edge={edge.edge_pct:+.1%}, EV=${edge.expected_value:+.3f}"
         )
+
+    tick = market.tick_size if market is not None else None
+    if tick and tick > 0:
+        price = snap_to_tick(price, tick)
 
     size = size_usd / price if price > 0 else 0.0
     inc = market.size_increment if market is not None else None

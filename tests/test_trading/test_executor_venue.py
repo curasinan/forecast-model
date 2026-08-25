@@ -21,7 +21,12 @@ from src.domain.models import (
 )
 from src.models.prediction import EdgeSignal
 from src.trading.executor import TradeIntent, TradingExecutor
-from src.trading.order_manager import OrderManager, OrderStatus, edge_to_order
+from src.trading.order_manager import (
+    OrderManager,
+    OrderStatus,
+    edge_to_order,
+    snap_to_tick,
+)
 from src.trading.risk_manager import RiskLimits
 from src.venues.base import VenueAdapter, VenueError, VenueReadOnlyError
 
@@ -92,6 +97,7 @@ def _ibkr_market(days: int = 120) -> Market:
     return Market(
         market_id=MarketId.ibkr(712856754), no_id=MarketId.ibkr(712856759),
         symbol="GTM", title="GTM Dec-2026 > 1.2", strike=1.2, size_increment=1.0,
+        tick_size=0.01,
         scheduled_resolution_time=datetime.now(timezone.utc) + timedelta(days=days),
     )
 
@@ -120,6 +126,25 @@ class TestEdgeToOrder:
         o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
                           market=_ibkr_market(), fee_model=fee)
         assert o.price == pytest.approx(fee.no_price_from_yes(0.5))
+
+    def test_off_tick_price_is_snapped_down_to_the_venue_tick(self):
+        # 0.345 is a legal mid but not a legal ForecastEx price: the venue
+        # CANCELS such an order (error 110, verified on paper 2026-08-25).
+        o = edge_to_order(_edge(market_prob=0.345, edge_pct=0.2), size_usd=10.0,
+                          market=_ibkr_market())
+        assert o.price == pytest.approx(0.34)
+        assert o.size == 29.0  # 10/0.34 = 29.41 -> 29 whole contracts
+        assert o.cost_usd == pytest.approx(29 * 0.34, abs=1e-2)
+
+    def test_no_leg_price_is_snapped_too(self):
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=_ibkr_market(), no_price=0.6549)
+        assert o.outcome == "NO" and o.price == pytest.approx(0.65)
+
+    def test_market_without_a_tick_size_keeps_the_raw_price(self):
+        m = Market(market_id=MarketId.polymarket("0xabc"))  # tick_size None
+        o = edge_to_order(_edge(market_prob=0.345, edge_pct=0.2), size_usd=10.0, market=m)
+        assert o.price == pytest.approx(0.345)
 
     def test_fractional_venue_keeps_fractional_size(self):
         m = Market(market_id=MarketId.polymarket("0xabc"))  # size_increment None
@@ -251,3 +276,24 @@ class TestExecutor:
         o = rep.decisions[0].order
         assert o is not None and o.outcome == "NO" and o.market_id == "ibkr:712856759"
         assert o.price == pytest.approx(0.52)
+
+
+class TestSnapToTick:
+    def test_exact_multiples_are_unchanged(self):
+        assert snap_to_tick(0.35, 0.01) == pytest.approx(0.35)
+        assert snap_to_tick(0.5, 0.01) == pytest.approx(0.5)
+
+    def test_always_rounds_down_so_a_buy_never_pays_more(self):
+        assert snap_to_tick(0.999, 0.01) == pytest.approx(0.99)
+        assert snap_to_tick(0.341, 0.01) == pytest.approx(0.34)
+
+    def test_sub_tick_price_floors_at_one_tick_not_zero(self):
+        assert snap_to_tick(0.004, 0.01) == pytest.approx(0.01)
+
+    def test_binary_float_artifacts_do_not_leak_into_the_price(self):
+        # 0.7/0.1 is 6.999... in binary floats; Decimal keeps it exact.
+        assert snap_to_tick(0.7, 0.1) == pytest.approx(0.7)
+        assert str(snap_to_tick(0.35, 0.01)) == "0.35"
+
+    def test_non_decimal_ticks_are_honoured(self):
+        assert snap_to_tick(0.126, 0.005) == pytest.approx(0.125)
