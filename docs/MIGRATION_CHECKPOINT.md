@@ -1,6 +1,6 @@
 # Migration Checkpoint -- Polymarket -> IBKR ForecastEx
 
-**Checkpoint date: 2026-08-25.** Purpose: let any future session (new model,
+**Checkpoint date: 2026-08-25 (migration COMPLETE).** Purpose: let any future session (new model,
 fresh context, resumed after a break) pick up exactly here. Read this first,
 then `docs/venue_semantics.md` (verified venue facts) and
 `docs/feature_migration_audit.md` (per-feature verdicts). The original spec
@@ -15,32 +15,36 @@ Legend: `[x]` done and verified, `[~]` partially done, `[ ]` not started,
 
 ## 0. One-paragraph state
 
-Stage 0 gate PASSED on the live account (2,964 ForecastEx contracts,
-2,900 tradable). Venue abstraction, IBKR adapter package, pacing limiter,
-fee/carry-aware sizing math, import ban, legacy retirement, gateway
-supervisor, health monitoring and a Task-Scheduler-managed quote recorder
-are built, tested and running. Stage 6 audit done; user chose the
-**climate lane first**. Climate steps 1–4 (oracles, NOAA ledger, CDS
-hindcast, GTM EMOS + strike ladder + diagnostics) are in tree. Polymarket
-**runtime** (collectors, scheduled jobs, MCP Gamma/CLOB tools, scan/trade
-CLIs) is gated off. Executor is rewired onto VenueAdapter with a paper-only IBKR order path;
-subscription manager, Gateway probe, and the final migration report are in
-tree. Every engineering item that does not need a live Gateway or the paper
-account is DONE, including the hourly gap backfill (2026-08-25). The paper
-account EXISTS (**DU0000000**, $1,000,000 simulated) and the Gateway was
-logged into it on 2026-08-23; the paper-parity compare was started but the
-Gateway went offline before it finished, so Stage 0's last box is still open.
-**Everything remaining needs a logged-in Gateway**: paper parity, the paper
-dress rehearsal, and the first paper orders. As of 2026-08-25 12:54 the
-Gateway is DOWN (796 consecutive refused connects since ~2026-08-24) and the
-recorder is correctly sitting in its retry loop; sweeps exist only for
-08-16, 08-17 and 08-23.
+**THE MIGRATION IS DONE. All 8 stages are closed and the system is trading
+on paper.** As of 2026-08-25 19:58 local, three BUY LMT GTC orders are
+resting on ForecastEx under paper account **DU0000000** (`GTM_1226_1.2_YES`
+29 @ 0.34, `_1.3_YES` 41 @ 0.24, `_1.4_YES` 71 @ 0.14; $29.64 of a $100
+bankroll). **The 365-day live-paper clock starts 2026-08-25.**
+
+What is running unattended: the quote recorder sweeps ~2,800 ForecastEx
+contracts every 20 minutes into `~/quant_data/ibkr_ticks` (Task Scheduler,
+paper session, clientId 2); a health probe checks it hourly; the NOAA label
+collector runs daily at 16:30. Stage 0 passed on both the live account
+(2,964 contracts) and paper (3,097, parity confirmed 2026-08-25). Venue
+abstraction, adapter package, pacing limiter, fee/carry-aware sizing,
+import ban, gateway supervisor, subscription manager, hourly-gap backfill
+(222,342 bars recovered) and the climate lane (oracles -> NOAA first-print
+ledger -> SEAS5/ERA5 -> trend-EMOS GTM model -> strike ladder -> paper
+orders) are all built, tested and exercised against the venue. The
+Polymarket **runtime** is gated off; its research code and data are
+preserved on purpose.
+
+From here the work is accumulation, not construction: let the paper book
+fill, verify the coupon rate off a filled position (the last open venue
+fact), and re-evaluate at 12 resolved months + 365 days
+(`climate/paper_criteria.py`). Live trading stays a manual act by the
+account holder; no commit in this repo enables it.
 
 ---
 
 ## 1. Spec stages -- status
 
-### Stage 0 -- Entitlement gate  `[x]` live / `[U]` paper parity
+### Stage 0 -- Entitlement gate  `[x]` live + `[x]` paper parity
 - [x] `scripts/verify_ibkr_entitlements.py` written and run 2026-08-16
       (reports `docs/stage0_report_2026-08-16_live.md` + `_followup.md`;
       universe snapshot `data/ibkr_universe_live.json`, committed).
@@ -49,16 +53,17 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
 - [x] Order types via whatIf: LMT DAY, LMT GTC (resting OK), MKT, conditional.
 - [x] Commission: flat $0.01/contract billed separately (NOT an embedded
       $1.01 price sum; mid YES+NO ~ 1.00).
-- [~] **Paper-account parity** -- account provisioned and verified reachable
-      2026-08-23: **DU0000000** (DU prefix = paper), AvailableFunds
-      $1,000,000.00 simulated, AccruedCash $1,291.20 (simulated interest on
-      the simulated cash -- NOT a deposit and NOT the ForecastEx coupon).
-      Probe D was resolving chains normally (ACD 72 contracts vs 70 in the
-      week-old live snapshot = ordinary listing drift) when the Gateway went
-      offline mid-run, so the universe diff was never produced. Re-run with
-      the Gateway logged into PAPER:
-      `python -u scripts/verify_ibkr_entitlements.py --port 4002 --compare data/ibkr_universe_live.json --report docs/stage0_report_2026-08-25_paper.md`
-      (~20 min; exit 0 = parity, 4 = paper missing contracts).
+- [x] **Paper-account parity VERIFIED 2026-08-25 (exit 0)** --
+      **DU0000000** (DU prefix = paper), AvailableFunds $1,000,000.00
+      simulated, AccruedCash simulated interest on that cash (NOT a deposit,
+      NOT the ForecastEx coupon). Paper sees **3,097 contracts / 3,032
+      tradable** vs 2,964 in the 9-day-old live snapshot; of the 140
+      "missing", **112 simply expired** between 08-16 and 08-25. Yes/No
+      structure, $0.01 commission and all four order types reproduce, and
+      quote coverage is identical (bid>0 on 1,872 of 2,788 in both
+      sessions). Report: `docs/stage0_report_2026-08-25_paper.md`. Re-run
+      after any entitlement change:
+      `python -u scripts/verify_ibkr_entitlements.py --port 4002 --compare data/ibkr_universe_live.json`
 - [U] Legal entity name -- read off Client Portal, record in venue_semantics.md.
 - [ ] Coupon rate -- verify from statements / a real position (paper phase).
 
@@ -103,27 +108,33 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
       (symbol, expiry, strike). Underlyings are non-tradable IND rows.
 - [x] Complement-pricing audit documented; math reparameterised via FeeModel.
 
-### Stage 4 -- Fees, carry, settlement  `[~]` (coupon verification open)
+### Stage 4 -- Fees, carry, settlement  `[x]` (coupon rate awaits a fill)
 - [x] EV and Kelly extended with fee_model / carry_model / holding_days
       (bit-identical defaults; Kelly with carry f = p*c/(c-r) - q*c/(1+r-c)).
 - [x] Live Polymarket on-chain path retired to `legacy/polymarket_onchain/`.
 - [x] Fee/carry/holding-days wired into the executor's re-pricing (net EV +
       fee/carry-aware half-Kelly feed the existing risk checks) -- ef4e31f.
-- [ ] Coupon-rate verification (CarryModel refuses stale/unverified rates).
+- [ ] Coupon-rate verification -- needs a FILLED paper position and its
+      statement. CarryModel refuses unverified rates, so carry is null until
+      then (conservative: no carry credit in EV/Kelly). Fee facts ARE
+      verified and live in `.env` (IBKR_COMMISSION_PER_CONTRACT=0.01,
+      IBKR_FEES_VERIFIED_ON=2026-08-25); the adapter refuses to price
+      without them.
 
-### Stage 5 -- Market data & pacing  `[~]`
+### Stage 5 -- Market data & pacing  `[x]`
 - [x] `src/venues/ibkr/pacing.py` HistoricalPacer (15s identical / 6 per 2s
       per contract / 60 per 10 min with BID_ASK x2; blocking, logged).
 - [x] `src/venues/ibkr/recorder.py`: snapshot sweeps (~13 min per ~2,800
       contracts, delayed data type 4, batches of 50 reqTickers) every 20 min
-      -> `%LOCALAPPDATA%\ibkr_ticks\quotes\date=YYYY-MM-DD\*.parquet`
+      -> `~/quant_data/ibkr_ticks/quotes/date=YYYY-MM-DD/*.parquet`
       (date partition + con_id column; per-conid partitioning rejected as
       thousands of tiny files). Heartbeat at `...\state\recorder_state.json`.
       RUNNING under Task Scheduler since 2026-08-17 23:55.
 - [x] `src/venues/ibkr/subscriptions.py` SubscriptionManager: line-budget
       accounting, lowest-priority/LRU eviction (raises LineBudgetExceeded,
       never silently drops), subscribe-rate token bucket. Wiring a streaming/
-      depth recorder onto it is the only remaining Stage-5 build.
+      depth recorder onto it stays OPTIONAL: the Stage-5 probe found only one
+      depth level per side, so there is no ladder to stream.
 - [x] Historical-bars/depth probe RUN 2026-08-23 (`docs/stage5_probe_findings.md`,
       venue_semantics Q4/Q7): depth = ONE level per side (top-of-book only);
       daily bars unavailable but HOURLY BID_ASK/MIDPOINT history exists back
@@ -243,7 +254,7 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
       Hindcast CRPS skill vs trend climatology is the model gate; live paper
       is 365 days + 12 resolved months (opt-in). min_edge floor = $0.01
       commission + 1 tick = 0.02; price band 0.05–0.95.
-- [~] **Step 6 -- paper loop + executor**: research-only GTM paper loop
+- [x] **Step 6 -- paper loop + executor**: research-only GTM paper loop
       (`climate/paper.py`, `scripts/run_gtm_paper.py`) scores the latest
       recorder sweep against the fitted EMOS and writes signals — **no
       orders**. First run 2026-08-23: 52 GTM contracts, 23 pass the
@@ -354,39 +365,47 @@ why. Everything now lives under `~/quant_data` (`C:\Users\<you>\quant_data`).
 
 ## 6. Git state at checkpoint
 
-Committed on `main` through `ad58918` (2026-08-23): `ad58918` Stage 5/8
-finish (subscription manager, probe, migration report), `b548283`+`ef4e31f` executor
-rewiring + paper order path, `d3dac8d` checkpoint, `1ff5f52` GTM model +
-report, `d976323` Polymarket runtime gate, preceded by `597d96f` (backfills),
-`7e8242f`, `e8ec379`, `99ace7a`, `c7d0e19`, `7f6d532`, `5cfddd7`, `aaa732a`.
-Pushed through `def51b5` (Stage-5 probe results). 2026-08-25 adds the
-recorder's paper default and the hourly-gap backfill.
+Pushed on `main` through `062998c` (2026-08-25). The 2026-08-25 run of work,
+newest first: `062998c` Polymarket task-cleanup list, `efd31b9` first-orders
+facts, `ea6bcfc` tick snapping, `7e73535`/`d07b7f6` backfill run + ledger,
+`217f959` paper book DB, `11c8270` scheduler paths, `94e10d0` data roots off
+%LOCALAPPDATA% + paper parity, `a87b88d` backfill build. Before that:
+`def51b5` Stage-5 probe, `ad58918` Stage 5/8 finish, `ef4e31f` executor
+rewiring, `1ff5f52` GTM model, `d976323` Polymarket runtime gate, `597d96f`
+backfills, `7f6d532` climate package, `99ace7a` oracles.
 Untracked and intentionally NOT part of the migration: `.agents/`,
 `bist_brief/*`, `archive (1).zip`, `logs/`.
 
 ## 7. Open user actions (priority order)
 
-1. **Clear "Read-Only API"**: Gateway -> Configure -> Settings -> API ->
-   Settings, untick, OK, restart the Gateway, log back into PAPER. Error 321
-   on 2026-08-25 proves it is currently ON, and whatIf answers happily in
-   that mode -- so nothing so far has actually tested order transmission.
-   This is the ONLY thing between here and
-   `scripts/run_ibkr_paper.py --mode approve --top 3`, which starts the
-   365-day live-paper clock. (Parity, backfill and the `--simulate` dress
-   rehearsal are all done as of 2026-08-25.)
-2. Add `collect_climate_labels.py` as a daily scheduled task (elevated PS:
-   `scripts/scheduling/register_climate_tasks.ps1`) -- still NOT registered.
-3. Unregister leftover `\Polymarket\` Task Scheduler jobs if they still exist
-   (`scripts/scheduling/unregister_polymarket_tasks.ps1`, elevated).
-4. Read the legal entity name off Client Portal for venue_semantics.md, and
-   the ForecastEx live-feed subscription PRICE (read only, do not subscribe)
-   for operating_costs.md.
-5. Optional: configure Telegram ALERT_METHOD so health alerts leave log-only
-   mode -- with the Gateway down for a day nothing alerted anyone.
-6. Remaining engineering (not a user action): coupon-rate verification once a
-   paper position exists (Stage 4/venue_semantics Q5); streaming/depth
-   recorder on SubscriptionManager (Stage 5, optional).
+1. **Re-log into the Gateway weekly.** The session drops roughly weekly and
+   the recorder then sits in its retry loop; that cost 24 hours of sweeps on
+   2026-08-24. Nothing alerts you today (see 4).
+2. Read off Client Portal, read-only: the **legal entity name** (for
+   venue_semantics Q1) and the **ForecastEx live-feed subscription PRICE**
+   (for operating_costs.md -- do NOT subscribe; delayed data is free and is
+   what the recorder uses).
+3. Once a paper order FILLS, pull the statement so the **coupon rate** can be
+   verified (venue_semantics Q5, the last open venue fact). `CarryModel`
+   refuses to price with an unverified rate, so until then carry is null.
+4. Optional: configure Telegram `ALERT_METHOD` so health alerts leave
+   log-only mode.
 
-Done and off this list: Stage 0 live gate, CDS licences + backfills, paper
-account provisioning, executor rewiring, Polymarket runtime gate, migration
-report, hourly-gap backfill build.
+Done and off this list (2026-08-25): Read-Only API cleared, climate task
+registered, retired Polymarket tasks unregistered (`backup_db` kept on
+purpose), Stage 0 live + paper gates, CDS licences + backfills, executor
+rewiring, hourly-gap backfill, first paper orders.
+
+## 8. What to do next session
+
+Nothing is half-built. The useful moves, in order:
+
+1. `python scripts/check_ibkr_recorder.py` -- is collection healthy?
+2. `python scripts/run_gtm_paper.py` then
+   `python scripts/run_ibkr_paper.py --mode approve` -- refresh signals and
+   add to the paper book. Orders rest as GTC, so re-running does not cancel
+   anything; check for duplicates against `get_open_orders()` first.
+3. `python scripts/backfill_ibkr_hourly.py --dry-run` -- if the recorder was
+   down, this shows the hole and the real run fills it.
+4. Deeper quote history (back to 2026-01-17) is available in ~8 more 30-day
+   `--start/--end` chunks at ~75 min each, if the model ever needs it.
