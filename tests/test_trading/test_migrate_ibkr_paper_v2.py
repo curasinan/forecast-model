@@ -129,6 +129,8 @@ def test_migrate_schema_only_when_no_permid_map(tmp_path):
     result = migrate(str(db))
 
     assert result["permids_backfilled"] == 0
+    assert result["permids_unmatched"] == 0
+    assert result["unmatched_entries"] == []
     conn = sqlite3.connect(db)
     rows = dict(conn.execute("SELECT order_id, perm_id FROM trade_log").fetchall())
     conn.close()
@@ -142,6 +144,11 @@ def test_migrate_backfills_dict_shaped_permid_map(tmp_path):
     result = migrate(str(db), {"a1": "111", "a2": "222", "a3": "333"})
 
     assert result["permids_backfilled"] == 3
+    # Dict shape has no "unmatched" concept -- an unknown order_id there is
+    # an error (see test_migrate_dict_map_unknown_order_id_raises), never a
+    # silent skip.
+    assert result["permids_unmatched"] == 0
+    assert result["unmatched_entries"] == []
     conn = sqlite3.connect(db)
     rows = dict(conn.execute("SELECT order_id, perm_id FROM trade_log").fetchall())
     conn.close()
@@ -191,6 +198,14 @@ def test_migrate_backfills_list_shaped_permid_map(tmp_path):
     rows = dict(conn.execute("SELECT order_id, perm_id FROM trade_log").fetchall())
     conn.close()
     assert rows == {"a1": "111", "a2": "222", "a3": "333"}
+
+    # The decoy must be loudly surfaced, not silently indistinguishable from
+    # "everything matched" -- an operator needs to tell "decoy, correctly
+    # ignored" apart from "a real row silently failed to backfill".
+    assert result["permids_unmatched"] == 1
+    assert result["unmatched_entries"] == [
+        {"order_id_venue": "V4", "perm_id": 444, "qty": 5, "lmt": 0.99}
+    ]
 
 
 def test_migrate_list_map_ambiguous_db_match_raises(tmp_path):
@@ -320,6 +335,83 @@ def test_cli_with_permid_map_file(tmp_path):
     assert proc.returncode == 0, proc.stderr
     output = json.loads(proc.stdout)
     assert output["permids_backfilled"] == 3
+
+
+def test_cli_with_list_shaped_permid_map_file(tmp_path):
+    """The float-matching (qty/lmt) path exercised through a real JSON
+    round-trip -- not in-memory float literals -- against the operator's
+    actual capture shape (order_id_venue/perm_id/con_id/local_symbol/
+    action/qty/lmt/status), run as a real subprocess against a tmp v1 DB.
+    """
+    db = tmp_path / "ibkr_paper.db"
+    _make_v1_db(db)
+    permid_map_path = tmp_path / "permid_map.json"
+    operator_capture = [
+        {"order_id_venue": "V1", "perm_id": 111, "con_id": 1, "local_symbol": "X",
+         "action": "BUY", "qty": 29, "lmt": 0.34, "status": "PreSubmitted"},
+        {"order_id_venue": "V2", "perm_id": 222, "con_id": 2, "local_symbol": "Y",
+         "action": "BUY", "qty": 41, "lmt": 0.24, "status": "PreSubmitted"},
+        {"order_id_venue": "V3", "perm_id": 333, "con_id": 1, "local_symbol": "Z",
+         "action": "BUY", "qty": 71, "lmt": 0.14, "status": "PreSubmitted"},
+    ]
+    permid_map_path.write_text(json.dumps(operator_capture))
+
+    proc = subprocess.run(
+        [
+            sys.executable, "scripts/migrations/migrate_ibkr_paper_v2.py",
+            "--db", str(db), "--permid-map", str(permid_map_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    output = json.loads(proc.stdout)
+    assert output["permids_backfilled"] == 3
+    assert output["permids_unmatched"] == 0
+    assert output["unmatched_entries"] == []
+    # No unmatched-entries warning should appear when everything matched.
+    assert "WARNING" not in proc.stderr
+
+    conn = sqlite3.connect(db)
+    rows = dict(conn.execute("SELECT order_id, perm_id FROM trade_log").fetchall())
+    conn.close()
+    assert rows == {"a1": "111", "a2": "222", "a3": "333"}
+
+
+def test_cli_prints_unmatched_entries_loudly(tmp_path):
+    """A capture entry that matches zero trade_log rows must be visible in
+    the CLI output, not silently indistinguishable from a fully-matched run.
+    """
+    db = tmp_path / "ibkr_paper.db"
+    _make_v1_db(db)
+    permid_map_path = tmp_path / "permid_map.json"
+    operator_capture = [
+        {"order_id_venue": "V1", "perm_id": 111, "con_id": 1, "local_symbol": "X",
+         "action": "BUY", "qty": 29, "lmt": 0.34, "status": "PreSubmitted"},
+        # Decoy: no trade_log row has this qty/lmt combination.
+        {"order_id_venue": "V4", "perm_id": 444, "con_id": 3, "local_symbol": "W",
+         "action": "SELL", "qty": 5, "lmt": 0.99, "status": "PreSubmitted"},
+    ]
+    permid_map_path.write_text(json.dumps(operator_capture))
+
+    proc = subprocess.run(
+        [
+            sys.executable, "scripts/migrations/migrate_ibkr_paper_v2.py",
+            "--db", str(db), "--permid-map", str(permid_map_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    output = json.loads(proc.stdout)
+    assert output["permids_backfilled"] == 1
+    assert output["permids_unmatched"] == 1
+    assert output["unmatched_entries"] == [
+        {"order_id_venue": "V4", "perm_id": 444, "qty": 5, "lmt": 0.99}
+    ]
+    assert "WARNING" in proc.stderr
+    assert "V4" in proc.stderr
+    assert "444" in proc.stderr
 
 
 def test_cli_reports_error_and_nonzero_exit_on_unknown_order_id(tmp_path):

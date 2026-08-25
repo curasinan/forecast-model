@@ -21,7 +21,12 @@ into a JSON file. This script (idempotent, safe to re-run):
      ``qty == trade_log.size AND lmt == trade_log.price``. A match that
      is not unique (multiple trade_log rows with the same size+price, or
      conflicting perm_ids resolving to the same row) raises `ValueError`
-     rather than guessing.
+     rather than guessing. A capture entry that matches zero rows is not
+     an error (the operator's console capture may legitimately cover
+     orders outside this backfill's target rows) but is never silently
+     dropped either: it is counted in the returned ``permids_unmatched``
+     and detailed in ``unmatched_entries`` so an operator can tell "decoy,
+     correctly ignored" apart from "a real row silently failed to match".
 
 `positions` is never touched -- the v2 schema needs no changes there.
 
@@ -70,12 +75,21 @@ from src.trading.position_tracker import PositionTracker
 TRADE_LOG_V2_COLUMNS = {"perm_id": "TEXT", "last_synced_utc": "TEXT"}
 
 
-def _resolve_assignments(conn: sqlite3.Connection, permid_map) -> dict[str, str]:
+def _resolve_assignments(
+    conn: sqlite3.Connection, permid_map
+) -> tuple[dict[str, str], list[dict]]:
     """Turn a permid_map (either accepted shape) into {order_id: perm_id_str},
     validating every entry against the current trade_log contents.
+
+    Returns (assignments, unmatched_entries). `unmatched_entries` is always
+    empty for the dict shape (an unmatched order_id there is an error, not a
+    silent skip) and for None; for the list shape it holds one
+    {order_id_venue, perm_id, qty, lmt} dict per capture entry that could not
+    be resolved to exactly one trade_log row -- surfaced, never dropped
+    silently.
     """
     if permid_map is None:
-        return {}
+        return {}, []
 
     if isinstance(permid_map, dict):
         assignments: dict[str, str] = {}
@@ -86,16 +100,27 @@ def _resolve_assignments(conn: sqlite3.Connection, permid_map) -> dict[str, str]
             if row is None:
                 raise ValueError(f"Unknown order_id in permid map: {order_id!r}")
             assignments[order_id] = str(perm_id)
-        return assignments
+        return assignments, []
 
     if isinstance(permid_map, list):
         assignments = {}
+        unmatched: list[dict] = []
         for item in permid_map:
             qty = item.get("qty")
             lmt = item.get("lmt")
             perm_id = item.get("perm_id")
+
+            def _unmatched_entry() -> dict:
+                return {
+                    "order_id_venue": item.get("order_id_venue"),
+                    "perm_id": perm_id,
+                    "qty": qty,
+                    "lmt": lmt,
+                }
+
             if qty is None or lmt is None or perm_id is None:
-                continue  # not enough info to match a row -- skip, never guess
+                unmatched.append(_unmatched_entry())  # not enough info to match -- surface, never guess
+                continue
 
             rows = conn.execute(
                 "SELECT order_id FROM trade_log WHERE size = ? AND price = ?",
@@ -103,7 +128,11 @@ def _resolve_assignments(conn: sqlite3.Connection, permid_map) -> dict[str, str]
             ).fetchall()
 
             if not rows:
-                continue  # no matching legacy row -- fine, capture may cover more than the target rows
+                # No matching legacy row. Not an error -- the capture may cover
+                # orders outside this backfill's target rows -- but it must be
+                # visible, not a silent no-op indistinguishable from a decoy.
+                unmatched.append(_unmatched_entry())
+                continue
 
             if len(rows) > 1:
                 raise ValueError(
@@ -120,7 +149,7 @@ def _resolve_assignments(conn: sqlite3.Connection, permid_map) -> dict[str, str]
                     f"{assignments[order_id]!r} and {perm_id_str!r}"
                 )
             assignments[order_id] = perm_id_str
-        return assignments
+        return assignments, unmatched
 
     raise TypeError(f"permid_map must be a dict, list, or None; got {type(permid_map).__name__}")
 
@@ -146,7 +175,16 @@ def migrate(db_path: str, permid_map: dict | list | None = None) -> dict:
     """Migrate `db_path` to the v2 schema and optionally backfill permIds.
 
     Returns
-        {"columns_added": [...], "fill_events_created": bool, "permids_backfilled": int}
+        {
+            "columns_added": [...],
+            "fill_events_created": bool,
+            "permids_backfilled": int,
+            "permids_unmatched": int,       # list-shape capture entries that
+                                             # matched no trade_log row; 0 for
+                                             # dict-shape/None maps
+            "unmatched_entries": [...],     # one {order_id_venue, perm_id,
+                                             # qty, lmt} dict per unmatched entry
+        }
 
     Idempotent: re-running with the same (or no) permid_map changes nothing.
     All writes happen in a single transaction (see module docstring).
@@ -168,7 +206,7 @@ def migrate(db_path: str, permid_map: dict | list | None = None) -> dict:
             conn.execute(FILL_EVENTS_DDL)
             fill_events_created = not table_existed
 
-            assignments = _resolve_assignments(conn, permid_map)
+            assignments, unmatched_entries = _resolve_assignments(conn, permid_map)
             permids_backfilled = _apply_assignments(conn, assignments)
     finally:
         conn.close()
@@ -177,6 +215,8 @@ def migrate(db_path: str, permid_map: dict | list | None = None) -> dict:
         "columns_added": columns_added,
         "fill_events_created": fill_events_created,
         "permids_backfilled": permids_backfilled,
+        "permids_unmatched": len(unmatched_entries),
+        "unmatched_entries": unmatched_entries,
     }
 
 
@@ -206,6 +246,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(json.dumps(result, indent=2))
+
+    if result["permids_unmatched"]:
+        print(
+            f"\nWARNING: {result['permids_unmatched']} permid-map entry(ies) did not "
+            "match any trade_log row (never guessed, never applied):",
+            file=sys.stderr,
+        )
+        for entry in result["unmatched_entries"]:
+            print(
+                f"  order_id_venue={entry['order_id_venue']!r} "
+                f"perm_id={entry['perm_id']!r} qty={entry['qty']!r} lmt={entry['lmt']!r}",
+                file=sys.stderr,
+            )
+
     return 0
 
 
