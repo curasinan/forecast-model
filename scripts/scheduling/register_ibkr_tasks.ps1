@@ -108,7 +108,7 @@ Register-IbkrTask `
     -Action $recorderAction `
     -Triggers $recorderTriggers `
     -Settings $recorderSettings `
-    -Description "ForecastEx quote sweeps (clientId 2, read-only) -> %LOCALAPPDATA%\ibkr_ticks. Keep-alive: 5-min tick + IgnoreNew."
+    -Description "ForecastEx quote sweeps (clientId 2, read-only) -> ~/quant_data/ibkr_ticks. Keep-alive: 5-min tick + IgnoreNew."
 
 # --- IBKR Recorder Health: hourly freshness check ---------------------------
 # Seeded at the next top of the hour. The check script owns its own alerting

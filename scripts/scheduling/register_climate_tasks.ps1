@@ -8,7 +8,8 @@
 # scripts\collect_climate_labels.py once a day, which fetches the NOAA
 # settling series (GTM/GT temperature anomalies, Mauna Loa CO2) and appends
 # any new first-print periods to the label ledger under
-# %LOCALAPPDATA%\climate_data. NOAA releases temperature in the first half of
+# ~/quant_data/climate_data (NOT AppData -- see MIGRATION_CHECKPOINT section 3).
+# NOAA releases temperature in the first half of
 # the month at 10:00 CT and CO2 on the 5th at 8:00 CT, so a daily run captures
 # first prints within ~24h. The collector exits 0 when nothing is new
 # (cron-friendly) and exits 1 only if a fetch fails.
