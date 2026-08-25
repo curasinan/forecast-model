@@ -135,8 +135,14 @@ def _check_mode(ib, settings: IBKRSettings) -> None:
     log.warning("ibkr session: account=%s mode=%s role=research read_only=True", account, mode)
 
 
-def write_summary(payload: dict) -> Path:
-    path = REPO_ROOT / "logs" / "ibkr_backfill_runs.jsonl"
+def write_summary(payload: dict, data_root: Path) -> Path:
+    """Append the run record NEXT TO THE DATA, not into the repo.
+
+    It is provenance for the bars (what was requested, what came back, what
+    had no history), so it belongs with them rather than in logs/, which is
+    untracked scratch.
+    """
+    path = data_root / "backfill_runs.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload) + "\n")
@@ -226,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         "dates_written": result.dates_written,
         "files": [str(p) for p in result.files],
     }
-    print(f"Summary appended to {write_summary(summary)}")
+    print(f"Summary appended to {write_summary(summary, data_root)}")
     return 0
 
 
