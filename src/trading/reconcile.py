@@ -25,6 +25,11 @@ across sessions; permId is the only stable identity. A book row with no
 permId on file is SKIPPED with a note (surfaced, never guessed) -- fix it
 with `scripts/migrations/migrate_ibkr_paper_v2.py`, not by inference here.
 
+A run happens in two phases inside ONE transaction: every conclusion is
+planned first (reads only), the safety guards below judge the plan as a
+whole, and only then is anything written. That ordering is what makes a
+mass-cancellation abort possible at all.
+
 Ground rules this module obeys:
 
 - It never places, cancels, or modifies anything at the venue. It only
@@ -36,6 +41,26 @@ Ground rules this module obeys:
   reported as a note for an operator to resolve.
 - Every write in a run happens in ONE transaction on ONE connection: a
   failure partway through leaves the book exactly as it was.
+
+Position attribution (controller ruling R7 + the C-1 fix): a venue
+position is the CUMULATIVE holding in one leg contract and says nothing
+about WHICH order produced it. An order is only concluded FILLED against
+the quantity still AVAILABLE in that contract -- the venue quantity minus
+what open `positions` rows already attribute to other orders, minus what
+earlier rows in this same run claimed. Without that subtraction a position
+held for weeks would book every later order on the same contract as a
+full fill, inventing fills that never happened.
+
+Mass-cancellation guard (controller ruling R8): a degraded Gateway session
+answers `reqAllOpenOrders()` with an empty list, which is indistinguishable
+from "every order was cancelled". Concluding on that would wipe the book in
+one run. So the whole run ABORTS -- zero writes, `report.aborted = True`,
+and a loud note -- when either (a) any cancellation is planned while the
+venue's open-order list is EMPTY, or (b) more than half of at least two
+candidate rows would be cancelled. FILLED conclusions are unaffected: an
+all-filled book legitimately shows an empty open-order list and must not
+deadlock. `allow_mass_cancel=True` disables both guards for an operator
+who has confirmed the cancellations at the venue.
 
 Timestamp/commission semantics (operator-approved 2026-08-25; the full
 note and the single source of truth for the `fill_events` DDL live in
@@ -75,6 +100,10 @@ QTY_TOL = 1e-9
 # Book rows that are still "working" and therefore worth reconciling.
 CANDIDATE_STATUSES = ("placed", "partially_filled")
 
+# Fraction of candidate rows whose cancellation in one run is treated as a
+# venue-side failure rather than reality (ruling R8).
+MASS_CANCEL_FRACTION = 0.5
+
 _REQUIRED_TRADE_LOG_COLUMNS = {
     "perm_id", "filled_size", "last_synced_utc", "market_id", "venue",
 }
@@ -90,6 +119,11 @@ class ReconcileReport:
     MINUS any rows that had to be skipped (no permId on file, or an
     unparseable `market_id`); each such row is named in `notes`, so the
     difference is never silent.
+
+    `aborted` is True when the mass-cancellation guard (ruling R8) stopped
+    the run: NOTHING was written, every outcome bucket is zero, and `notes`
+    carries the reason and how to override it. `examined` and
+    `unmatched_venue_orders` still describe what was observed.
     """
 
     examined: int = 0
@@ -99,9 +133,29 @@ class ReconcileReport:
     unchanged: int = 0
     unmatched_venue_orders: int = 0
     notes: list[str] = field(default_factory=list)
+    aborted: bool = False
 
 
-def reconcile_paper_book(db_path: str, venue, now: datetime | None = None) -> ReconcileReport:
+@dataclass
+class _Conclusion:
+    """One planned outcome for one book row. Nothing here has been written."""
+
+    row: sqlite3.Row
+    perm_id: str
+    kind: str  # 'unchanged' | 'partially_filled' | 'filled' | 'cancelled' | 'skipped'
+    status: str | None = None                  # new trade_log status ('unchanged' -> None)
+    filled_size: float | None = None           # new trade_log.filled_size, if it moves
+    event: tuple | None = None                 # (cum_filled, fill_delta, avg_price, source)
+    position: tuple | None = None              # (entry_price, size) for a derived position
+    notes: list[str] = field(default_factory=list)
+
+
+class _AbortRun(Exception):
+    """Internal: unwind the transaction so an aborted run writes nothing."""
+
+
+def reconcile_paper_book(db_path: str, venue, now: datetime | None = None, *,
+                         allow_mass_cancel: bool = False) -> ReconcileReport:
     """Reconcile the paper book at `db_path` against `venue`'s state.
 
     Args:
@@ -109,10 +163,15 @@ def reconcile_paper_book(db_path: str, venue, now: datetime | None = None) -> Re
         venue: any object with `get_all_open_orders()` and `get_positions()`.
         now: detection timestamp; defaults to UTC now. Used for `ts_utc`,
             `detected_ts_utc`, `last_synced_utc` and derived `opened_at`.
+        allow_mass_cancel: disable the R8 mass-cancellation guards. Only for
+            an operator who has confirmed the cancellations at the venue --
+            the default refuses to act on a venue answer that looks like a
+            dropped session.
 
     Returns:
-        A `ReconcileReport`. Raises whatever the venue or SQLite raises --
-        loudly, with the whole transaction rolled back.
+        A `ReconcileReport`; `aborted=True` means a guard fired and nothing
+        was written. Raises whatever the venue or SQLite raises -- loudly,
+        with the whole transaction rolled back.
     """
     stamp = now or datetime.now(timezone.utc)
     ts = stamp.isoformat()
@@ -124,20 +183,25 @@ def reconcile_paper_book(db_path: str, venue, now: datetime | None = None) -> Re
         # autocommit=False (3.12+) keeps the CREATE TABLE below inside the same
         # transaction as the DML -- the pattern proven by migrate_ibkr_paper_v2.
         conn.autocommit = False
-        with conn:
-            _require_schema(conn)
-            # Controller ruling R2: a book that has not been through the Task-1.4
-            # migration still reconciles. The migration remains the official path.
-            conn.execute(FILL_EVENTS_DDL)
-            _reconcile(conn, venue, ts, stamp, report)
+        try:
+            with conn:
+                _require_schema(conn)
+                # Controller ruling R2: a book that has not been through the Task-1.4
+                # migration still reconciles. The migration remains the official path.
+                conn.execute(FILL_EVENTS_DDL)
+                _reconcile(conn, venue, ts, stamp, report, allow_mass_cancel)
+        except _AbortRun:
+            # The `with` block rolled the transaction back on the way out, so
+            # not even the CREATE TABLE survives. The report says why.
+            logger.error("reconcile ABORTED without writing: %s", report.notes[-1])
     finally:
         conn.close()
 
     logger.info(
-        "reconcile: examined=%d filled=%d partial=%d cancelled=%d unchanged=%d "
+        "reconcile: aborted=%s examined=%d filled=%d partial=%d cancelled=%d unchanged=%d "
         "unmatched_venue_orders=%d notes=%d",
-        report.examined, report.filled, report.partially_filled, report.cancelled,
-        report.unchanged, report.unmatched_venue_orders, len(report.notes),
+        report.aborted, report.examined, report.filled, report.partially_filled,
+        report.cancelled, report.unchanged, report.unmatched_venue_orders, len(report.notes),
     )
     return report
 
@@ -210,7 +274,7 @@ def _index_positions(positions) -> tuple[dict[int, object], list[str]]:
 
 
 def _reconcile(conn: sqlite3.Connection, venue, ts: str, stamp: datetime,
-               report: ReconcileReport) -> None:
+               report: ReconcileReport, allow_mass_cancel: bool) -> None:
     placeholders = ",".join("?" * len(CANDIDATE_STATUSES))
     rows = conn.execute(
         "SELECT rowid AS rid, order_id, question_id, outcome, price, size, cost_usd, "
@@ -218,13 +282,14 @@ def _reconcile(conn: sqlite3.Connection, venue, ts: str, stamp: datetime,
         f"WHERE status IN ({placeholders}) ORDER BY rowid",
         CANDIDATE_STATUSES,
     ).fetchall()
+    report.examined = len(rows)
 
-    open_by_perm, orders_without_perm, notes = _index_open_orders(venue.get_all_open_orders())
+    venue_orders = venue.get_all_open_orders()
+    open_by_perm, orders_without_perm, notes = _index_open_orders(venue_orders)
     report.notes.extend(notes)
 
     # Positions are fetched lazily: a run where every order is still resting
-    # never needs them, and a failure here must be able to roll back writes
-    # already made in this transaction.
+    # never needs them.
     position_index: dict[int, object] | None = None
 
     def positions() -> dict[int, object]:
@@ -234,128 +299,230 @@ def _reconcile(conn: sqlite3.Connection, venue, ts: str, stamp: datetime,
             report.notes.extend(pos_notes)
         return position_index
 
-    # How many contracts this run attributed to each conId's venue position.
+    # How many contracts this run has already attributed to each conId's
+    # venue position (see the module docstring on attribution).
     claimed: dict[int, float] = {}
 
-    for row in rows:
-        report.examined += 1
-        _reconcile_row(conn, row, open_by_perm, positions, claimed, ts, stamp, report)
+    # -- phase 1: plan (reads only) --------------------------------------
+    plans = [_plan_row(conn, row, open_by_perm, positions, claimed) for row in rows]
 
-    _note_over_attribution(position_index, claimed, report)
     _note_unmatched_venue_orders(conn, open_by_perm, orders_without_perm, report)
 
+    if not allow_mass_cancel:
+        reason = _mass_cancel_reason(plans, len(rows), len(venue_orders))
+        if reason is not None:
+            report.aborted = True
+            report.notes.append(f"ABORTED, nothing written: {reason}")
+            raise _AbortRun
 
-def _reconcile_row(conn, row, open_by_perm, positions, claimed, ts, stamp, report) -> None:
+    # -- phase 2: write --------------------------------------------------
+    _execute(conn, plans, ts, stamp, report)
+    _note_over_attribution(position_index, claimed, report)
+
+
+def _mass_cancel_reason(plans: list[_Conclusion], candidates: int,
+                        venue_order_count: int) -> str | None:
+    """Ruling R8: is this plan more likely a venue failure than reality?"""
+    cancels = sum(1 for plan in plans if plan.kind == "cancelled")
+    if cancels == 0:
+        return None
+    if venue_order_count == 0:
+        return (
+            f"the venue returned an EMPTY open-order list and {cancels} of {candidates} "
+            "candidate row(s) would be cancelled. A dropped or degraded Gateway session "
+            "looks exactly like this. Re-run once the session is healthy, or pass "
+            "allow_mass_cancel=True after confirming the cancellations at the venue"
+        )
+    if candidates >= 2 and cancels / candidates > MASS_CANCEL_FRACTION:
+        return (
+            f"{cancels} of {candidates} candidate rows would be cancelled in one run "
+            f"(over {MASS_CANCEL_FRACTION:.0%}), which is more likely a partial venue "
+            "answer than a real mass cancellation. Re-run, or pass "
+            "allow_mass_cancel=True after confirming the cancellations at the venue"
+        )
+    return None
+
+
+def _execute(conn: sqlite3.Connection, plans: list[_Conclusion], ts: str, stamp: datetime,
+             report: ReconcileReport) -> None:
+    """Apply the planned conclusions. Every write in the run happens here,
+    inside the caller's single transaction.
+    """
+    for plan in plans:
+        report.notes.extend(plan.notes)
+        if plan.kind == "skipped":
+            continue
+
+        order_id = plan.row["order_id"]
+        if plan.event is not None:
+            cum_filled, fill_delta, avg_price, source = plan.event
+            _append_fill_event(
+                conn, perm_id=plan.perm_id, order_id=order_id, ts=ts,
+                cum_filled=cum_filled, fill_delta=fill_delta, avg_price=avg_price,
+                source=source,
+            )
+
+        if plan.status is None:
+            conn.execute(
+                "UPDATE trade_log SET last_synced_utc = ? WHERE order_id = ?",
+                (ts, order_id),
+            )
+        elif plan.filled_size is None:
+            conn.execute(
+                "UPDATE trade_log SET status = ?, last_synced_utc = ? WHERE order_id = ?",
+                (plan.status, ts, order_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE trade_log SET status = ?, filled_size = ?, last_synced_utc = ? "
+                "WHERE order_id = ?",
+                (plan.status, plan.filled_size, ts, order_id),
+            )
+
+        if plan.position is not None:
+            entry_price, size = plan.position
+            _open_derived_position(conn, plan.row, entry_price=entry_price, size=size,
+                                   stamp=stamp)
+
+        setattr(report, plan.kind, getattr(report, plan.kind) + 1)
+
+
+# ---------------------------------------------------------------- planning
+def _plan_row(conn, row, open_by_perm, positions, claimed) -> _Conclusion:
     order_id = row["order_id"]
     perm_id = str(row["perm_id"] or "")
     if not perm_id:
-        report.notes.append(
+        return _Conclusion(row=row, perm_id="", kind="skipped", notes=[
             f"trade_log {order_id}: no perm_id on file -- skipped, never guessed "
             "(backfill with scripts/migrations/migrate_ibkr_paper_v2.py)"
-        )
-        return
+        ])
 
     size = float(row["size"] or 0.0)
     recorded = float(row["filled_size"] or 0.0)
     venue_order = open_by_perm.get(perm_id)
 
     if venue_order is not None:
-        _reconcile_resting(conn, row, venue_order, perm_id, size, recorded, ts, report)
-        return
+        return _plan_resting(row, venue_order, perm_id, size, recorded)
 
-    con_id = _con_id_of(row, report)
-    if con_id is None:
-        return
+    try:
+        con_id = MarketId.parse(row["market_id"] or "").con_id
+    except (ValueError, TypeError) as exc:
+        return _Conclusion(row=row, perm_id=perm_id, kind="skipped", notes=[
+            f"trade_log {order_id}: cannot read a conId from market_id "
+            f"{row['market_id']!r} ({exc}) -- skipped, never guessed"
+        ])
 
     position = positions().get(con_id)
     quantity = float(position.quantity) if position is not None else 0.0
+    available = _available_quantity(conn, row, con_id, position, claimed)
 
     # A venue position is the CUMULATIVE holding in that leg contract, so the
-    # covering test is against the full order size (not size minus recorded
-    # fills, which would double-count the part already reflected in it).
-    if position is not None and quantity >= size - QTY_TOL:
-        _conclude_filled(conn, row, perm_id, size, recorded, position, ts, stamp, report)
+    # covering test is against the full order size (ruling R7, never
+    # size-minus-recorded) -- but only against the part of that position not
+    # already attributed to another order (the C-1 fix).
+    if position is not None and available >= size - QTY_TOL:
         claimed[con_id] = claimed.get(con_id, 0.0) + size
-        return
+        return _plan_filled(row, perm_id, size, recorded, position, quantity, con_id)
 
-    _conclude_cancelled(conn, row, perm_id, size, recorded, position, quantity,
-                        ts, stamp, report)
+    plan = _plan_cancelled(conn, row, perm_id, size, recorded, position, quantity,
+                           available, con_id)
     if recorded > QTY_TOL:
         claimed[con_id] = claimed.get(con_id, 0.0) + recorded
+    return plan
 
 
-def _reconcile_resting(conn, row, venue_order, perm_id, size, recorded, ts, report) -> None:
+def _available_quantity(conn, row, con_id: int, position, claimed: dict[int, float]) -> float:
+    """Contracts in this leg's venue position not already spoken for.
+
+    Subtracts (a) every OPEN `positions` row for the same market that belongs
+    to a different order -- fills booked by earlier runs, which the venue
+    position still includes -- and (b) what earlier rows in this run claimed.
+    Without (a), a position held to resolution would book every later order on
+    the same contract as a full fill (C-1).
+    """
+    if position is None:
+        return 0.0
+    booked = conn.execute(
+        "SELECT COALESCE(SUM(size), 0) FROM positions "
+        "WHERE market_id = ? AND closed_at IS NULL "
+        "AND (order_id IS NULL OR order_id != ?)",
+        (row["market_id"], row["order_id"]),
+    ).fetchone()[0]
+    return float(position.quantity) - float(booked or 0.0) - claimed.get(con_id, 0.0)
+
+
+def _plan_resting(row, venue_order, perm_id, size, recorded) -> _Conclusion:
     """The order is still resting at the venue: only a fill delta matters."""
     order_id = row["order_id"]
     venue_filled = float(venue_order.filled_quantity or 0.0)
 
     if venue_filled > recorded + QTY_TOL:
-        # avg_price caveat: IB reports avgCost, which for a multiplier-1
-        # ForecastEx OPT contract is ~= the per-contract price. [OPERATOR]
-        # verifies this against the first real fill statement (Task 1.9).
-        _append_fill_event(
-            conn, perm_id=perm_id, order_id=order_id, ts=ts, cum_filled=venue_filled,
-            fill_delta=venue_filled - recorded, avg_price=venue_order.avg_fill_price,
-            source="sync_open_order",
-        )
-        conn.execute(
-            "UPDATE trade_log SET status = 'partially_filled', filled_size = ?, "
-            "last_synced_utc = ? WHERE order_id = ?",
-            (venue_filled, ts, order_id),
-        )
-        report.partially_filled += 1
+        notes = []
         if venue_filled >= size - QTY_TOL:
-            report.notes.append(
+            notes.append(
                 f"trade_log {order_id} (permId {perm_id}): venue reports {venue_filled:g} "
                 f"of {size:g} filled but the order is still in the open list -- left "
                 "'partially_filled'; the next sync closes it out"
             )
-        return
+        # avg_price caveat: IB reports avgCost, which for a multiplier-1
+        # ForecastEx OPT contract is ~= the per-contract price. [OPERATOR]
+        # verifies this against the first real fill statement (Task 1.9).
+        return _Conclusion(
+            row=row, perm_id=perm_id, kind="partially_filled",
+            status="partially_filled", filled_size=venue_filled,
+            event=(venue_filled, venue_filled - recorded, venue_order.avg_fill_price,
+                   "sync_open_order"),
+            notes=notes,
+        )
 
-    conn.execute(
-        "UPDATE trade_log SET last_synced_utc = ? WHERE order_id = ?", (ts, row["order_id"])
-    )
-    report.unchanged += 1
+    notes = []
     if venue_filled < recorded - QTY_TOL:
-        report.notes.append(
+        notes.append(
             f"trade_log {order_id} (permId {perm_id}): venue reports {venue_filled:g} "
             f"filled but {recorded:g} are already recorded -- recorded fills kept, "
             "verify at the venue"
         )
+    return _Conclusion(row=row, perm_id=perm_id, kind="unchanged", notes=notes)
 
 
-def _conclude_filled(conn, row, perm_id, size, recorded, position, ts, stamp, report) -> None:
-    """Gone from the open list and the venue holds the whole size: FILLED."""
-    delta = size - recorded
-    if delta > QTY_TOL:
-        _append_fill_event(
-            conn, perm_id=perm_id, order_id=row["order_id"], ts=ts, cum_filled=size,
-            fill_delta=delta, avg_price=position.avg_price, source="sync_position_diff",
+def _plan_filled(row, perm_id, size, recorded, position, quantity, con_id) -> _Conclusion:
+    """Gone from the open list, and the contract still has room for this
+    order's whole size: FILLED.
+    """
+    entry_price = float(position.avg_price)
+    notes = []
+    if quantity > size + QTY_TOL:
+        # I-2: per-order attribution is not knowable from get_positions(), so
+        # say plainly that the price is a blend rather than pretending.
+        notes.append(
+            f"trade_log {row['order_id']} (permId {perm_id}): venue position in conId "
+            f"{con_id} holds {quantity:g} contracts against this order's {size:g} -- "
+            f"entry price {entry_price:g} is the venue's BLENDED average over every fill "
+            "in that contract, not this order's own fill price; verify against the "
+            "statement before using it for per-order P&L"
         )
-    conn.execute(
-        "UPDATE trade_log SET status = 'filled', filled_size = ?, last_synced_utc = ? "
-        "WHERE order_id = ?",
-        (size, ts, row["order_id"]),
+    delta = size - recorded
+    return _Conclusion(
+        row=row, perm_id=perm_id, kind="filled", status="filled", filled_size=size,
+        event=((size, delta, position.avg_price, "sync_position_diff")
+               if delta > QTY_TOL else None),
+        position=(entry_price, size),
+        notes=notes,
     )
-    _open_derived_position(conn, row, entry_price=float(position.avg_price), size=size,
-                           stamp=stamp)
-    report.filled += 1
 
 
-def _conclude_cancelled(conn, row, perm_id, size, recorded, position, quantity,
-                        ts, stamp, report) -> None:
-    """Gone from the open list with no covering position: CANCELLED.
+def _plan_cancelled(conn, row, perm_id, size, recorded, position, quantity, available,
+                    con_id) -> _Conclusion:
+    """Gone from the open list with nothing left to cover it: CANCELLED.
 
     Recorded partial fills are never erased -- they are venue-confirmed
     history. The partial position they represent is opened at the partial
     size, and any disagreement with the venue's position is reported.
     """
     order_id = row["order_id"]
-    conn.execute(
-        "UPDATE trade_log SET status = 'cancelled', last_synced_utc = ? WHERE order_id = ?",
-        (ts, order_id),
-    )
-    report.cancelled += 1
+    notes: list[str] = []
+    plan = _Conclusion(row=row, perm_id=perm_id, kind="cancelled", status="cancelled",
+                       notes=notes)
 
     if recorded > QTY_TOL:
         if position is not None:
@@ -364,39 +531,37 @@ def _conclude_cancelled(conn, row, perm_id, size, recorded, position, quantity,
             recorded_price = _last_recorded_fill_price(conn, perm_id)
             entry_price = float(recorded_price if recorded_price is not None else row["price"])
             if recorded_price is None:
-                report.notes.append(
+                notes.append(
                     f"trade_log {order_id} (permId {perm_id}): {recorded:g} contracts "
                     "recorded filled but no venue position and no priced fill_event -- "
                     "partial position opened at the order's limit price, verify it"
                 )
-        _open_derived_position(conn, row, entry_price=entry_price, size=recorded, stamp=stamp)
+        plan.position = (entry_price, recorded)
 
-    if position is not None and abs(quantity - recorded) > QTY_TOL:
-        report.notes.append(
+    if position is not None and available < size - QTY_TOL and quantity >= size - QTY_TOL:
+        # The contract holds enough, but other orders already account for it.
+        notes.append(
+            f"trade_log {order_id} (permId {perm_id}): conId {con_id} holds {quantity:g} "
+            f"contracts, but only {available:g} are unattributed (other book orders hold "
+            f"the rest), so this order's {size:g} are NOT covered -- cancelled rather "
+            "than crediting someone else's position; verify against the statement"
+        )
+    elif position is not None and abs(quantity - recorded) > QTY_TOL:
+        notes.append(
             f"trade_log {order_id} (permId {perm_id}): venue position holds {quantity:g} "
             f"contracts in {row['market_id']} but {recorded:g} are recorded filled for "
             f"this order (ordered {size:g}) -- recorded fills kept, resolve manually"
         )
     elif position is None and recorded > QTY_TOL:
-        report.notes.append(
+        notes.append(
             f"trade_log {order_id} (permId {perm_id}): {recorded:g} contracts recorded "
             f"filled but the venue reports no position in {row['market_id']} -- recorded "
             "fills kept, resolve manually"
         )
+    return plan
 
 
-def _con_id_of(row, report) -> int | None:
-    market_id = row["market_id"] or ""
-    try:
-        return MarketId.parse(market_id).con_id
-    except (ValueError, TypeError) as exc:
-        report.notes.append(
-            f"trade_log {row['order_id']}: cannot read a conId from market_id "
-            f"{market_id!r} ({exc}) -- skipped, never guessed"
-        )
-        return None
-
-
+# ---------------------------------------------------------------- writes
 def _append_fill_event(conn, *, perm_id: str, order_id: str, ts: str, cum_filled: float,
                        fill_delta: float, avg_price, source: str) -> None:
     """One observed cumulative-fill level. `INSERT OR IGNORE` + the
@@ -482,11 +647,13 @@ def _free_opened_at(conn, question_id: str, outcome: str, stamp: datetime) -> st
     )
 
 
+# ---------------------------------------------------------------- reporting
 def _note_over_attribution(position_index, claimed: dict[int, float],
                            report: ReconcileReport) -> None:
-    """Two book rows on the same leg can each be covered by one venue
-    position. Attribution per order is not knowable from position data --
-    say so rather than silently double-counting.
+    """Belt and braces on attribution: FILLED conclusions are capped by
+    `_available_quantity`, but partial positions kept on the cancelled path
+    come from recorded fills and are never trimmed. If the total this run
+    attributed still exceeds the venue's holding, say so.
     """
     if not position_index:
         return
