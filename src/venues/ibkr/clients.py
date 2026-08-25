@@ -23,7 +23,12 @@ from src.venues.ibkr.settings import IBKRSettings
 
 logger = logging.getLogger(__name__)
 
-CLIENT_IDS: dict[str, int] = {"live_trading": 1, "data_collector": 2, "research": 3}
+CLIENT_IDS: dict[str, int] = {
+    "live_trading": 1,
+    "data_collector": 2,
+    "research": 3,
+    "paper_sync": 4,
+}
 
 _IN_USE_MARKERS = ("326", "already in use", "client id")
 
@@ -45,16 +50,32 @@ def _configure_win32_event_loop() -> None:
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-def connect_ib(role: str, settings: IBKRSettings, timeout: float = 10.0, readonly: bool = True):
+def connect_ib(
+    role: str,
+    settings: IBKRSettings,
+    timeout: float = 10.0,
+    readonly: bool | None = None,
+):
     """Connect to the Gateway as ``role`` and return a connected ib_async IB.
 
     Raises ValueError for an unknown role and ClientIdInUseError when the
     role's id is already connected (never auto-increments -- see module
-    docstring). ``readonly`` defaults to True: no code path in this build
-    transmits orders.
+    docstring). ``readonly`` defaults to None, which resolves to
+    ``role != "live_trading"``: every role but ``live_trading`` connects
+    readonly.
+
+    ``readonly`` does NOT gate order transmission -- three real paper orders
+    went out over a ``readonly=True`` connection on 2026-08-25. The actual
+    transmission gates are the adapter's ``read_only`` flag and the
+    paper-account check in ``_place_order``. What ``readonly=False`` buys
+    ``live_trading`` is the startup open/completed-orders fetch, so the
+    session can see and bind its own resting orders instead of flying blind
+    to GTC orders it placed before restarting.
     """
     if role not in CLIENT_IDS:
         raise ValueError(f"unknown role {role!r}; valid roles: {sorted(CLIENT_IDS)}")
+    if readonly is None:
+        readonly = role != "live_trading"
     _configure_win32_event_loop()
     from ib_async import IB  # lazy: the loop policy must be set first
 
