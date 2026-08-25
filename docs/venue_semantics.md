@@ -51,7 +51,9 @@ position limits. (Historical bars and depth answered 2026-08-23.)
   GTC in the list implies resting limit orders are permitted.
 - whatIf confirmation: **ACCEPTED for LMT DAY, LMT GTC, MKT DAY, and
   LMT+PriceCondition** (explicit tif required — see discovery mechanics).
-  **Resting limit orders (GTC) are permitted.**
+  **Resting limit orders (GTC) are permitted** -- confirmed with REAL orders
+  on the paper account 2026-08-25: three BUY LMT GTC orders accepted and
+  resting (status Submitted).
 - Evidence: `orderTypes` field of conId 712856754 (Stage 0 section 5);
   whatIf acceptances in `docs/stage0_report_2026-08-16_live_followup.md`.
 - Date verified: 2026-08-16
@@ -111,8 +113,10 @@ position limits. (Historical bars and depth answered 2026-08-23.)
   Consequence: hourly quote history since 2026-01-17 can be BACKFILLED
   through the HistoricalPacer (BID_ASK counts double: ~30 requests/10 min),
   which recovers recorder gaps (e.g. the 2026-08-17..23 outage). Full-
-  universe backfill is ~20k requests (~5 days of pacing); a prioritized
-  subset (climate-lane contracts) is a few hours -- scope as a follow-up.
+  universe backfill is ~20k requests (~5 days of pacing). DONE for the
+  climate lane 2026-08-25: 360 requests / 75 min recovered 222,342 hourly
+  BID_ASK bars over 07-26..08-24 for 314 of 360 contracts (the other 46 have
+  no history at all).
 - Evidence: `docs/stage5_probe_findings.md`, 2026-08-23.
 - Date verified: 2026-08-23
 - Invalidation: IBKR HMDS policy change; re-run the probe.
@@ -231,6 +235,16 @@ Cross-cutting rulebook facts:
   and all four order types (LMT DAY, LMT GTC resting, MKT, LMT+condition)
   reproduce identically on paper, and paper receives quotes (market-data
   sharing is on).
+- **Minimum price variation is 0.01 and the venue CANCELS off-tick orders**
+  (error 110, "The price does not conform to the minimum price variation for
+  this contract"), it does not round them. A mid-derived limit such as 0.345
+  is therefore not sendable; snap to `Market.tick_size` (the contract's
+  `minTick`) first. Verified on paper 2026-08-25: 0.345 cancelled, 0.34
+  accepted and rested.
+- **Open orders are visible only to the clientId that placed them.**
+  `ib.openTrades()` on another clientId returns nothing; `reqAllOpenOrders()`
+  is needed to see across clients. Consequence: order sync must run under the
+  same role/clientId that placed the orders (run_ibkr_paper.py does).
 - **Paper Gateway had "Read-Only API" ENABLED** on 2026-08-25 (error 321
   "The API interface is currently in Read-Only mode", absent from the
   2026-08-16 live run). whatIf probes still answer in that mode, so a green

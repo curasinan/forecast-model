@@ -160,7 +160,7 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
       track's EMOS / bucket-calibration / go-live discipline. The 18 tech
       questions map to nothing tradable; Polymarket research stays read-only.
 
-### Stage 7 -- Paper trading  `[~]`
+### Stage 7 -- Paper trading  `[x]` LIVE ON PAPER since 2026-08-25
 - [x] `IBKRSettings`: IBKR_PORT and IBKR_TRADING_MODE REQUIRED, no default.
 - [x] Mode-mismatch guard (DU/DF prefix = paper) + WARNING log at connect.
 - [x] Paper account provisioned and connected 2026-08-23 (DU0000000; log the
@@ -171,9 +171,20 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
 - [x] Paper entrypoint `scripts/run_ibkr_paper.py` (GTM signals -> executor
       on IBKRAdapter; refuses unless IBKR_TRADING_MODE=paper AND the account
       is DU/DF; adapter transmits only on a verified paper account;
-      --simulate for local fills). Still UNRUN against the real paper
-      session: the dress rehearsal (`--simulate`) and the first
-      `--mode approve` orders both need the Gateway logged into paper.
+      --simulate for local fills, its own DB so the measured book stays clean).
+- [x] Dress rehearsal 2026-08-25: 3 intents -> 3 simulated fills, $29.32.
+- [x] **FIRST REAL PAPER ORDERS 2026-08-25 19:58 local** (user cleared the
+      Gateway's Read-Only API checkbox first). 3/3 accepted and RESTING GTC
+      on ForecastEx: `GTM_1226_1.2_YES` 29 @ 0.34, `GTM_1226_1.3_YES`
+      41 @ 0.24, `GTM_1226_1.4_YES` 71 @ 0.14 (orderIds 16/18/20, account
+      DU0000000, $29.64 committed of a $100 bankroll, $10 position cap).
+      **The 365-day live-paper clock starts here.** Nothing is filled yet --
+      these are bids below the ask, which is the intended posture.
+- [x] First attempt was cancelled on arrival with error 110 (off-tick price
+      0.345); fixed by snapping limits DOWN to `Market.tick_size` (ea6bcfc).
+- [ ] Re-run `run_ibkr_paper.py` on a cadence, and `--simulate`-free
+      `executor.sync()` to catch fills; 12 resolved months + 365 days are
+      the go-live gate (`climate/paper_criteria.py`).
 
 ### Stage 8 -- Deliverables
 - [x] Stage 0 script + reports; venue_semantics.md; feature_migration_audit.md;
