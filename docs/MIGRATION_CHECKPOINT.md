@@ -136,7 +136,16 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
       `what_to_show` + `source='reqHistoricalData'`. For BID_ASK bars IB packs
       open=avg bid, high=max ask, low=min bid, close=avg ask (see
       `bid_ask_columns()`). Contracts dropped by `--max-requests` are reported,
-      never silently trimmed. Not yet RUN (needs the Gateway).
+      never silently trimmed; rows flush every 25 answered requests so an
+      interrupted multi-hour run keeps what it fetched.
+- [x] **Backfill RUN 2026-08-25** (run_id 20260825T143919Z, ~75 min):
+      360 requests, **0 failures**, **222,342 hourly BID_ASK bars** over
+      2026-07-26..08-24 (30 date partitions, 420 files) for 314 of 360
+      climate-lane contracts -- GT 84,836 / GTM 55,858 / ACD 50,120 /
+      GTTA 18,640 / GTTM 12,888. The other 46 contracts have no history at
+      all (same set that never quotes; consistent with the Stage-5 probe).
+      Prices span 0.01..0.99 with no nulls. Deeper history (back to
+      2026-01-17) needs ~8 more 30-day chunks at ~75 min each.
 - [x] `docs/operating_costs.md` filled (delayed free, $0.01 commission, ~100
       line budget); only the live-feed subscription PRICE stays UNKNOWN.
 
@@ -346,15 +355,14 @@ Untracked and intentionally NOT part of the migration: `.agents/`,
 
 ## 7. Open user actions (priority order)
 
-1. **START IB GATEWAY and log in (Paper)** -- this blocks every remaining
-   item. Live username + password, Paper toggle, accept the simulated-trading
-   disclaimer. The recorder task reconnects on its own within a minute.
-   Then, in this order:
-   a. paper-parity compare (Stage 0's last box),
-   b. `scripts/backfill_ibkr_hourly.py --dry-run` then the real run,
-   c. `scripts/run_ibkr_paper.py --simulate` (dress rehearsal),
-   d. `scripts/run_ibkr_paper.py --mode approve --top 3` -- the first real
-      paper orders, which START the 365-day live-paper clock.
+1. **Clear "Read-Only API"**: Gateway -> Configure -> Settings -> API ->
+   Settings, untick, OK, restart the Gateway, log back into PAPER. Error 321
+   on 2026-08-25 proves it is currently ON, and whatIf answers happily in
+   that mode -- so nothing so far has actually tested order transmission.
+   This is the ONLY thing between here and
+   `scripts/run_ibkr_paper.py --mode approve --top 3`, which starts the
+   365-day live-paper clock. (Parity, backfill and the `--simulate` dress
+   rehearsal are all done as of 2026-08-25.)
 2. Add `collect_climate_labels.py` as a daily scheduled task (elevated PS:
    `scripts/scheduling/register_climate_tasks.ps1`) -- still NOT registered.
 3. Unregister leftover `\Polymarket\` Task Scheduler jobs if they still exist
