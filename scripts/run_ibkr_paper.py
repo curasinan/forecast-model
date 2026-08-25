@@ -161,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
                 {"order_id": d.order.order_id, "market_id": d.order.market_id,
                  "outcome": d.order.outcome, "price": d.order.price, "size": d.order.size,
                  "status": d.order.status.value, "venue_order_id": d.order.venue_order_id,
+                 "perm_id": d.order.perm_id,
                  "net_ev": d.net_expected_value, "holding_days": d.holding_days}
                 for d in report.decisions if d.order is not None
             ],

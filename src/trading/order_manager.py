@@ -75,6 +75,7 @@ class TradeOrder:
     venue_order_id: str = ""  # The venue's native order id once placed
     filled_size: float = 0.0
     reason: str = ""
+    perm_id: str = ""  # Venue permId from the ack (IBKR); "" if none/unassigned yet
 
     @property
     def clob_order_id(self) -> str:  # backwards-compatible alias
@@ -282,6 +283,7 @@ class OrderManager:
             logger.warning("[%s] %s refused: %s", self._venue.name, order.order_id, exc)
             return False
         order.venue_order_id = ack.order_id
+        order.perm_id = str(ack.raw.get("perm_id") or "")
         if ack.accepted:
             order.status = OrderStatus.PLACED
             logger.info(

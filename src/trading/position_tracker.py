@@ -88,9 +88,13 @@ class PositionTracker:
             """)
             # Venue-neutral columns added by the IBKR migration (2026-08-23);
             # ALTER-in-place so an existing predictions.db keeps its history.
+            # perm_id: the venue's permId from the order ack (IBKR), persisted
+            # as TEXT so a later reconciliation task can join against venue
+            # state by str-normalized permId. last_synced_utc is written by
+            # that future sync path, not by record_trade below.
             self._ensure_columns(conn, "trade_log", {
                 "market_id": "TEXT", "venue": "TEXT", "venue_order_id": "TEXT",
-                "filled_size": "REAL",
+                "filled_size": "REAL", "perm_id": "TEXT", "last_synced_utc": "TEXT",
             })
             self._ensure_columns(conn, "positions", {"market_id": "TEXT", "venue": "TEXT", "order_id": "TEXT"})
 
@@ -108,8 +112,9 @@ class PositionTracker:
                 """INSERT OR REPLACE INTO trade_log
                    (order_id, question_id, outcome, side, price, size,
                     cost_usd, status, reason, created_at, filled_at,
-                    market_id, venue, venue_order_id, filled_size)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    market_id, venue, venue_order_id, filled_size, perm_id,
+                    last_synced_utc)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     order.order_id,
                     order.question_id,
@@ -126,6 +131,8 @@ class PositionTracker:
                     getattr(order, "venue", "") or "",
                     getattr(order, "venue_order_id", "") or "",
                     float(getattr(order, "filled_size", 0.0) or 0.0),
+                    getattr(order, "perm_id", "") or "",
+                    None,  # last_synced_utc: written by the future venue-sync path
                 ),
             )
 
