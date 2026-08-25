@@ -127,11 +127,30 @@ def test_rerun_with_resting_orders_places_nothing(tmp_path):
     assert len(venue.requests) == n_requests_after_first
 
 
-def test_exposure_seeded_from_db(tmp_path):
+def test_exposure_seeded_from_db_binds_headroom_below_the_kelly_cap():
+    """Controller ruling R10: replaces the brief's original verbatim test,
+    which was vacuous -- with `_edge()`'s kelly_fraction=0.10 and
+    bankroll=100.0 the Kelly cap alone clamps size to $10 before the
+    exposure check ever runs, so `adjusted_size_usd <= 50.0 - 29.64` held
+    even with `seed_exposure` never called. Seeding to 46.0 instead leaves
+    only $4 of headroom under a $50 limit -- BELOW the $10 Kelly-capped
+    size -- so the assertion only holds if `seed_exposure` actually moved
+    `_total_exposure`.
+    """
     rm = RiskManager(limits=RiskLimits(max_total_exposure_usd=50.0), bankroll=100.0)
-    rm.seed_exposure(29.64)
+    rm.seed_exposure(46.0)
     res = rm.check_trade(edge=_edge(), proposed_size_usd=30.0)
-    assert res.adjusted_size_usd <= 50.0 - 29.64 + 1e-9
+    assert res.approved is True
+    assert res.adjusted_size_usd == pytest.approx(4.0)
+
+
+def test_exposure_seeded_from_db_can_exhaust_headroom_and_reject():
+    rm = RiskManager(limits=RiskLimits(max_total_exposure_usd=50.0), bankroll=100.0)
+    rm.seed_exposure(50.0)
+    res = rm.check_trade(edge=_edge(), proposed_size_usd=30.0)
+    assert res.approved is False
+    assert "total exposure" in res.reason
+    assert res.adjusted_size_usd == 0.0
 
 
 # ------------------------------------------------------------------ (c) load_open_commitments
@@ -324,3 +343,40 @@ def test_seed_exposure_is_idempotent_across_reseeds_of_the_same_value():
     rm.seed_exposure(29.64)
     rm.seed_exposure(29.64)
     assert rm._total_exposure == pytest.approx(29.64)
+
+
+# ------------------------------------------------------------------ (f) TOCTOU (code review finding 2)
+def test_run_ibkr_paper_reads_the_dedup_snapshot_inside_the_lock():
+    """Code-review finding: the commitments/resting snapshot, the dedup
+    drop, and the exposure seed must all happen strictly AFTER `with
+    acquire_db_lock(...)` acquires the lock. Reading that snapshot BEFORE
+    the lock lets two concurrent runs each observe an empty
+    commitments/resting set, then serialize on the lock and both place the
+    same order a moment apart -- a real duplicate resting GTC order,
+    exactly what this whole task exists to prevent.
+
+    Driving `scripts/run_ibkr_paper.py:main()` end-to-end needs a live
+    IBKR Gateway session (IBKRSettings/IBKRAdapter.connect()), which is
+    out of reach for a unit test and out of scope for this task's
+    "no network/Gateway" constraint. This pins the invariant structurally
+    instead: every call that reads or mutates the dedup/exposure state
+    must appear, in source order, AFTER the `with acquire_db_lock(`
+    statement inside `main()`. A future edit that hoists the snapshot back
+    above the lock (reintroducing the race) fails this test immediately.
+    """
+    import inspect
+
+    import scripts.run_ibkr_paper as mod
+
+    source = inspect.getsource(mod.main)
+    lock_pos = source.index("with acquire_db_lock(")
+    assert lock_pos > 0
+
+    for marker in ("load_open_commitments(", "drop_already_committed(",
+                  "get_all_open_orders()", "seed_exposure("):
+        marker_pos = source.index(marker)
+        assert marker_pos > lock_pos, (
+            f"{marker!r} appears at offset {marker_pos} in main(), before "
+            f"`with acquire_db_lock(` at offset {lock_pos} -- the dedup/seed "
+            "snapshot must be read INSIDE the lock, not before it (TOCTOU)"
+        )

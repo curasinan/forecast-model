@@ -144,29 +144,34 @@ def main(argv: list[str] | None = None) -> int:
         simulate=args.simulate, db_path=str(db_path),
     )
 
-    # Placement idempotence + persistent exposure seeding (Task 1.7, audit
-    # finding C2): a re-run of this entrypoint against an unchanged signals
-    # file must place nothing new for an intent already resting at the
-    # venue or already committed in this book, and this fresh process must
-    # inherit the exposure a PRIOR process already committed instead of
-    # starting back at zero. --simulate keeps the venue read out of a
-    # rehearsal (the research adapter is read-only, but reqAllOpenOrders is
-    # still a live Gateway call) while still deduping and seeding from its
-    # own sim DB.
-    commitments = load_open_commitments(str(db_path))
-    resting = [] if args.simulate else adapter.get_all_open_orders()
-    n_before_dedup = len(intents)
-    intents = drop_already_committed(intents, resting, commitments)
-    executor.risk_manager.seed_exposure(commitments["total_usd"])
-    print(f"{n_before_dedup - len(intents)} intent(s) dropped as already committed; "
-          f"seeded exposure=${commitments['total_usd']:.2f}")
-
-    # Ruling R3: the placement + sync block is the only part of a run that
-    # writes to db_path, so it is the only part that needs exclusion from a
-    # concurrent writer of the same book (an operator's manual run racing
-    # the scheduled sync job, Task 1.6).
+    # Ruling R3, and the TOCTOU fix from code review: lock FIRST, then
+    # snapshot, then place, then sync -- all under the one acquisition.
+    # Reading the commitments/resting snapshot before the lock would let
+    # two concurrent runs each observe an empty snapshot and then
+    # serialize on the lock to both place the same order a moment apart --
+    # a real duplicate resting GTC order, exactly what Task 1.7 exists to
+    # prevent. A second run must now fail fast at the lock, before it
+    # reads anything, not after.
     try:
         with acquire_db_lock(str(db_path)):
+            # Placement idempotence + persistent exposure seeding (Task
+            # 1.7, audit finding C2): a re-run of this entrypoint against
+            # an unchanged signals file must place nothing new for an
+            # intent already resting at the venue or already committed in
+            # this book, and this fresh process must inherit the exposure
+            # a PRIOR process already committed instead of starting back
+            # at zero. --simulate keeps the venue read out of a rehearsal
+            # (the research adapter is read-only, but reqAllOpenOrders is
+            # still a live Gateway call) while still deduping and seeding
+            # from its own sim DB.
+            commitments = load_open_commitments(str(db_path))
+            resting = [] if args.simulate else adapter.get_all_open_orders()
+            n_before_dedup = len(intents)
+            intents = drop_already_committed(intents, resting, commitments)
+            executor.risk_manager.seed_exposure(commitments["total_usd"])
+            print(f"{n_before_dedup - len(intents)} intent(s) dropped as already committed; "
+                  f"seeded exposure=${commitments['total_usd']:.2f}")
+
             report = executor.execute_intents(intents, mode=args.mode)
             print(report.summary())
             if not executor.is_simulated:
