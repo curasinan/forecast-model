@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bankroll", type=float, default=100.0)
     ap.add_argument("--max-position", type=float, default=10.0)
     ap.add_argument("--max-exposure", type=float, default=50.0)
+    ap.add_argument("--db", default=None,
+                    help="paper position DB (default <IBKR data root>/paper/ibkr_paper.db)")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -121,11 +123,23 @@ def main(argv: list[str] | None = None) -> int:
     intents = load_intents(signals_path, adapter, args.top, args.min_edge)
     print(f"{len(intents)} intents from {signals_path}")
 
+    # Its OWN database, NOT the repo's data/predictions.db: that file still
+    # holds March-2026 Polymarket-era simulated test positions, and the
+    # 365-day paper record has to be clean to mean anything. It also lives
+    # outside OneDrive (SQLite + cloud sync corrupts) and outside AppData
+    # (packaged-app virtualisation -- see MIGRATION_CHECKPOINT section 3).
+    # --simulate keeps its own file: a rehearsal's invented fills must never
+    # land in the book that the 365-day go-live gate is measured on.
+    default_db = "ibkr_paper_sim.db" if args.simulate else "ibkr_paper.db"
+    db_path = Path(args.db) if args.db else settings.resolved_data_root / "paper" / default_db
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"paper book: {db_path}")
+
     executor = TradingExecutor(
         venue=adapter, bankroll=args.bankroll,
         risk_limits=RiskLimits(min_edge_pct=args.min_edge, max_position_usd=args.max_position,
                                max_total_exposure_usd=args.max_exposure),
-        simulate=args.simulate,
+        simulate=args.simulate, db_path=str(db_path),
     )
     report = executor.execute_intents(intents, mode=args.mode)
     print(report.summary())
