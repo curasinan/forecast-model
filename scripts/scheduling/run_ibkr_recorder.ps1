@@ -3,11 +3,14 @@
 # Task Scheduler starts this with no profile and no .env-loading shell, so
 # the two REQUIRED IBKRSettings fields (IBKRSettings has no defaults for
 # them by design -- src/venues/ibkr/settings.py) are set explicitly here:
-# read-only data collector against the LIVE session, Gateway on
-# 127.0.0.1:4002, clientId 2. Values already present in the environment
+# read-only data collector against the PAPER session, Gateway on
+# 127.0.0.1:4002, clientId 2. Paper shares the live account's market-data
+# subscriptions, so the quotes are the same feed; the mode must match
+# whatever the Gateway is logged into or connect() fails loudly on the
+# DU/DF account-prefix check. Values already present in the environment
 # win, so a manual override still works:
 #
-#   $env:IBKR_PORT = '4003'; .\scripts\scheduling\run_ibkr_recorder.ps1
+#   $env:IBKR_TRADING_MODE = 'live'; .\scripts\scheduling\run_ibkr_recorder.ps1
 #
 # stdout/stderr append to logs\ibkr_recorder_task.log (rotated to .1 at
 # 50 MB). The recorder's own structured log is logs\ibkr_recorder.log.
@@ -16,7 +19,7 @@
 $ErrorActionPreference = 'Continue'
 
 if (-not $env:IBKR_PORT)         { $env:IBKR_PORT = '4002' }
-if (-not $env:IBKR_TRADING_MODE) { $env:IBKR_TRADING_MODE = 'live' }
+if (-not $env:IBKR_TRADING_MODE) { $env:IBKR_TRADING_MODE = 'paper' }
 
 # Repo root is two levels above this script (scripts\scheduling\..\..).
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
