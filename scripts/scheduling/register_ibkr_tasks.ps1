@@ -141,8 +141,37 @@ Register-IbkrTask `
     -Settings $healthSettings `
     -Description "Hourly recorder freshness check (heartbeat age, parquet dirs); alerts via Telegram."
 
+# --- IBKR Paper Sync: daily reconciliation at 17:30 local -------------------
+# A GTC paper order can rest at ForecastEx for days; nothing that places an
+# order stays alive that long to see a late fill land. This task closes that
+# gap once a day: it asks the venue what happened to every resting order and
+# writes the consequences into ibkr_paper.db (scripts/sync_ibkr_paper.py).
+# 17:30 is picked to land after the day's other end-of-day jobs (e.g. the
+# 16:30 label collector) so the reconciled book reflects a settled day.
+$syncSettings = New-ScheduledTaskSettingsSet `
+    -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+$syncLauncher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_sync.ps1'
+$syncAction = New-ScheduledTaskAction `
+    -Execute 'powershell.exe' `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$syncLauncher`"" `
+    -WorkingDirectory $RepoRoot
+
+Register-IbkrTask `
+    -TaskName "IBKR Paper Sync" `
+    -Action $syncAction `
+    -Triggers (New-ScheduledTaskTrigger -Daily -At "17:30") `
+    -Settings $syncSettings `
+    -Description "Daily paper-book reconciliation (clientId 4, read-only) -- reconciles resting GTC orders against the venue and writes the outcome to ibkr_paper.db."
+
 Write-Host ""
 Write-Host "Done. Registration only -- nothing was started; the keep-alive tick"
-Write-Host "launches the recorder within 5 minutes (and at every boot)."
+Write-Host "launches the recorder within 5 minutes (and at every boot), the health"
+Write-Host "check fires hourly, and the paper sync fires daily at 17:30."
 Write-Host "Inspect:  Get-ScheduledTask -TaskPath '\IBKR\' | Get-ScheduledTaskInfo"
 Write-Host "Tail log: Get-Content logs\ibkr_recorder_task.log -Wait -Tail 20"
+Write-Host "Tail log: Get-Content logs\ibkr_sync_task.log -Wait -Tail 20"
