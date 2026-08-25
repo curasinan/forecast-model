@@ -6,12 +6,34 @@
 #   .\scripts\scheduling\unregister_polymarket_tasks.ps1
 #
 # Idempotent: already-absent tasks are reported and skipped.
+#
+# DELIBERATELY NOT REMOVED: \Polymarket\backup_db. It backs up
+# data/predictions.db, which still holds the preserved research history
+# (questions, predictions, resolutions) -- the migration spec keeps the
+# Polymarket RESEARCH pipeline; only its live collection is retired. Pass
+# -IncludeBackup to remove it too, if you have decided otherwise.
+#
+# The task folder is only deleted once it is empty, so it survives while
+# backup_db does.
 
 param(
-    [string]$TaskPath = "\Polymarket\"
+    [string]$TaskPath = "\Polymarket\",
+    [switch]$IncludeBackup
 )
 
-$taskNames = @("collect_markets", "collect_snapshots", "weather_collect_cycle")
+# The first three were the original collectors; the next three were still
+# registered on 2026-08-25, all pointing at code that now exits 2 unless
+# POLYMARKET_RUNTIME=1 (heartbeat had been failing 0x1 for that reason --
+# \IBKR\IBKR Recorder Health replaced it).
+$taskNames = @(
+    "collect_markets",
+    "collect_snapshots",
+    "weather_collect_cycle",
+    "collect_llm_scores",
+    "collect_news_volume",
+    "heartbeat"
+)
+if ($IncludeBackup) { $taskNames += "backup_db" }
 
 foreach ($name in $taskNames) {
     $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $name -ErrorAction SilentlyContinue
@@ -38,4 +60,7 @@ try {
     }
 } catch { }
 
+if (-not $IncludeBackup) {
+    Write-Host "Kept: $($TaskPath)backup_db (backs up the preserved research DB)."
+}
 Write-Host "Done. Polymarket collectors stay retired; IBKR jobs are under \IBKR\."
