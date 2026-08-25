@@ -37,6 +37,8 @@ from climate.paths import data_root  # noqa: E402
 from src.domain.ids import MarketId  # noqa: E402
 from src.models.prediction import EdgeSignal  # noqa: E402
 from src.trading.executor import TradeIntent, TradingExecutor  # noqa: E402
+from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
+from src.trading.reconcile import drop_already_committed, load_open_commitments  # noqa: E402
 from src.trading.risk_manager import RiskLimits  # noqa: E402
 from src.venues.ibkr.adapter import IBKRAdapter  # noqa: E402
 from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
@@ -141,11 +143,40 @@ def main(argv: list[str] | None = None) -> int:
                                max_total_exposure_usd=args.max_exposure),
         simulate=args.simulate, db_path=str(db_path),
     )
-    report = executor.execute_intents(intents, mode=args.mode)
-    print(report.summary())
-    if not executor.is_simulated:
-        updated = executor.sync()
-        print(f"synced with venue: {updated} order(s) updated")
+
+    # Placement idempotence + persistent exposure seeding (Task 1.7, audit
+    # finding C2): a re-run of this entrypoint against an unchanged signals
+    # file must place nothing new for an intent already resting at the
+    # venue or already committed in this book, and this fresh process must
+    # inherit the exposure a PRIOR process already committed instead of
+    # starting back at zero. --simulate keeps the venue read out of a
+    # rehearsal (the research adapter is read-only, but reqAllOpenOrders is
+    # still a live Gateway call) while still deduping and seeding from its
+    # own sim DB.
+    commitments = load_open_commitments(str(db_path))
+    resting = [] if args.simulate else adapter.get_all_open_orders()
+    n_before_dedup = len(intents)
+    intents = drop_already_committed(intents, resting, commitments)
+    executor.risk_manager.seed_exposure(commitments["total_usd"])
+    print(f"{n_before_dedup - len(intents)} intent(s) dropped as already committed; "
+          f"seeded exposure=${commitments['total_usd']:.2f}")
+
+    # Ruling R3: the placement + sync block is the only part of a run that
+    # writes to db_path, so it is the only part that needs exclusion from a
+    # concurrent writer of the same book (an operator's manual run racing
+    # the scheduled sync job, Task 1.6).
+    try:
+        with acquire_db_lock(str(db_path)):
+            report = executor.execute_intents(intents, mode=args.mode)
+            print(report.summary())
+            if not executor.is_simulated:
+                updated = executor.sync()
+                print(f"synced with venue: {updated} order(s) updated")
+    except LockHeldError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        adapter.disconnect()
+        return 1
+
     portfolio = executor.get_portfolio()
     print(json.dumps(portfolio, indent=2, default=str))
 

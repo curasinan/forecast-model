@@ -208,6 +208,25 @@ class RiskManager:
         self._bankroll += pnl
         self._peak_bankroll = max(self._peak_bankroll, self._bankroll)
 
+    def seed_exposure(self, total_usd: float) -> None:
+        """Restore exposure this process did not itself accumulate.
+
+        Every `RiskManager` starts a fresh process at `_total_exposure ==
+        0.0`, but real GTC orders resting at the venue -- or commitments
+        already recorded in this book by an earlier process -- still count
+        against the venue's real risk (audit finding C2). Call this once
+        at startup with `load_open_commitments(db_path)["total_usd"]`
+        before evaluating any intent.
+
+        `max`, deliberately never a plain assignment or `+=`: at startup
+        `_total_exposure` is 0, so `max(0, total_usd) == total_usd` either
+        way. But `add_exposure` may already have run for trades THIS
+        process placed since the last seed (or since construction) -- a
+        re-seed must be idempotent and must never claw back exposure this
+        process has already observed and added on top of the seed.
+        """
+        self._total_exposure = max(self._total_exposure, total_usd)
+
     def add_exposure(self, amount: float) -> None:
         """Track that we've opened a new position."""
         self._total_exposure += amount

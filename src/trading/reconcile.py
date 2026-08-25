@@ -84,12 +84,18 @@ zero rows and changes no status. Only `last_synced_utc` is refreshed.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from src.domain.ids import IBKR, MarketId
 from src.trading.paper_schema import FILL_EVENTS_DDL
+
+if TYPE_CHECKING:  # pragma: no cover -- type-checking only, no runtime import
+    from src.domain.models import Order
+    from src.trading.executor import TradeIntent
 
 logger = logging.getLogger(__name__)
 
@@ -697,3 +703,181 @@ def _note_unmatched_venue_orders(conn, open_by_perm, orders_without_perm,
             f"venue order {order.order_id} ({order.request.market_id}) carries no permId -- "
             "cannot be joined to the book, left untouched"
         )
+
+
+# =================================================================== Task 1.7
+# Placement idempotence + persistent exposure seeding (audit finding C2).
+#
+# A GTC paper order rests at the venue for days or weeks; nothing before
+# this task stopped a re-run of `scripts/run_ibkr_paper.py` from placing
+# that exact order a SECOND time, stacking duplicate exposure on a book
+# that already has it working. `load_open_commitments` reads what the
+# CURRENT process's own book already committed money to; `drop_already_
+# committed` uses that (plus a fresh venue read) to refuse to re-place
+# anything already covered. Ground rule: dedup only ever SKIPS a would-be
+# placement -- it never touches, cancels, or modifies anything it finds
+# resting (that is measurement state, not something to clean up).
+
+
+def _group_key(question_id: str) -> str:
+    """The group one question belongs to (verbatim contract, reused by a
+    later cross-market exposure task): drop the trailing ':<strike>'
+    segment. "gtm:2026-12:1.3" -> "gtm:2026-12". A question_id with no
+    ':' (e.g. a legacy dash-separated id) is its own group unchanged.
+    """
+    return question_id.rsplit(":", 1)[0]
+
+
+def load_open_commitments(db_path: str) -> dict:
+    """Every dollar the book at `db_path` already has riding on the venue.
+
+    Two sources, added without double-counting the same order twice:
+
+    - `trade_log` rows with `status IN ('placed', 'partially_filled')`
+      contribute their `cost_usd` -- the order's FULL intended commitment,
+      not just what has filled so far. A 'placed' order rests at the venue
+      for its whole size; a 'partially_filled' one is still working the
+      remainder, so the venue-side risk is still the whole thing.
+    - Open `positions` rows (`closed_at IS NULL`) contribute `cost_basis`,
+      but ONLY for an `order_id` whose trade_log status is NOT itself
+      'placed' or 'partially_filled'. A partially_filled order's own
+      partial position is the FILLED SLICE of a commitment already
+      counted in full above; adding it again would double-count that
+      slice (a 9.84 commitment with a 2.40 partial position must total
+      9.84, not 12.24). A row whose order finished (filled/cancelled) or
+      has no trade_log row at all is not in that set, so its position
+      counts normally.
+
+    Group key: `_group_key(question_id)` -- see that function's contract.
+
+    Returns `{"total_usd": float, "by_market": dict[str, float],
+    "by_group": dict[str, float]}`. A missing `db_path` returns the same
+    shape, all empty -- a book that has never been written has nothing
+    committed, which is different from a read failure and must not raise.
+    """
+    empty: dict = {"total_usd": 0.0, "by_market": {}, "by_group": {}}
+    if not os.path.exists(db_path):
+        return empty
+
+    by_market: dict[str, float] = {}
+    by_group: dict[str, float] = {}
+    total = 0.0
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+
+        def _add(question_id: str, market_id: str, amount: float) -> None:
+            nonlocal total
+            total += amount
+            if market_id:
+                by_market[market_id] = by_market.get(market_id, 0.0) + amount
+            by_group[_group_key(question_id)] = by_group.get(_group_key(question_id), 0.0) + amount
+
+        placeholders = ",".join("?" * len(CANDIDATE_STATUSES))
+        committed_order_ids: set[str] = set()
+        for row in conn.execute(
+            f"SELECT order_id, question_id, market_id, cost_usd FROM trade_log "
+            f"WHERE status IN ({placeholders})",
+            CANDIDATE_STATUSES,
+        ):
+            committed_order_ids.add(row["order_id"])
+            _add(row["question_id"] or "", row["market_id"] or "", float(row["cost_usd"] or 0.0))
+
+        for row in conn.execute(
+            "SELECT order_id, question_id, market_id, cost_basis FROM positions "
+            "WHERE closed_at IS NULL"
+        ):
+            if row["order_id"] in committed_order_ids:
+                continue  # already counted in full via trade_log above (see docstring)
+            _add(row["question_id"] or "", row["market_id"] or "", float(row["cost_basis"] or 0.0))
+    finally:
+        conn.close()
+
+    return {"total_usd": total, "by_market": by_market, "by_group": by_group}
+
+
+def _bought_leg_market_id(intent: "TradeIntent"):
+    """Which contract this intent would BUY, or `None` if that cannot be
+    resolved without guessing (an unresolvable NO leg).
+
+    YES intent (edge_pct > 0): `market.market_id`. NO intent: `market.no_id`
+    when the venue publishes a separate NO contract -- never the YES id and
+    never invented, since IBKR's YES/NO legs are separate conIds.
+    """
+    if intent.edge.edge_pct > 0:
+        return intent.market.market_id, "YES"
+    return intent.market.no_id, "NO"
+
+
+def drop_already_committed(intents: list["TradeIntent"], venue_open_orders: list["Order"],
+                           commitments: dict) -> list["TradeIntent"]:
+    """Drop any intent whose bought leg is already committed.
+
+    An intent is dropped when its bought leg's IBKR conId either:
+      (a) has a resting BUY order at the venue right now (`venue_open_orders`,
+          e.g. `IBKRAdapter.get_all_open_orders()` -- a fresh read, not a
+          cached one), or
+      (b) already appears in `commitments["by_market"]` (see
+          `load_open_commitments`) -- this process's OWN book already
+          recorded a commitment for it, even if the venue read above
+          somehow missed it.
+
+    A NO intent whose market has no `no_id` cannot be resolved to a conId
+    at all -- it is dropped with a warning rather than guessed (ground
+    rule: never guess). `commitments["by_market"]` keys are `MarketId`
+    strings like "ibkr:830396351"; a key that does not parse is skipped
+    (tolerated, not fatal -- a foreign/legacy row must not crash dedup).
+
+    Every drop is logged at WARNING with its reason. This function only
+    ever removes candidates from the list it returns -- it never reads or
+    writes anything else, and never touches `venue_open_orders` itself.
+    """
+    resting_buy_con_ids: set[int] = set()
+    for order in venue_open_orders:
+        if order.request.side != "BUY":
+            continue
+        try:
+            resting_buy_con_ids.add(order.request.market_id.con_id)
+        except ValueError:
+            continue  # not an IBKR market id -- nothing to dedup against here
+
+    committed_con_ids: set[int] = set()
+    for market_id_str in commitments.get("by_market", {}):
+        try:
+            committed_con_ids.add(MarketId.parse(market_id_str).con_id)
+        except (ValueError, TypeError):
+            continue  # unparseable/non-IBKR key -- tolerated, not guessed
+
+    kept: list["TradeIntent"] = []
+    for intent in intents:
+        question_id = intent.edge.question_id
+        leg_id, leg_name = _bought_leg_market_id(intent)
+        if leg_id is None:
+            logger.warning(
+                "dropping intent %s: NO leg has no resolvable market id (no `no_id` on "
+                "the market) -- unresolvable, never guessed", question_id,
+            )
+            continue
+
+        try:
+            con_id = leg_id.con_id
+        except ValueError:
+            kept.append(intent)  # not an IBKR id -- this dedup has no opinion
+            continue
+
+        if con_id in resting_buy_con_ids:
+            logger.warning(
+                "dropping intent %s: %s leg (conId %s) already has a resting BUY order "
+                "at the venue", question_id, leg_name, con_id,
+            )
+            continue
+        if con_id in committed_con_ids:
+            logger.warning(
+                "dropping intent %s: %s leg (conId %s) already has a commitment in "
+                "trade_log", question_id, leg_name, con_id,
+            )
+            continue
+        kept.append(intent)
+
+    return kept
