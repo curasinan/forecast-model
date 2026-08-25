@@ -38,12 +38,11 @@ def setup_logging() -> None:
 
 
 def _default_ticks_root() -> Path:
-    local_app = os.environ.get("LOCALAPPDATA")
-    if os.environ.get("IBKR_DATA_ROOT", "").strip():
-        return Path(os.environ["IBKR_DATA_ROOT"]).expanduser()
-    if local_app:
-        return Path(local_app) / "ibkr_ticks"
-    return Path.home() / ".local" / "share" / "ibkr_ticks"
+    """IBKR_DATA_ROOT, else the IBKRSettings default (~/quant_data/ibkr_ticks)."""
+    override = os.environ.get("IBKR_DATA_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / "quant_data" / "ibkr_ticks"
 
 
 def main(argv: list[str] | None = None) -> int:

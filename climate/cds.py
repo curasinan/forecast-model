@@ -64,22 +64,14 @@ class CdsSoftTimeout(TimeoutError):
 def climate_data_root(override: str | Path | None = None) -> Path:
     """Return the local (non-OneDrive) climate data directory.
 
-    Priority: explicit override > ``CLIMATE_DATA_ROOT`` env var >
-    ``%LOCALAPPDATA%/climate_data`` > ``~/.local/share/climate_data``.
+    Thin wrapper over ``climate.paths.data_root`` (single source of truth for
+    the root; it also creates labels/ and raw/) that additionally guarantees
+    the download subdirectories this module writes.
     """
-    env = os.environ.get("CLIMATE_DATA_ROOT", "").strip()
-    if override is not None and str(override).strip():
-        root = Path(override).expanduser().resolve()
-    elif env:
-        root = Path(env).expanduser().resolve()
-    else:
-        local_app = os.environ.get("LOCALAPPDATA")
-        if local_app:
-            root = Path(local_app) / "climate_data"
-        else:
-            root = Path.home() / ".local" / "share" / "climate_data"
+    from climate.paths import data_root
 
-    root.mkdir(parents=True, exist_ok=True)
+    root = data_root(override)
+
     for sub in ("raw", "forecasts", "reference"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     return root

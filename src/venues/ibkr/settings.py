@@ -9,7 +9,6 @@ whatever session happens to be listening.
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -51,15 +50,19 @@ class IBKRSettings(BaseSettings):
 
     @property
     def resolved_data_root(self) -> Path:
-        """Local tick/cache directory -- NEVER inside the OneDrive-synced repo.
+        """Local tick/cache directory -- NEVER OneDrive, NEVER %LOCALAPPDATA%.
 
         OneDrive sync corrupts high-churn files (SQLite journals, append-only
-        tick logs) mid-write; same convention as weather/paths.py. Default is
-        %LOCALAPPDATA%/ibkr_ticks, with a ~/.local/share fallback off Windows.
+        tick logs) mid-write, so the store stays out of the synced repo.
+
+        %LOCALAPPDATA% is excluded for a second, subtler reason found on
+        2026-08-25: processes launched inside a packaged (MSIX) app get a
+        per-app virtualised view of AppData, so a writer inside the container
+        and a writer outside it (Task Scheduler) end up with two silently
+        divergent copies of the same path -- the recorder heartbeat looked
+        11,162 minutes stale to one process while the hourly health task read
+        a fresh one. ``~/quant_data`` is outside both traps.
         """
         if self.data_root.strip():
             return Path(self.data_root).expanduser().resolve()
-        local_app = os.environ.get("LOCALAPPDATA")
-        if local_app:
-            return Path(local_app) / "ibkr_ticks"
-        return Path.home() / ".local" / "share" / "ibkr_ticks"
+        return Path.home() / "quant_data" / "ibkr_ticks"

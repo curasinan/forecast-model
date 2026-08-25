@@ -15,8 +15,10 @@ Rules for this file:
 Status: **Stage 0 ran 2026-08-16 against the LIVE session (exit 0).**
 Reports: `docs/stage0_report_2026-08-16_live.md` (+ `_followup`).
 Universe snapshot: `data/ibkr_universe_live.json`.
+Also ran **2026-08-25 against the PAPER account DU0000000 (exit 0)** —
+`docs/stage0_report_2026-08-25_paper.md`, parity confirmed (section 8 below).
 Still open: legal entity confirmation, coupon rate, max order size /
-position limits, paper parity. (Historical bars and depth answered 2026-08-23.)
+position limits. (Historical bars and depth answered 2026-08-23.)
 
 ## The 8 questions from the migration spec
 
@@ -216,7 +218,22 @@ Cross-cutting rulebook facts:
   - `reqMatchingSymbols` is the only broad entry point that works
     (~1 req/sec limit); scanner has no FORECASTX instrument codes.
   (2026-08-16, Stage 0 reports.)
-- **Paper/live parity: OPEN.** The 2026-08-16 session was live (user's
-  Gateway logged into the live account on port 4002 — port number does NOT
-  imply mode). Run the script against a paper session with
-  `--compare data/ibkr_universe_live.json` once the paper account exists.
+- **Paper/live parity: VERIFIED 2026-08-25 (exit 0).** Paper account
+  **DU0000000** on port 4002 (the 2026-08-16 session was LIVE on the same
+  port — the port number does NOT imply mode; the login does). Report:
+  `docs/stage0_report_2026-08-25_paper.md`. Paper discovered **3,097
+  contracts / 3,032 tradable** vs 2,964 in the 9-day-old live snapshot:
+  140 missing, 273 extra, of which **112 of the 140 are contracts that
+  simply expired between 08-16 and 08-25** (RCSTH 26, UNR 20, GDPJP 18,
+  GTM 18, SGGDP 18, HKGDP 10, USR 2); the rest is ordinary listing churn.
+  The run did not persist a paper-side snapshot, so the residual ~28 were
+  not enumerated individually. Yes/No structure, the $0.01 flat commission
+  and all four order types (LMT DAY, LMT GTC resting, MKT, LMT+condition)
+  reproduce identically on paper, and paper receives quotes (market-data
+  sharing is on).
+- **Paper Gateway had "Read-Only API" ENABLED** on 2026-08-25 (error 321
+  "The API interface is currently in Read-Only mode", absent from the
+  2026-08-16 live run). whatIf probes still answer in that mode, so a green
+  Stage 0 report does NOT prove orders can be transmitted — the checkbox
+  must be cleared in Gateway → Configure → Settings → API → Settings
+  before any paper order path is exercised.

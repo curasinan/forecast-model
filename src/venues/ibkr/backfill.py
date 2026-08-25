@@ -262,38 +262,60 @@ class HistoricalBackfiller:
         ) or [])
 
     def run(self, requests: Sequence[BackfillRequest], run_id: str,
-            skipped_con_ids: int = 0) -> BackfillResult:
-        """Execute the plan, writing one parquet per covered UTC date."""
+            skipped_con_ids: int = 0, flush_every: int = 25) -> BackfillResult:
+        """Execute the plan, writing parquet per covered UTC date as it goes.
+
+        A full-universe pass is hours long under pacing and the Gateway
+        restarts nightly, so rows are flushed every ``flush_every`` answered
+        requests (and on any exception on the way out) rather than being held
+        until the end -- an interrupted run keeps everything it had fetched.
+        Each flush writes its own file suffix, so nothing is overwritten.
+        """
         result = BackfillResult(requested=len(requests), skipped_con_ids=skipped_con_ids)
         rows: list[dict] = []
         with_bars: set[int] = set()
         empty: set[int] = set()
-        for index, request in enumerate(requests, start=1):
-            meta = self.resolver.get(request.con_id) or {}
-            try:
-                bars = self.fetch(request)
-            except Exception as exc:  # noqa: BLE001 -- one dead contract must not end the run
-                result.failed.append((request.con_id, request.what_to_show, repr(exc)))
-                logger.warning("backfill %d/%d conId=%s %s failed: %s",
-                               index, len(requests), request.con_id,
-                               request.what_to_show, exc)
-                continue
-            if not bars:
-                empty.add(request.con_id)
-                logger.info("backfill %d/%d conId=%s %s: no bars",
-                            index, len(requests), request.con_id, request.what_to_show)
-                continue
-            with_bars.add(request.con_id)
-            rows.extend(bar_to_row(bar, request, meta) for bar in bars)
-            logger.info("backfill %d/%d conId=%s %s: %d bars",
-                        index, len(requests), request.con_id,
-                        request.what_to_show, len(bars))
-        result.bars = len(rows)
-        result.contracts_with_bars = len(with_bars)
-        result.empty_con_ids = sorted(empty - with_bars)
-        if rows:
-            written = write_backfill_rows(rows, self.data_root, run_id)
-            result.files = list(written.values())
-            result.dates_written = {day: sum(1 for r in rows if _row_date(r) == day)
-                                    for day in sorted(written)}
+        answered = 0
+
+        def flush() -> None:
+            nonlocal rows
+            if not rows:
+                return
+            suffix = f"{run_id}-{len(result.files):03d}"
+            written = write_backfill_rows(rows, self.data_root, suffix)
+            for day in written:
+                result.dates_written[day] = (result.dates_written.get(day, 0)
+                                             + sum(1 for r in rows if _row_date(r) == day))
+            result.files.extend(written.values())
+            result.bars += len(rows)
+            rows = []
+
+        try:
+            for index, request in enumerate(requests, start=1):
+                meta = self.resolver.get(request.con_id) or {}
+                try:
+                    bars = self.fetch(request)
+                except Exception as exc:  # noqa: BLE001 -- one dead contract must not end the run
+                    result.failed.append((request.con_id, request.what_to_show, repr(exc)))
+                    logger.warning("backfill %d/%d conId=%s %s failed: %s",
+                                   index, len(requests), request.con_id,
+                                   request.what_to_show, exc)
+                    continue
+                answered += 1
+                if not bars:
+                    empty.add(request.con_id)
+                    logger.info("backfill %d/%d conId=%s %s: no bars",
+                                index, len(requests), request.con_id, request.what_to_show)
+                else:
+                    with_bars.add(request.con_id)
+                    rows.extend(bar_to_row(bar, request, meta) for bar in bars)
+                    logger.info("backfill %d/%d conId=%s %s: %d bars",
+                                index, len(requests), request.con_id,
+                                request.what_to_show, len(bars))
+                if flush_every and answered % flush_every == 0:
+                    flush()
+        finally:
+            flush()  # keep whatever was fetched, including on KeyboardInterrupt
+            result.contracts_with_bars = len(with_bars)
+            result.empty_con_ids = sorted(empty - with_bars)
         return result

@@ -2,8 +2,14 @@
 
 Mirrors weather/paths.py: the repo lives under OneDrive, but data files
 (parquet/SQLite) must not, because cloud sync mid-write risks corruption.
-Default root is %LOCALAPPDATA%/climate_data, overridable via the
+Default root is ~/quant_data/climate_data, overridable via the
 CLIMATE_DATA_ROOT environment variable.
+
+NOT %LOCALAPPDATA% (the old default, migrated 2026-08-25): a packaged
+(MSIX) app virtualises AppData per-app, so the same path resolves to two
+different stores depending on whether the writer runs inside the packaged
+app or outside it (Task Scheduler). The whole climate ledger had ended up
+in the container-private copy, invisible to any scheduled job.
 """
 
 from __future__ import annotations
@@ -20,19 +26,14 @@ def data_root(override: str | Path | None = None) -> Path:
     Priority:
       1. explicit override argument
       2. CLIMATE_DATA_ROOT environment variable
-      3. %LOCALAPPDATA%/climate_data (Windows)
-      4. ~/.local/share/climate_data
+      3. ~/quant_data/climate_data
     """
     if override is not None and str(override).strip():
         root = Path(override).expanduser().resolve()
     elif os.environ.get(ENV_VAR, "").strip():
         root = Path(os.environ[ENV_VAR]).expanduser().resolve()
     else:
-        local_app = os.environ.get("LOCALAPPDATA")
-        if local_app:
-            root = Path(local_app) / "climate_data"
-        else:
-            root = Path.home() / ".local" / "share" / "climate_data"
+        root = Path.home() / "quant_data" / "climate_data"
 
     root.mkdir(parents=True, exist_ok=True)
     for sub in ("labels", "raw"):

@@ -58,15 +58,15 @@ _RECONNECT_EVENTS = {"reconnect", "reconnected", "connect", "connected"}
 def default_state_path() -> Path:
     """Heartbeat path under the recorder's data root.
 
-    Mirrors IBKRSettings.resolved_data_root's fallback convention
-    (%LOCALAPPDATA%/ibkr_ticks, then ~/.local/share off Windows) WITHOUT
-    constructing IBKRSettings: the settings class fails loudly when
-    IBKR_PORT / IBKR_TRADING_MODE are unset (by design, spec Stage 7),
-    and a monitoring probe must keep working in a bare scheduler env.
+    Mirrors IBKRSettings.resolved_data_root (IBKR_DATA_ROOT, else
+    ~/quant_data/ibkr_ticks) WITHOUT constructing IBKRSettings: the settings
+    class fails loudly when IBKR_PORT / IBKR_TRADING_MODE are unset (by
+    design, spec Stage 7), and a monitoring probe must keep working in a bare
+    scheduler env. NOT %LOCALAPPDATA%: a packaged app virtualises AppData, so
+    probe and recorder would read two different files (2026-08-25).
     """
-    local_app = os.environ.get("LOCALAPPDATA")
-    root = Path(local_app) / "ibkr_ticks" if local_app else (
-        Path.home() / ".local" / "share" / "ibkr_ticks")
+    override = os.environ.get("IBKR_DATA_ROOT", "").strip()
+    root = Path(override).expanduser() if override else Path.home() / "quant_data" / "ibkr_ticks"
     return root / "state" / "recorder_state.json"
 
 

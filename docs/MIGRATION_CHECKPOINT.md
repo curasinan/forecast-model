@@ -262,6 +262,23 @@ recorder is correctly sitting in its retry loop; sweeps exist only for
   made hermetic (38617dc) because the pool grows with data.
 - RC* symbols are Regional CPI, not rainfall; ForecastEx lists NO daily
   weather products -- the weather track's EMOS engine has no direct target.
+- **`%LOCALAPPDATA%` is a trap under a packaged (MSIX) app** (found
+  2026-08-25). Claude Code runs inside the packaged Claude app, which gets a
+  per-app virtualised view of AppData: the SAME path resolved to two
+  different stores depending on whether the writer ran inside the container
+  or outside it (Task Scheduler). Symptom: the recorder heartbeat looked
+  11,162 minutes stale to a probe run in-session while the hourly health task
+  read a fresh one and exited 0. The whole climate ledger (78 files, 7.6 GB)
+  sat in the container-private copy, invisible to any scheduled job, and the
+  quote store was split (24 files one side, 21 the other). Fix: both data
+  roots now default to `~/quant_data/...` (`settings.py`, `climate/paths.py`),
+  data copied across, recorder restarted onto the new root. Never point a
+  data root at AppData again, and read "two processes disagree about a file"
+  as this until proven otherwise.
+- Stopping the recorder task can ORPHAN its python child (the cmd.exe wrapper
+  dies, python keeps running and keeps clientId=2, so the next instance would
+  fail with error 326). After Stop-ScheduledTask, check for a surviving
+  `record_ibkr_ticks.py` process before starting the task again.
 
 ---
 
@@ -300,16 +317,19 @@ remove with `scripts/scheduling/unregister_ibkr_tasks.ps1`. Leftover
 
 ## 5. Data locations (all outside the OneDrive repo on purpose)
 
-- `%LOCALAPPDATA%\ibkr_ticks\quotes\date=*\` -- IBKR quote sweeps (parquet)
-- `%LOCALAPPDATA%\ibkr_ticks\quotes_hourly\date=*\` -- backfilled hourly bars
+**Roots moved out of `%LOCALAPPDATA%` on 2026-08-25** -- see section 3 for
+why. Everything now lives under `~/quant_data` (`C:\Users\<you>\quant_data`).
+
+- `~/quant_data/ibkr_ticks/quotes/date=*/` -- IBKR quote sweeps (parquet)
+- `~/quant_data/ibkr_ticks/quotes_hourly/date=*/` -- backfilled hourly bars
   (different semantics from sweeps; see Stage 5)
-- `%LOCALAPPDATA%\ibkr_ticks\state\recorder_state.json` -- recorder heartbeat
-- `%LOCALAPPDATA%\ibkr_ticks\contracts_cache.db` -- resolver cache
-- `%LOCALAPPDATA%\climate_data\labels\labels_ledger.parquet` -- NOAA labels
-- `%LOCALAPPDATA%\climate_data\raw|forecasts|reference\` -- CDS downloads + reductions
-- `%LOCALAPPDATA%\climate_data\models\gtm_emos.json` -- fitted GTM EMOS
-- `%LOCALAPPDATA%\climate_data\reports\gtm_emos_diagnostics.md` -- Step 4 report
-- `%LOCALAPPDATA%\climate_data\paper\gtm_signals.json` -- latest paper ladder
+- `~/quant_data/ibkr_ticks/state/recorder_state.json` -- recorder heartbeat
+- `~/quant_data/ibkr_ticks/contracts_cache.db` -- resolver cache
+- `~/quant_data/climate_data/labels/labels_ledger.parquet` -- NOAA labels
+- `~/quant_data/climate_data/raw|forecasts|reference/` -- CDS downloads + reductions
+- `~/quant_data/climate_data/models/gtm_emos.json` -- fitted GTM EMOS
+- `~/quant_data/climate_data/reports/gtm_emos_diagnostics.md` -- Step 4 report
+- `~/quant_data/climate_data/paper/gtm_signals.json` -- latest paper ladder
 - `logs\ibkr_recorder.log`, `logs\ibkr_recorder_task.log`, `logs\ibkr_events.jsonl`
 
 ## 6. Git state at checkpoint

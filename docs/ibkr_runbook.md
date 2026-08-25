@@ -13,8 +13,8 @@ Quick facts:
 | Gateway | IB Gateway on `127.0.0.1:4002` (port does NOT imply mode) |
 | Recorder client id | 2 (`data_collector` -- the only sanctioned tick writer) |
 | Sweep cadence | every 20 min; one sweep takes ~13 min over ~2,900 contracts |
-| Data root | `%LOCALAPPDATA%\ibkr_ticks` (deliberately outside OneDrive) |
-| Heartbeat | `%LOCALAPPDATA%\ibkr_ticks\state\recorder_state.json` |
+| Data root | `~/quant_data/ibkr_ticks` (outside OneDrive AND outside AppData -- see MIGRATION_CHECKPOINT section 3) |
+| Heartbeat | `~/quant_data/ibkr_ticks/state/recorder_state.json` |
 | Recorder log | `logs\ibkr_recorder.log` (structured), `logs\ibkr_recorder_task.log` (task launcher capture) |
 | Scheduled tasks | `\IBKR\IBKR Recorder`, `\IBKR\IBKR Recorder Health` |
 
@@ -181,12 +181,13 @@ Get-Content logs\ibkr_recorder.log -Tail 20
 Get-Content logs\ibkr_recorder_task.log -Tail 20
 
 # Heartbeat contents + age
-$s = Get-Content "$env:LOCALAPPDATA\ibkr_ticks\state\recorder_state.json" -Raw | ConvertFrom-Json
+$s = Get-Content "$env:USERPROFILE\quant_data\ibkr_ticks\state\recorder_state.json" -Raw | ConvertFrom-Json
+ecorder_state.json" -Raw | ConvertFrom-Json
 $s
 [DateTime]::UtcNow - [DateTime]::Parse($s.ts).ToUniversalTime()
 
 # Today's (UTC date) row count via pyarrow
-python -c "import os,datetime,pyarrow.dataset as ds; day=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'); p=os.path.join(os.environ['LOCALAPPDATA'],'ibkr_ticks','quotes','date='+day); print(p); print(ds.dataset(p).count_rows() if os.path.isdir(p) else 'NO DATA for '+day)"
+python -c "import os,datetime,pyarrow.dataset as ds; day=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'); p=os.path.join(os.path.expanduser('~'),'quant_data','ibkr_ticks','quotes','date='+day); print(p); print(ds.dataset(p).count_rows() if os.path.isdir(p) else 'NO DATA for '+day)"
 
 # Is the Gateway API port up?
 Test-NetConnection 127.0.0.1 -Port 4002

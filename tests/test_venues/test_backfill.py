@@ -160,7 +160,9 @@ class TestRun:
         assert result.empty_con_ids == [12]
         assert [f[0] for f in result.failed] == [13]
         assert result.dates_written == {"2026-08-18": 2}
-        assert (tmp_path / "quotes_hourly" / "date=2026-08-18" / "hourly-runX.parquet").exists()
+        # one flush -> one file, suffixed so later flushes cannot overwrite it
+        assert (tmp_path / "quotes_hourly" / "date=2026-08-18"
+                / "hourly-runX-000.parquet").exists()
 
     def test_requests_carry_utc_end_and_no_rth_filter(self, tmp_path):
         reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 19))
@@ -187,3 +189,30 @@ class TestRun:
         reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
         result = HistoricalBackfiller(FakeIB({}), FakeResolver({}), tmp_path).run(reqs, "runN")
         assert result.files == [] and not (tmp_path / "quotes_hourly").exists()
+
+    def test_rows_are_flushed_during_the_run_not_only_at_the_end(self, tmp_path):
+        con_ids = list(range(1, 6))
+        reqs, _ = plan_requests(con_ids, date(2026, 8, 18), date(2026, 8, 18))
+        ib = FakeIB({(cid, "BID_ASK"): _bars(18) for cid in con_ids})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path)\
+            .run(reqs, "runF", flush_every=2)
+        # 5 answered requests, flush every 2 -> 2 mid-run flushes + the final one
+        assert len(result.files) == 3
+        assert result.bars == 10 and result.dates_written == {"2026-08-18": 10}
+        assert len({p.name for p in result.files}) == 3  # no file overwrites another
+
+    def test_interrupted_run_keeps_what_it_already_fetched(self, tmp_path):
+        reqs, _ = plan_requests([1, 2, 3], date(2026, 8, 18), date(2026, 8, 18))
+
+        class Interrupting(FakeIB):
+            def reqHistoricalData(self, contract, **kwargs):
+                if contract.conId == 3:
+                    raise KeyboardInterrupt
+                return super().reqHistoricalData(contract, **kwargs)
+
+        ib = Interrupting({(1, "BID_ASK"): _bars(18), (2, "BID_ASK"): _bars(18)})
+        backfiller = HistoricalBackfiller(ib, FakeResolver({}), tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            backfiller.run(reqs, "runI", flush_every=100)
+        written = list((tmp_path / "quotes_hourly" / "date=2026-08-18").glob("*.parquet"))
+        assert len(written) == 1 and pq.read_table(written[0]).num_rows == 4
