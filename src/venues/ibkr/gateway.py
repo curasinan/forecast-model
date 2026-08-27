@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from src.venues.ibkr.clients import connect_ib
+from src.venues.ibkr.clients import ClientIdInUseError, connect_ib
 from src.venues.ibkr.settings import IBKRSettings
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,10 @@ class GatewaySession:
     off that single entry point. ``connect_validator`` runs after every
     successful connect and its exceptions PROPAGATE out of the retry loop:
     it is for configuration errors (e.g. the recorder's account-mode
-    cross-check) that must kill the process, not be retried.
+    cross-check) that must kill the process, not be retried. The same
+    applies to ``ClientIdInUseError`` from ``self._connect`` itself: a
+    clientId collision means a second process already owns this role, so
+    it too propagates out of ``_reconnect_loop`` instead of being retried.
 
     The keyword-only ``connect``/``sleep``/``clock``/``local_now`` seams
     exist for unit tests; production code never passes them.
@@ -231,6 +234,11 @@ class GatewaySession:
             try:
                 ib = self._connect(self.role, self.settings)
             except KeyboardInterrupt:
+                raise
+            except ClientIdInUseError:
+                # A second process already owns this role's client id --
+                # a config error, not a transient outage. Propagate
+                # instead of retrying forever (audit M5).
                 raise
             except Exception as exc:
                 self._begin_outage(f"connect failed: {exc}")

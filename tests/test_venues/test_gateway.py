@@ -12,6 +12,7 @@ from functools import partial
 
 import pytest
 
+from src.venues.ibkr.clients import ClientIdInUseError
 from src.venues.ibkr.gateway import (
     BACKOFF_CAP_S,
     ConnectionEvent,
@@ -215,6 +216,17 @@ class TestEnsureConnected:
         with pytest.raises(RuntimeError, match="mode mismatch"):
             session.ensure_connected()
         assert len(connector.calls) == 1  # config error killed the loop, no retry
+
+    def test_client_id_in_use_error_propagates_not_retried(self):
+        # A clientId collision means a second process already owns this
+        # role -- a config error, not a transient outage -- so it must
+        # kill the process instead of being retried forever (audit M5).
+        connector = FakeConnector(ClientIdInUseError("client id 2 in use"), FakeIB())
+        session, _, sleeper = make_session(connector)
+        with pytest.raises(ClientIdInUseError, match="client id 2 in use"):
+            session.ensure_connected()
+        assert len(connector.calls) == 1  # config error killed the loop, no retry
+        assert sleeper.sleeps == []  # never entered backoff
 
 
 class TestBackoff:
