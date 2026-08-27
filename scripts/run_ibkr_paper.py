@@ -121,13 +121,19 @@ def main(argv: list[str] | None = None) -> int:
     # entirely; that is treated as its own refusal rather than silently
     # skipped, because check_staleness's "None skips this check" path is
     # reserved for data that is absent BY DESIGN, not data this file simply
-    # predates -- an old payload must be regenerated, not trusted.
+    # predates -- an old payload must be regenerated, not trusted. A
+    # disk-sourced payload's sweep_ts_utc is likewise NEVER legitimately
+    # null (run_gtm_paper.py refuses to write one itself -- see its own
+    # staleness gate), so a present-but-null value gets the exact same
+    # refusal as an absent key: ``.get()`` returns None either way, so one
+    # check covers both.
     payload = json.loads(signals_path.read_text(encoding="utf-8"))
     reasons: list[str] = []
-    if "sweep_ts_utc" not in payload:
+    if payload.get("sweep_ts_utc") is None:
         reasons.append(
-            "signals payload missing 'sweep_ts_utc' (old-format file -- regenerate "
-            "with scripts/run_gtm_paper.py)"
+            "signals payload has no usable 'sweep_ts_utc' (missing key, or a null "
+            "value from an unparseable sweep filename -- old/invalid file; "
+            "regenerate with scripts/run_gtm_paper.py)"
         )
     if "inits" not in payload:
         reasons.append(

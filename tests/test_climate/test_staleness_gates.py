@@ -151,6 +151,25 @@ def test_freshest_init_by_target_returns_empty_without_init_date():
     assert freshest_init_by_target(frame) == {}
 
 
+def test_freshest_init_by_target_fitted_leads_excludes_an_unfit_shortest_lead():
+    """Safety-asymmetry fix (controller ruling R11): the shortest lead for
+    2026-08 (lead=1, init '2026-08') has perfectly finite fc_mean_C/fc_sd_C
+    but was never fit by the model. Without fitted_leads this function
+    cannot tell and reports the fresher '2026-08' -- exactly the
+    dangerous direction, since predictive_by_target_month would actually
+    have skipped that row (model.predict gives it NaN) and fallen back to
+    lead=2's staler '2026-07' init. Passing fitted_leads=[2] must
+    reproduce that real selection.
+    """
+    frame = _frame_two_targets()
+    without_fitted = freshest_init_by_target(frame)
+    assert without_fitted["2026-08"] == "2026-08"  # the unsafe/optimistic answer
+
+    with_fitted = freshest_init_by_target(frame, fitted_leads=[2])
+    assert with_fitted["2026-08"] == "2026-07"  # matches what the model actually priced off
+    assert with_fitted["2026-09"] == "2026-07"  # 2026-09's lead=1 is also excluded
+
+
 # --------------------------------------------------------------------------- #
 # sweep_ts_from_path
 # --------------------------------------------------------------------------- #
@@ -185,20 +204,54 @@ def _model_json(path) -> None:
     model.to_json(path)
 
 
-def _write_old_sweep(ticks_root, old_ts: datetime) -> None:
-    sweep_dir = ticks_root / "quotes" / f"date={old_ts.strftime('%Y-%m-%d')}"
-    sweep_dir.mkdir(parents=True)
-    rows = pd.DataFrame(
+def _sweep_rows(ts_iso: str) -> pd.DataFrame:
+    return pd.DataFrame(
         [
-            dict(ts_utc=old_ts.isoformat(), con_id=101, symbol="GTM", expiry="20260910",
+            dict(ts_utc=ts_iso, con_id=101, symbol="GTM", expiry="20260910",
                  strike=0.8, right="C", bid=0.40, ask=0.44, last=0.42, close=0.41,
                  bid_size=10, ask_size=10, data_type="delayed"),
-            dict(ts_utc=old_ts.isoformat(), con_id=102, symbol="GTM", expiry="20260910",
+            dict(ts_utc=ts_iso, con_id=102, symbol="GTM", expiry="20260910",
                  strike=0.8, right="P", bid=0.54, ask=0.58, last=0.56, close=0.55,
                  bid_size=10, ask_size=10, data_type="delayed"),
         ]
     )
-    rows.to_parquet(sweep_dir / old_ts.strftime("quotes-%H%M%SZ.parquet"), index=False)
+
+
+def _write_old_sweep(ticks_root, old_ts: datetime) -> None:
+    sweep_dir = ticks_root / "quotes" / f"date={old_ts.strftime('%Y-%m-%d')}"
+    sweep_dir.mkdir(parents=True)
+    _sweep_rows(old_ts.isoformat()).to_parquet(
+        sweep_dir / old_ts.strftime("quotes-%H%M%SZ.parquet"), index=False
+    )
+
+
+def _write_badly_named_sweep(ticks_root, ts: datetime) -> None:
+    """A real, on-disk, well-schemaed sweep whose FILENAME doesn't match
+    the recorder's own quotes-HHMMSSZ.parquet convention (Finding 2a)."""
+    sweep_dir = ticks_root / "quotes" / f"date={ts.strftime('%Y-%m-%d')}"
+    sweep_dir.mkdir(parents=True)
+    _sweep_rows(ts.isoformat()).to_parquet(sweep_dir / "quotes_dump.parquet", index=False)
+
+
+def _fresh_init_frame(now: datetime) -> pd.DataFrame:
+    """One row on an unrelated target month with a fresh init, so an
+    entrypoint test isolates whatever sweep-related reason is under test
+    (the ladder join finds no matching target anyway, since the quotes
+    resolve to '2026-08' via the expiry heuristic -- irrelevant here).
+    """
+    expected_init = expected_latest_init(now.date())
+    return pd.DataFrame(
+        {
+            "target_month": ["2099-01"],
+            "lead_month": [1],
+            "init_date": [pd.Timestamp(f"{expected_init}-01")],
+            "y_C": [np.nan],
+            "fc_mean_C": [1.0],
+            "fc_sd_C": [0.1],
+            "target_year_frac": [2099.042],
+            "month_of_year": [1],
+        }
+    )
 
 
 def test_run_gtm_paper_refuses_a_stale_sweep_and_writes_no_signals_file(
@@ -212,24 +265,9 @@ def test_run_gtm_paper_refuses_a_stale_sweep_and_writes_no_signals_file(
     _model_json(model_path)
 
     now = datetime.now(timezone.utc)
-    expected_init = expected_latest_init(now.date())
-    # A fresh init on an unrelated target month keeps this test isolated to
-    # the sweep-staleness reason (the ladder join finds no matching target
-    # anyway, since the quotes resolve to '2026-08' via the expiry
-    # heuristic -- irrelevant to the gate under test).
-    frame = pd.DataFrame(
-        {
-            "target_month": ["2099-01"],
-            "lead_month": [1],
-            "init_date": [pd.Timestamp(f"{expected_init}-01")],
-            "y_C": [np.nan],
-            "fc_mean_C": [1.0],
-            "fc_sd_C": [0.1],
-            "target_year_frac": [2099.042],
-            "month_of_year": [1],
-        }
+    monkeypatch.setattr(
+        run_gtm_paper_mod, "build_training_frame", lambda root: _fresh_init_frame(now)
     )
-    monkeypatch.setattr(run_gtm_paper_mod, "build_training_frame", lambda root: frame)
 
     _write_old_sweep(ticks_root, now - timedelta(hours=2))
 
@@ -246,6 +284,43 @@ def test_run_gtm_paper_refuses_a_stale_sweep_and_writes_no_signals_file(
     assert not (root / "paper" / "gtm_signals.json").exists()
     captured = capsys.readouterr()
     assert "sweep" in captured.err
+
+
+def test_run_gtm_paper_refuses_when_the_sweep_filename_does_not_parse(
+    tmp_path, monkeypatch, capsys
+):
+    """Finding 2a: a real, FRESH, on-disk sweep whose filename fails
+    sweep_ts_from_path's regex must refuse just as loudly as a stale one --
+    it must not silently produce sweep_ts_utc=null and sail through.
+    """
+    import scripts.run_gtm_paper as run_gtm_paper_mod
+
+    root = tmp_path / "climate_root"
+    ticks_root = tmp_path / "ibkr_ticks"
+    model_path = tmp_path / "gtm_emos.json"
+    _model_json(model_path)
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        run_gtm_paper_mod, "build_training_frame", lambda root: _fresh_init_frame(now)
+    )
+
+    _write_badly_named_sweep(ticks_root, now)  # fresh timestamp, bad filename
+
+    rc = run_gtm_paper_mod.main(
+        [
+            "--root", str(root),
+            "--model", str(model_path),
+            "--ticks-root", str(ticks_root),
+            "--universe-json", str(tmp_path / "no_universe.json"),
+        ]
+    )
+
+    assert rc == 1
+    assert not (root / "paper" / "gtm_signals.json").exists()
+    captured = capsys.readouterr()
+    assert "could not parse" in captured.err
+    assert "quotes_dump.parquet" in captured.err
 
 
 # --------------------------------------------------------------------------- #
@@ -293,3 +368,52 @@ def test_run_ibkr_paper_refuses_old_format_payload_before_adapter_construction(
     captured = capsys.readouterr()
     assert "sweep_ts_utc" in captured.err
     assert "inits" in captured.err
+
+
+def test_run_ibkr_paper_refuses_present_but_null_sweep_ts_utc_before_adapter_construction(
+    tmp_path, monkeypatch, capsys
+):
+    """Finding 2b: a NEW-format payload (has both keys) whose sweep_ts_utc
+    is null -- e.g. run_gtm_paper.py's own gate would refuse this today,
+    but a hand-edited or otherwise-produced file could still carry one --
+    must refuse exactly like a missing key, not silently skip the sweep
+    check via check_staleness's None-means-absent-by-design path.
+    """
+    import scripts.run_ibkr_paper as run_ibkr_paper_mod
+
+    monkeypatch.setenv("IBKR_PORT", "4002")
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+
+    class _RaisingAdapter:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError(
+                "IBKRAdapter must never be constructed for a null sweep_ts_utc payload"
+            )
+
+    monkeypatch.setattr(run_ibkr_paper_mod, "IBKRAdapter", _RaisingAdapter)
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signals_path = tmp_path / "gtm_signals.json"
+    signals_path.write_text(
+        json.dumps(
+            {
+                "ts_utc": now_str,  # fresh signal
+                "sweep_ts_utc": None,  # present key, null value -- unparseable sweep name
+                "inits": {},  # present, empty -- isolates the test to sweep_ts_utc
+                "n_quotes": 0,
+                "n_ladder": 0,
+                "n_tradeable": 0,
+                "predictive_targets": {},
+                "go_live": {"passed": False, "reasons": [], "metrics": {}},
+                "signals": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = run_ibkr_paper_mod.main(["--signals", str(signals_path), "--simulate"])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "sweep_ts_utc" in captured.err
+    assert "inits" not in captured.err  # isolated: only the sweep reason fired

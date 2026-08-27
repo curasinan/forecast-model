@@ -11,13 +11,18 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
 
 from climate.emos import EmosModel
-from climate.ladder import ladder_table, latest_gtm_quotes, sweep_ts_from_path
+from climate.ladder import (
+    ladder_table,
+    latest_gtm_quotes,
+    latest_sweep_path,
+    sweep_ts_from_path,
+)
 from climate.paper_criteria import (
     ClimateEdgeGate,
     ClimateGoLiveCriteria,
@@ -72,18 +77,34 @@ def predictive_by_target_month(
     }
 
 
-def freshest_init_by_target(frame: pd.DataFrame) -> dict[str, str]:
+def freshest_init_by_target(
+    frame: pd.DataFrame, fitted_leads: Iterable[int] | None = None
+) -> dict[str, str]:
     """SEAS5 init month ('YYYY-MM') behind each target's predictive pick.
 
     Mirrors :func:`predictive_by_target_month`'s own selection -- shortest
-    available lead per target month, ties broken by first occurrence --
-    without needing the fitted ``EmosModel``: it uses the frame's own
-    ``fc_mean_C`` / ``fc_sd_C`` finiteness as the "this row would give a
-    finite (mu, sigma)" proxy in place of calling ``model.predict``. That
-    proxy is exact whenever every lead present in the frame has actually
-    been fit (the production case -- see ``EmosModel.fit``'s ``skipped``
-    dict for the only way it can differ) and lets init-freshness be
-    checked before/without a model at hand.
+    available lead per target month, ties broken by first occurrence.
+
+    SAFETY ASYMMETRY (read this before touching the filter below): without
+    ``fitted_leads``, the "usable row" test here (finite ``fc_mean_C`` /
+    ``fc_sd_C``) is a SUPERSET of what ``predictive_by_target_month``
+    actually uses (a *model-predicted* finite (mu, sigma), which also
+    requires the model to have fit that lead at all -- see
+    ``EmosModel.fit``'s ``skipped`` dict). Whenever a lead is skipped, this
+    function -- called without ``fitted_leads`` -- can therefore only ever
+    report an init that is FRESHER THAN OR EQUAL TO the one the model
+    actually priced off, because it may select a shorter lead the model
+    never scored. For a staleness gate that direction is the DANGEROUS
+    one: ``check_staleness``'s ``require_fresh_init`` check could PASS on
+    this function's answer while the price ``predictive_by_target_month``
+    actually produced was priced off a genuinely stale init. Pass
+    ``fitted_leads`` (``run_paper`` passes ``model.params.keys()``) to
+    close that gap: rows whose lead is not in ``fitted_leads`` are
+    excluded from the usable set, making the selection exactly match what
+    ``predictive_by_target_month`` would pick. Omitting ``fitted_leads``
+    is only safe when the caller independently knows every lead present
+    in the frame was fit.
+
     ``predictive_by_target_month``'s own 2-tuple return is untouched by
     this function -- ``climate.ladder.ladder_table`` still unpacks it as
     (mu, sigma).
@@ -99,6 +120,9 @@ def freshest_init_by_target(frame: pd.DataFrame) -> dict[str, str]:
         return {}
     work = frame[list(needed)].copy()
     ok = np.isfinite(work["fc_mean_C"]) & np.isfinite(work["fc_sd_C"])
+    if fitted_leads is not None:
+        fitted = {int(lead) for lead in fitted_leads}
+        ok &= work["lead_month"].astype(int).isin(fitted)
     work = work[ok]
     if work.empty:
         return {}
@@ -133,7 +157,10 @@ def run_paper(
     ``ticks_root``); None when a caller injected ``quotes_df`` directly
     (tests -- there is no sweep file to be stale) -- and ``inits``, the
     freshest SEAS5 init month behind each target
-    (:func:`freshest_init_by_target`).
+    (:func:`freshest_init_by_target`, called with ``fitted_leads=
+    model.params.keys()`` so a lead the model skipped can never be
+    reported as the init behind a price -- see that function's docstring
+    for why the unfiltered form is unsafe here).
     """
     fee_model = fee_model or FlatCommissionFeeModel(0.01)
     predictive = predictive_by_target_month(frame, model)
@@ -143,8 +170,14 @@ def run_paper(
             raise ValueError("run_paper needs ticks_root or quotes_df")
         quotes_df = latest_gtm_quotes(ticks_root, universe_json=universe_json)
     sweep_ts_utc = None
-    if not quotes_injected and "sweep_path" in quotes_df.columns and len(quotes_df):
-        parsed = sweep_ts_from_path(quotes_df["sweep_path"].iloc[0])
+    if not quotes_injected:
+        # Resolve the sweep file directly rather than reading quotes_df's
+        # own sweep_path column: a sweep with zero GTM rows still needs a
+        # real freshness check (the column-based read would otherwise
+        # silently leave sweep_ts_utc None whenever the sweep happened to
+        # carry no GTM quotes, defeating the staleness gate for exactly
+        # the kind of degenerate sweep an operator most needs it to catch).
+        parsed = sweep_ts_from_path(latest_sweep_path(ticks_root))
         sweep_ts_utc = format_ts_utc(parsed) if parsed is not None else None
     ladder = ladder_table(quotes_df, predictive, fee_model=fee_model)
     gated = apply_edge_gate(ladder, gate=gate, fee_model=fee_model)
@@ -159,7 +192,7 @@ def run_paper(
     return {
         "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sweep_ts_utc": sweep_ts_utc,
-        "inits": freshest_init_by_target(frame),
+        "inits": freshest_init_by_target(frame, fitted_leads=model.params.keys()),
         "n_quotes": int(len(quotes_df)),
         "n_ladder": int(len(gated)),
         "n_tradeable": n_tradeable,

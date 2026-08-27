@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 from climate.dataset import build_training_frame  # noqa: E402
 from climate.emos import EmosModel  # noqa: E402
 from climate.fit import MODEL_REL  # noqa: E402
+from climate.ladder import latest_sweep_path  # noqa: E402
 from climate.paper import parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paths import data_root, warn_if_onedrive  # noqa: E402
@@ -108,7 +109,25 @@ def main(argv: list[str] | None = None) -> int:
     # file, so it is fresh by construction; run_ibkr_paper.py checks that
     # age against its OWN clock when it later reads the file.
     sweep_ts = parse_ts_utc(payload["sweep_ts_utc"]) if payload.get("sweep_ts_utc") else None
-    reasons = check_staleness(
+    reasons: list[str] = []
+    if sweep_ts is None:
+        # This entrypoint ALWAYS loads quotes from disk (run_paper is
+        # never called with an injected quotes_df here), so a null
+        # sweep_ts_utc cannot mean "no sweep file to be stale" -- it means
+        # a real sweep file was found but its name did not match the
+        # recorder's own quotes-HHMMSSZ.parquet convention. That must
+        # refuse just as loudly as an actually-old sweep; check_staleness's
+        # "None skips this check" path is reserved for data that is absent
+        # BY DESIGN (e.g. an injected quotes_df in tests), not this case.
+        try:
+            bad_path = latest_sweep_path(ticks_root)
+        except FileNotFoundError:
+            bad_path = f"{ticks_root}/quotes/date=*/*.parquet"
+        reasons.append(
+            f"could not parse a sweep timestamp from {bad_path} "
+            "(unrecognised filename; expected quotes-HHMMSSZ.parquet)"
+        )
+    reasons += check_staleness(
         sweep_ts=sweep_ts,
         signal_ts=None,
         inits_by_target=payload.get("inits"),
