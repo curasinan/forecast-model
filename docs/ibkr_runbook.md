@@ -348,7 +348,7 @@ prices off this one number.
   (`src/venues/ibkr/recorder.py:24-28`). Once the snapshot file's mtime
   exceeds `SNAPSHOT_STALE_DAYS` (35, `src/venues/ibkr/recorder.py:58`), the
   next seed logs a WARNING naming the refresh command
-  (`src/venues/ibkr/recorder.py:192-196`, `SNAPSHOT_REFRESH_CMD` defined at
+  (`src/venues/ibkr/recorder.py:193-196`, `SNAPSHOT_REFRESH_CMD` defined at
   `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
   age, informationally, as `snapshot_age_days=` on its OK message
   (`scripts/check_ibkr_recorder.py:201-214,295-303`) -- it is never a
@@ -387,8 +387,14 @@ non-`OK` status triggers both alert channels: the durable log sink
 (`_append_health_log`, appends to `logs\ibkr_health.log` by default --
 `scripts/check_ibkr_recorder.py:79,397-416`) and `send_alert`
 (`monitoring/heartbeat.py:79-113`, imported at
-`scripts/check_ibkr_recorder.py:74`). Expect **both**: a new line in
-`logs\ibkr_health.log`, and a Telegram message.
+`scripts/check_ibkr_recorder.py:74`). If Telegram alerting has not yet been
+configured (see `MIGRATION_CHECKPOINT.md` open action #4), `ALERT_METHOD`
+is unset and `send_alert` silently degrades to `log_only`
+(`monitoring/heartbeat.py:83,112-113`) -- only the `logs\ibkr_health.log`
+line will appear on this first pass, which is expected, not a failure; set
+the three HKCU vars below first, then re-run the test and expect both.
+Otherwise expect **both**: a new line in `logs\ibkr_health.log`, and a
+Telegram message.
 
 If neither arrives, re-check the user-level environment variables
 `ALERT_METHOD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` -- set with
