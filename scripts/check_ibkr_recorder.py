@@ -426,9 +426,21 @@ def main(argv: list[str] | None = None) -> int:
         print(message)
     if status == "OK":
         return 0
-    # Durable sink first: the local record of a failure must not depend on
-    # alert delivery succeeding.
-    _append_health_log(args.health_log_path, status, message, now=now)
+    # The two channels are independently best-effort: a sink write failure
+    # (permission-denied logs/, full disk, an AV file lock -- all plausible
+    # over 365 unattended days) must never prevent the Telegram attempt, and
+    # a Telegram failure must never prevent the sink write. Each is wrapped
+    # in its own try/except so one channel's exception can't propagate out
+    # of main() and skip the other -- an uncaught exception here would still
+    # exit 1 (CPython's default), but only by accident, and only after
+    # silently dropping whichever channel came second. The exit code stays
+    # a deliberate 1 either way.
+    try:
+        _append_health_log(args.health_log_path, status, message, now=now)
+    except Exception as exc:  # noqa: BLE001 - the alert attempt below must still run
+        if not args.quiet:
+            print(f"_append_health_log failed ({exc}); durable record may be lost",
+                  file=sys.stderr)
     # send_alert already degrades Telegram failures to a CRITICAL log line,
     # but nothing it could ever raise may mask the unhealthy exit code.
     try:

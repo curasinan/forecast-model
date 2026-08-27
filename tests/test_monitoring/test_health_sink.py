@@ -124,6 +124,67 @@ def test_two_consecutive_failures_append_two_lines(tmp_path, alerts):
 
 
 # --------------------------------------------------------------------------- #
+# The sink and the alert are independently best-effort (fix for the review
+# finding: an unguarded _append_health_log call could raise and skip
+# send_alert entirely -- e.g. permission-denied logs/, full disk, an AV file
+# lock, all plausible over 365 unattended days).
+# --------------------------------------------------------------------------- #
+
+
+def test_sink_raising_does_not_prevent_send_alert(tmp_path, alerts, monkeypatch, capsys):
+    """A durable-sink write failure must not skip the Telegram attempt.
+
+    Built without --quiet (unlike the shared ``_argv`` helper) specifically
+    to also pin that the failure note reaches stderr -- ``_argv``'s baked-in
+    --quiet would suppress it, same as it already suppresses send_alert's
+    own failure note.
+    """
+    def boom(log_path, status, message, now=None):
+        raise OSError("permission denied (simulated)")
+
+    monkeypatch.setattr(probe, "_append_health_log", boom)
+    _write_state(tmp_path, age_minutes=120)  # STALE
+    _healthy_sync_runs(tmp_path)
+    argv = [
+        "--state-path", str(tmp_path / "state" / "recorder_state.json"),
+        "--events-path", str(tmp_path / "ibkr_events.jsonl"),
+        "--sync-runs-path", str(tmp_path / "paper" / "ibkr_sync_runs.jsonl"),
+        "--health-log-path", str(tmp_path / "ibkr_health.log"),
+    ]
+
+    rc = probe.main(argv)
+
+    assert rc == 1  # exit code stays deliberate, not an accidental uncaught-exception 1
+    assert len(alerts) == 1
+    assert "STALE" in alerts[0]
+    # The failure is noted, but nothing secret (there is nothing secret to
+    # leak here in the first place -- this just pins the error path).
+    err = capsys.readouterr().err
+    assert "_append_health_log failed" in err
+
+
+def test_send_alert_raising_still_writes_sink_line(tmp_path, monkeypatch):
+    """The converse: a Telegram failure must not skip the durable sink write."""
+    def boom(message, method=None):
+        raise RuntimeError("telegram exploded")
+
+    monkeypatch.setattr(probe, "send_alert", boom)
+    _write_state(tmp_path, age_minutes=120)  # STALE
+    _healthy_sync_runs(tmp_path)
+    health_log = tmp_path / "ibkr_health.log"
+
+    rc = probe.main(_argv(tmp_path, health_log=health_log))
+
+    assert rc == 1  # unhealthy exit preserved, no exception escapes
+    assert health_log.exists()
+    lines = health_log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    _, status, rest = lines[0].split(" ", 2)
+    assert status == "STALE"
+    assert "STALE" in rest
+
+
+# --------------------------------------------------------------------------- #
 # M6: DEGRADED -- fresh heartbeat, thin data flow
 # --------------------------------------------------------------------------- #
 
