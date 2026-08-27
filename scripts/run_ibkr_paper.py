@@ -33,6 +33,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from climate.paper import parse_ts_utc  # noqa: E402
+from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paths import data_root  # noqa: E402
 from src.domain.ids import MarketId  # noqa: E402
 from src.models.prediction import EdgeSignal  # noqa: E402
@@ -107,6 +109,44 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
+    signals_path = Path(args.signals) if args.signals else data_root() / "paper" / "gtm_signals.json"
+    if not signals_path.exists():
+        print(f"no signals at {signals_path}; run scripts/run_gtm_paper.py first", file=sys.stderr)
+        return 1
+
+    # Staleness gate (H2): checked BEFORE the adapter ever connects to the
+    # venue -- a stale sweep, stale signal file, or stale SEAS5 init must
+    # refuse loudly without touching Gateway at all. An old-format payload
+    # (written before this gate existed) is missing sweep_ts_utc/inits
+    # entirely; that is treated as its own refusal rather than silently
+    # skipped, because check_staleness's "None skips this check" path is
+    # reserved for data that is absent BY DESIGN, not data this file simply
+    # predates -- an old payload must be regenerated, not trusted.
+    payload = json.loads(signals_path.read_text(encoding="utf-8"))
+    reasons: list[str] = []
+    if "sweep_ts_utc" not in payload:
+        reasons.append(
+            "signals payload missing 'sweep_ts_utc' (old-format file -- regenerate "
+            "with scripts/run_gtm_paper.py)"
+        )
+    if "inits" not in payload:
+        reasons.append(
+            "signals payload missing 'inits' (old-format file -- regenerate with "
+            "scripts/run_gtm_paper.py)"
+        )
+    sweep_ts = parse_ts_utc(payload["sweep_ts_utc"]) if payload.get("sweep_ts_utc") else None
+    signal_ts = parse_ts_utc(payload["ts_utc"]) if payload.get("ts_utc") else None
+    reasons += check_staleness(
+        sweep_ts=sweep_ts,
+        signal_ts=signal_ts,
+        inits_by_target=payload.get("inits"),
+        now=datetime.now(timezone.utc),
+    )
+    if reasons:
+        for reason in reasons:
+            print(reason, file=sys.stderr)
+        return 1
+
     if args.simulate:
         adapter = IBKRAdapter(settings, role="research", read_only=True)
     else:
@@ -118,10 +158,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"account={adapter.account} mode={adapter.mode} simulate={args.simulate} "
           f"orders_mode={args.mode}")
 
-    signals_path = Path(args.signals) if args.signals else data_root() / "paper" / "gtm_signals.json"
-    if not signals_path.exists():
-        print(f"no signals at {signals_path}; run scripts/run_gtm_paper.py first", file=sys.stderr)
-        return 1
     intents = load_intents(signals_path, adapter, args.top, args.min_edge)
     print(f"{len(intents)} intents from {signals_path}")
 

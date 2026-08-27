@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -23,7 +24,8 @@ if str(REPO_ROOT) not in sys.path:
 from climate.dataset import build_training_frame  # noqa: E402
 from climate.emos import EmosModel  # noqa: E402
 from climate.fit import MODEL_REL  # noqa: E402
-from climate.paper import run_paper, write_paper_payload  # noqa: E402
+from climate.paper import parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
+from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paths import data_root, warn_if_onedrive  # noqa: E402
 
 log = logging.getLogger("run_gtm_paper")
@@ -97,6 +99,27 @@ def main(argv: list[str] | None = None) -> int:
         resolved_months=args.resolved_months,
         require_live_paper=not args.hindcast_gate_only,
     )
+
+    # Staleness gate (H2): refuse to write a signals file priced off a
+    # stale sweep or a stale SEAS5 init. This must run BEFORE
+    # write_paper_payload -- a stale sweep must not even produce a
+    # gtm_signals.json for run_ibkr_paper.py to (mis)trust later. No
+    # signal-file-age check here: this process is the one writing the
+    # file, so it is fresh by construction; run_ibkr_paper.py checks that
+    # age against its OWN clock when it later reads the file.
+    sweep_ts = parse_ts_utc(payload["sweep_ts_utc"]) if payload.get("sweep_ts_utc") else None
+    reasons = check_staleness(
+        sweep_ts=sweep_ts,
+        signal_ts=None,
+        inits_by_target=payload.get("inits"),
+        now=datetime.now(timezone.utc),
+    )
+    if reasons:
+        for reason in reasons:
+            print(reason, file=sys.stderr)
+        log.error("refusing to write gtm_signals.json: %d staleness reason(s)", len(reasons))
+        return 1
+
     out = write_paper_payload(payload, root=root)
     log.info(
         "ladder=%s tradeable=%s go_live=%s -> %s",

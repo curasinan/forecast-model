@@ -26,7 +26,8 @@ is a huge relative move there, and the audit flagged strike-ladder extremes.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -273,6 +274,86 @@ def apply_edge_gate(
     return out
 
 
+@dataclass(frozen=True)
+class StalenessGates:
+    """Operator-approved refusal thresholds for pricing inputs (audit H2).
+
+    The weekly failure mode this guards against: a logged-out IBKR Gateway
+    leaves days-old sweep parquets and signal files sitting on disk, and
+    without an age check the paper chain happily prices -- and would
+    place GTC orders -- off them. ``require_fresh_init`` additionally
+    catches a SEAS5 fetch that was simply never re-run this month: the
+    freshest AVAILABLE init can be perfectly parseable and still be a
+    month stale.
+    """
+
+    max_sweep_age_min: float = 40.0
+    max_signal_age_min: float = 90.0
+    require_fresh_init: bool = True
+
+
+def expected_latest_init(today: date) -> str:
+    """'YYYY-MM' of the SEAS5 init an operator should expect to be freshest.
+
+    SEAS5 arrives ~the 5th-6th of each month (manual fetch); on/after the
+    7th this month's init is expected to exist, before that the previous
+    month's is still the freshest one that could possibly have landed.
+    """
+    year, month = today.year, today.month
+    if today.day < 7:
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+    return f"{year:04d}-{month:02d}"
+
+
+def check_staleness(
+    *,
+    sweep_ts: datetime | None,
+    signal_ts: datetime | None,
+    inits_by_target: Mapping[str, str] | None,
+    now: datetime,
+    gates: StalenessGates | None = None,
+) -> list[str]:
+    """Human-readable refusal reasons for stale pricing inputs; empty == fresh.
+
+    Each of ``sweep_ts``, ``signal_ts``, ``inits_by_target`` may be None,
+    which skips ONLY that component's check -- reserved for data that is
+    absent BY DESIGN (e.g. a caller that has no signal-file timestamp to
+    offer at all). A caller that HAS the data must never pass None for it:
+    that would silently defeat the gate it is supposed to pass through.
+    Both paper entrypoints (``scripts/run_gtm_paper.py``,
+    ``scripts/run_ibkr_paper.py``) always have every input they call this
+    with, so they never take that skip path in practice.
+    """
+    gates = gates or StalenessGates()
+    reasons: list[str] = []
+    if sweep_ts is not None:
+        age_min = (now - sweep_ts).total_seconds() / 60.0
+        if age_min > gates.max_sweep_age_min:
+            reasons.append(
+                f"sweep is {age_min:.1f} min old, max {gates.max_sweep_age_min:.0f} min "
+                "(recorder sweep may be stale -- check the Gateway session)"
+            )
+    if signal_ts is not None:
+        age_min = (now - signal_ts).total_seconds() / 60.0
+        if age_min > gates.max_signal_age_min:
+            reasons.append(
+                f"signal file is {age_min:.1f} min old, max {gates.max_signal_age_min:.0f} "
+                "min (re-run scripts/run_gtm_paper.py)"
+            )
+    if gates.require_fresh_init and inits_by_target is not None:
+        expected = expected_latest_init(now.date())
+        for target in sorted(inits_by_target):
+            init = inits_by_target[target]
+            if init != expected:
+                reasons.append(
+                    f"target {target}: SEAS5 init {init} is not the expected latest "
+                    f"{expected} (fetch this month's SEAS5 init)"
+                )
+    return reasons
+
+
 __all__ = [
     "DEFAULT_COMMISSION",
     "DEFAULT_MIN_EDGE",
@@ -286,4 +367,7 @@ __all__ = [
     "min_edge_from_spread",
     "evaluate_climate_edge",
     "apply_edge_gate",
+    "StalenessGates",
+    "expected_latest_init",
+    "check_staleness",
 ]

@@ -47,7 +47,9 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
@@ -197,6 +199,32 @@ def latest_sweep_path(ticks_root: str | Path) -> Path:
     if not files:
         raise FileNotFoundError(f"no sweep parquets under {ticks_root}/quotes/date=*/")
     return files[-1]
+
+
+_SWEEP_PATH_RE = re.compile(
+    r"date=(\d{4}-\d{2}-\d{2})[\\/]+quotes-(\d{2})(\d{2})(\d{2})Z\.parquet$"
+)
+
+
+def sweep_ts_from_path(sweep_path: str | Path | None) -> datetime | None:
+    """UTC timestamp encoded in a recorder sweep path's partition + filename.
+
+    e.g. '.../quotes/date=2026-08-27/quotes-204638Z.parquet' ->
+    2026-08-27T20:46:38Z (staleness gate, audit finding H2). Returns None
+    for an empty/None path -- ``latest_gtm_quotes`` leaves ``sweep_path``
+    as ``""`` when its caller injects ``sweep_df`` directly (tests, or
+    ``climate.paper.run_paper``'s ``quotes_df`` bypass) -- or for a path
+    that does not match the recorder's own naming from
+    :func:`list_sweep_files`.
+    """
+    if not sweep_path:
+        return None
+    m = _SWEEP_PATH_RE.search(str(sweep_path).replace("\\", "/"))
+    if not m:
+        return None
+    date_s, hh, mm, ss = m.groups()
+    year, month, day = (int(part) for part in date_s.split("-"))
+    return datetime(year, month, day, int(hh), int(mm), int(ss), tzinfo=timezone.utc)
 
 
 def load_contract_labels(
@@ -432,6 +460,7 @@ __all__ = [
     "target_month_for_contract",
     "list_sweep_files",
     "latest_sweep_path",
+    "sweep_ts_from_path",
     "load_contract_labels",
     "latest_gtm_quotes",
     "ladder_table",
