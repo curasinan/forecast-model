@@ -110,9 +110,11 @@ Register-IbkrTask `
     -Settings $recorderSettings `
     -Description "ForecastEx quote sweeps (clientId 2, read-only) -> ~/quant_data/ibkr_ticks. Keep-alive: 5-min tick + IgnoreNew."
 
-# --- IBKR Recorder Health: hourly freshness check ---------------------------
+# --- IBKR Recorder Health: hourly freshness + data-flow + sync check --------
 # Seeded at the next top of the hour. The check script owns its own alerting
-# (Telegram); Task Scheduler discards its stdout.
+# (Telegram) and its own durable sink (logs\ibkr_health.log); the launcher
+# additionally tees stdout/stderr to logs\ibkr_health_task.log so Task
+# Scheduler's discarded stdout is no longer the only trace of a run.
 $healthSeed = $now.AddMinutes(-$now.Minute).AddSeconds(-$now.Second).AddMilliseconds(-$now.Millisecond).AddHours(1)
 Write-Host "IBKR Recorder Health first fire at: $healthSeed"
 
@@ -129,9 +131,10 @@ $healthSettings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 
+$healthLauncher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_health.ps1'
 $healthAction = New-ScheduledTaskAction `
-    -Execute $PythonExe `
-    -Argument "scripts\check_ibkr_recorder.py" `
+    -Execute 'powershell.exe' `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$healthLauncher`"" `
     -WorkingDirectory $RepoRoot
 
 Register-IbkrTask `
@@ -139,7 +142,7 @@ Register-IbkrTask `
     -Action $healthAction `
     -Triggers $healthTrigger `
     -Settings $healthSettings `
-    -Description "Hourly recorder freshness check (heartbeat age, parquet dirs); alerts via Telegram."
+    -Description "Hourly recorder freshness + data-flow (DEGRADED) + paper-sync freshness (SYNC_STALE) check; alerts via Telegram, durable sink logs\ibkr_health.log."
 
 # --- IBKR Paper Sync: daily reconciliation at 17:30 local -------------------
 # A GTC paper order can rest at ForecastEx for days; nothing that places an

@@ -41,8 +41,34 @@ def _write_events(data_root: Path, events: list[dict]) -> Path:
     return path
 
 
+def _write_healthy_sync_runs(data_root: Path, age_hours: float = 1.0) -> Path:
+    """A fresh 'ok': true sync-run line -- the sync axis this test file does
+    not exercise must stay healthy so these tests keep pinning ONLY the
+    recorder-heartbeat axis (see tests/test_monitoring/test_health_sink.py
+    for the sync axis and the combined-message behavior)."""
+    path = data_root / "paper" / "ibkr_sync_runs.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts_utc": (_now() - timedelta(hours=age_hours)).isoformat(),
+        "ok": True,
+    }
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    return path
+
+
 def _argv(state: Path, events: Path, extra: list[str] | None = None) -> list[str]:
-    return ["--state-path", str(state), "--events-path", str(events)] + (extra or [])
+    # data_root is state's grandparent (state = <data_root>/state/recorder_state.json,
+    # mirroring default_state_path()'s layout) even when state itself was never
+    # written (e.g. the missing-state test) -- Path arithmetic doesn't touch disk.
+    data_root = state.parent.parent
+    sync_runs = _write_healthy_sync_runs(data_root)
+    argv = [
+        "--state-path", str(state),
+        "--events-path", str(events),
+        "--sync-runs-path", str(sync_runs),
+        "--health-log-path", str(data_root / "ibkr_health.log"),
+    ]
+    return argv + (extra or [])
 
 
 @pytest.fixture
