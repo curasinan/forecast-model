@@ -8,6 +8,8 @@ asserted by monkeypatching the probe module's send_alert reference.
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -263,3 +265,55 @@ def test_gateway_schema_reconnect_clears_down(tmp_path, alerts):
     rc = probe.main(_argv(state, events))
     assert rc == 0
     assert alerts == []
+
+
+# --------------------------------------------------------------------------- #
+# H6: contract-universe snapshot aging (informational only, never a failure axis)
+# --------------------------------------------------------------------------- #
+
+
+def test_ok_message_includes_snapshot_age_days(tmp_path, alerts, capsys):
+    state = _write_state(tmp_path, age_minutes=5)
+    snapshot = tmp_path / "universe.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    ten_days_ago = time.time() - 10 * 86400
+    os.utime(snapshot, (ten_days_ago, ten_days_ago))
+
+    rc = probe.main(_argv(state, tmp_path / "ibkr_events.jsonl",
+                          ["--snapshot-path", str(snapshot)]))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "snapshot_age_days=10" in out
+
+
+def test_snapshot_age_days_is_na_when_file_missing(tmp_path, alerts, capsys):
+    state = _write_state(tmp_path, age_minutes=5)
+    missing_snapshot = tmp_path / "does_not_exist.json"
+
+    rc = probe.main(_argv(state, tmp_path / "ibkr_events.jsonl",
+                          ["--snapshot-path", str(missing_snapshot)]))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "snapshot_age_days=n/a" in out
+
+
+def test_stale_snapshot_does_not_flip_status_or_exit_code(tmp_path, alerts, capsys):
+    """A very old snapshot (well past the recorder's 35-day WARNING threshold)
+    must still report OK/exit 0 -- staleness is surfaced as text, never as a
+    failure axis or a nonzero exit code."""
+    state = _write_state(tmp_path, age_minutes=5)
+    snapshot = tmp_path / "universe.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    ancient = time.time() - 400 * 86400
+    os.utime(snapshot, (ancient, ancient))
+
+    rc = probe.main(_argv(state, tmp_path / "ibkr_events.jsonl",
+                          ["--snapshot-path", str(snapshot)]))
+
+    assert rc == 0
+    assert alerts == []
+    out = capsys.readouterr().out
+    assert "ibkr recorder OK" in out
+    assert "snapshot_age_days=400" in out

@@ -15,7 +15,9 @@ status is also dispatched through monitoring.heartbeat.send_alert, which
 honors the ALERT_METHOD / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars):
 
     OK        exit 0  heartbeat fresh, data flow healthy; reports age,
-                       rows/universe, today's parquet count
+                       rows/universe, today's parquet count, and the
+                       contract-universe snapshot's age in days (H6,
+                       informational only -- never a failure axis)
     STALE     exit 1  heartbeat older than --max-age-minutes
     CRITICAL  exit 1  state file missing or unreadable
     DOWN      exit 1  last event is an unexpected disconnect, no reconnect yet
@@ -75,6 +77,9 @@ from src.utils.dates import parse_iso8601  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EVENTS_PATH = REPO_ROOT / "logs" / "ibkr_events.jsonl"
 DEFAULT_HEALTH_LOG_PATH = REPO_ROOT / "logs" / "ibkr_health.log"
+# H6: same file the recorder seeds from (src/venues/ibkr/recorder.py); this
+# probe only surfaces its age informationally, it never fails on it.
+DEFAULT_SNAPSHOT_PATH = REPO_ROOT / "data" / "ibkr_universe_live.json"
 # 3x the 20-minute sweep cadence: one sweep takes ~13 min, so a healthy
 # recorder can never legitimately be more than ~2 intervals behind.
 DEFAULT_MAX_AGE_MINUTES = 60.0
@@ -193,18 +198,37 @@ def _count_today_parquet(state_path: Path, now: datetime) -> int | None:
         return None
 
 
+def _snapshot_age_days(snapshot_path: Path, now: datetime) -> int | None:
+    """Whole days since the universe snapshot's mtime, or None if missing/unreadable.
+
+    H6: informational only -- this NEVER becomes a failure axis or changes
+    the exit code. The recorder (src/venues/ibkr/recorder.py) already logs a
+    WARNING at seed time once this crosses 35 days; the probe just surfaces
+    the same number in the OK message so an operator sees decay without
+    digging through recorder logs.
+    """
+    try:
+        mtime = snapshot_path.stat().st_mtime
+    except OSError:
+        return None
+    return int((now.timestamp() - mtime) / 86400.0)
+
+
 def run_check(
     state_path: Path | str,
     events_path: Path | str,
     max_age_minutes: float,
     now: datetime | None = None,
+    snapshot_path: Path | str = DEFAULT_SNAPSHOT_PATH,
 ) -> tuple[str, str]:
     """Run the recorder-heartbeat axis. Returns (status, one-line ASCII message).
 
     status is one of "OK" / "STALE" / "CRITICAL" / "DOWN" / "DEGRADED"; only
     "OK" is healthy. Pure function of the filesystem -- no network, no side
     effects. (The sync-run axis is a separate check; see
-    ``_check_sync_freshness``.)
+    ``_check_sync_freshness``.) ``snapshot_path`` only feeds the
+    informational ``snapshot_age_days=`` field on the OK message (H6); it
+    never affects the returned status.
     """
     now = now or datetime.now(timezone.utc)
     state_path = Path(state_path)
@@ -270,9 +294,12 @@ def run_check(
 
     n_files = _count_today_parquet(state_path, now)
     files_part = "n/a" if n_files is None else str(n_files)
+    age_days = _snapshot_age_days(Path(snapshot_path), now)
+    snapshot_part = "n/a" if age_days is None else str(age_days)
     return "OK", (
         f"ibkr recorder OK: heartbeat {age_min:.1f} min old; last sweep rows={rows} "
-        f"sweep_seconds={sweep_seconds}; parquet files today={files_part}"
+        f"sweep_seconds={sweep_seconds}; parquet files today={files_part}; "
+        f"snapshot_age_days={snapshot_part}"
     )
 
 
@@ -410,12 +437,17 @@ def main(argv: list[str] | None = None) -> int:
                          "SYNC_STALE (default: %(default)s = one daily cadence + 2h slack)")
     ap.add_argument("--health-log-path", default=str(DEFAULT_HEALTH_LOG_PATH),
                     help="durable append-only sink for non-OK results (default: %(default)s)")
+    ap.add_argument("--snapshot-path", default=str(DEFAULT_SNAPSHOT_PATH),
+                    help="contract-universe snapshot file (H6): its age is reported "
+                         "informationally as snapshot_age_days= on the OK message, never "
+                         "a failure axis (default: %(default)s)")
     ap.add_argument("--quiet", action="store_true", help="suppress stdout (alerts still fire)")
     args = ap.parse_args(argv)
 
     now = datetime.now(timezone.utc)
     recorder_status, recorder_message = run_check(
         args.state_path, args.events_path, args.max_age_minutes, now=now,
+        snapshot_path=args.snapshot_path,
     )
     sync_status, sync_message = _check_sync_freshness(
         args.sync_runs_path, args.max_sync_age_hours, now,

@@ -6,7 +6,10 @@ data root points at tmp_path.
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -242,4 +245,37 @@ class TestRecordOnce:
         assert state["universe_size"] == 0
         assert not (settings.resolved_data_root / "quotes").exists()
         assert (settings.resolved_data_root / "state" / "recorder_state.json").exists()
+        recorder.close()
+
+
+class TestUniverseSnapshotAging:
+    """H6: an aging snapshot is the only universe source (no live
+    re-discovery), so seeding from a stale one must be loud, not silent."""
+
+    def test_stale_snapshot_emits_warning_on_seed(self, tmp_path, caplog):
+        settings = _settings(tmp_path)
+        snapshot_path = _write_snapshot(tmp_path, {"1001": _opt_contract(1001, "C")})
+        forty_days_ago = time.time() - 40 * 86400
+        os.utime(snapshot_path, (forty_days_ago, forty_days_ago))
+        recorder = QuoteRecorder(settings, snapshot_path=snapshot_path)
+
+        with caplog.at_level(logging.WARNING, logger="src.venues.ibkr.recorder"):
+            con_ids = recorder.universe()
+
+        assert con_ids == [1001]  # seed behavior itself is unchanged
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("snapshot" in m.lower() and "40" in m for m in msgs)
+        recorder.close()
+
+    def test_fresh_snapshot_emits_no_staleness_warning(self, tmp_path, caplog):
+        settings = _settings(tmp_path)
+        snapshot_path = _write_snapshot(tmp_path, {"1001": _opt_contract(1001, "C")})
+        recorder = QuoteRecorder(settings, snapshot_path=snapshot_path)
+
+        with caplog.at_level(logging.WARNING, logger="src.venues.ibkr.recorder"):
+            con_ids = recorder.universe()
+
+        assert con_ids == [1001]
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("snapshot" in m.lower() for m in msgs)
         recorder.close()

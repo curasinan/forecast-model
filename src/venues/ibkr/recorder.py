@@ -52,6 +52,15 @@ QUOTE_BATCH_SIZE = 50
 _DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed"}
 _LOGGING_CONFIGURED = False
 
+# H6: the snapshot is refreshed by a manual monthly operator ritual (no live
+# re-discovery -- see module docstring). 35 days gives one cycle of slack
+# past that monthly cadence before the warning fires.
+SNAPSHOT_STALE_DAYS = 35
+SNAPSHOT_REFRESH_CMD = (
+    "python scripts/verify_ibkr_entitlements.py --port 4002 "
+    "--snapshot data/ibkr_universe_live.json"
+)
+
 SWEEP_SCHEMA = pa.schema([
     ("ts_utc", pa.string()),
     ("con_id", pa.int64()),
@@ -175,6 +184,17 @@ class QuoteRecorder:
         """Tradable conIds; re-seeds the cache from the snapshot when empty."""
         con_ids = self.resolver.tradable_con_ids()
         if not con_ids and self.snapshot_path.exists():
+            # H6: the snapshot is the only universe source (no live
+            # re-discovery); an aging snapshot silently drops new listings.
+            # Make that decay loud at seed time instead of leaving it to a
+            # shrinking universe_size the operator might not notice.
+            age_days = (time.time() - self.snapshot_path.stat().st_mtime) / 86400.0
+            if age_days > SNAPSHOT_STALE_DAYS:
+                logger.warning(
+                    "universe snapshot %s is %.0f days old (over the %d-day "
+                    "staleness threshold); refresh it: %s",
+                    self.snapshot_path, age_days, SNAPSHOT_STALE_DAYS, SNAPSHOT_REFRESH_CMD,
+                )
             seeded = self.resolver.seed_from_snapshot(self.snapshot_path)
             logger.info("seeded %d contracts from %s", seeded, self.snapshot_path)
             con_ids = self.resolver.tradable_con_ids()
