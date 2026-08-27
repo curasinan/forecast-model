@@ -262,3 +262,147 @@ restart/login behavior changes.
 
 After any re-registration, confirm with the task-status one-liner in
 section 6 and expect the recorder to be `Running` within 5 minutes.
+
+## 10. Monthly rituals
+
+Three checks belong in the same monthly sitting because the first one has a
+hard deadline: `.env` currently holds `IBKR_COMMISSION_PER_CONTRACT=0.01`
+and `IBKR_FEES_VERIFIED_ON=2026-08-25` (as of this writing, 2026-08-27), and
+`FlatCommissionFeeModel`'s 30-day staleness window (section below) turns
+that into a hard failure on **2026-09-24** if nobody re-verifies first. Do
+all three before the 20th of each month so there is buffer before the
+cliff.
+
+| Ritual | Cadence | First due |
+| --- | --- | --- |
+| Fee re-verify + `.env` date bump | Monthly, before the 20th | **2026-09-20** |
+| Universe snapshot refresh | Monthly, same sitting | 2026-09-20 |
+| Alert-channel test | Monthly, same sitting | 2026-09-20 |
+
+### 10.1 Fee re-verify + `.env` date bump
+
+- Claim: `FlatCommissionFeeModel.__init__` raises `StaleFeeError` once
+  `verified_on` is more than `max_age_days` (30) days old
+  (`src/domain/fees.py:61-67`). `IBKRAdapter.fee_model()` builds exactly
+  this model from `IBKRSettings.commission_per_contract` /
+  `fees_verified_on` (`src/venues/ibkr/adapter.py:332-343`), which in turn
+  are populated from `.env`'s `IBKR_COMMISSION_PER_CONTRACT` /
+  `IBKR_FEES_VERIFIED_ON` via pydantic-settings'
+  `env_file=".env"` (`src/venues/ibkr/settings.py:28,36-37`).
+  `TradingExecutor._evaluate` calls `fee_model()` **uncaught**, once per
+  intent, inside `execute_intents`'s loop
+  (`src/trading/executor.py:204-208,263`), and
+  `scripts/run_ibkr_paper.py`'s only exception handler around that call
+  catches `LockHeldError`, not `StaleFeeError`
+  (`scripts/run_ibkr_paper.py:197-224`). Net effect: a stale fee model
+  crashes the whole `run_ibkr_paper.py` invocation with an uncaught
+  `StaleFeeError` before a single intent is evaluated -- not a partial run,
+  a hard refusal.
+- Evidence: as cited above (code review).
+- Date verified: 2026-08-27 (this section's authoring).
+- Invalidation: any of the cited files changing shape (an exception handler
+  added around `fee_model()`/`execute_intents`, or `max_age_days` changed
+  from 30).
+
+How to re-verify, in order of preference:
+
+1. **Preferred once a paper fill exists:** read the commission off the
+   fill's account statement. Also record the observed value in
+   `docs/venue_semantics.md`'s "Additional verified facts" section (not
+   just `.env` -- that section is the durable evidence trail; see the
+   existing $0.01 entry there for the format,
+   `docs/venue_semantics.md:199-206`).
+2. **Otherwise, re-run the whatIf probe** with the paper Gateway
+   logged in:
+
+   ```powershell
+   python scripts/verify_ibkr_entitlements.py --port 4002
+   ```
+
+   Read the commission off the `LMT DAY` (or any `ACCEPTED`) line in
+   section 5 of its report, e.g. `commission=0.01
+   commissionCurrency='USD'` (`scripts/verify_ibkr_entitlements.py:506-511`
+   is where that line is built).
+
+Then update **both** `.env` values:
+
+- `IBKR_COMMISSION_PER_CONTRACT=<observed>` (only if it changed).
+- `IBKR_FEES_VERIFIED_ON=<today>` (always -- this is what resets the
+  30-day clock).
+
+The value has been `0.01` at every probe since 2026-08-16
+(`docs/venue_semantics.md:199-206`, `docs/venue_semantics.md:225-237`). A
+**changed** value is itself an alert-worthy finding, not routine drift: do
+not silently bump the date and move on -- record the discrepancy (old
+value, new value, which probe/statement) in `docs/venue_semantics.md`
+before updating `.env`, since every net-EV and Kelly calculation downstream
+prices off this one number.
+
+### 10.2 Universe snapshot refresh
+
+- Claim: `IBKRRecorder.universe()` seeds the tradable contract cache only
+  from `data/ibkr_universe_live.json`, and only when the cache is empty
+  (`src/venues/ibkr/recorder.py:183-201`); there is no live re-discovery of
+  new listings yet, so a new expiry or a new GTM contract is invisible to
+  the recorder until the snapshot is refreshed
+  (`src/venues/ibkr/recorder.py:24-28`). Once the snapshot file's mtime
+  exceeds `SNAPSHOT_STALE_DAYS` (35, `src/venues/ibkr/recorder.py:58`), the
+  next seed logs a WARNING naming the refresh command
+  (`src/venues/ibkr/recorder.py:192-196`, `SNAPSHOT_REFRESH_CMD` defined at
+  `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
+  age, informationally, as `snapshot_age_days=` on its OK message
+  (`scripts/check_ibkr_recorder.py:201-214,295-303`) -- it is never a
+  failure axis, so nothing pages for this; the operator has to notice it.
+- Evidence: as cited above (code review).
+- Date verified: 2026-08-27.
+- Invalidation: Stage 5 live re-discovery landing (flagged as a known
+  future change in `src/venues/ibkr/recorder.py:24-28`) would remove the
+  snapshot dependency this ritual exists for.
+
+How:
+
+```powershell
+python scripts/verify_ibkr_entitlements.py --port 4002 --snapshot data/ibkr_universe_live.json
+git diff data/ibkr_universe_live.json
+```
+
+Review the diff -- expect additions (new listings, new GTM expiries) and
+removals (contracts that rolled off; the 2026-08-25 paper/live parity check
+found 112 of 140 differences were plain expiries between two snapshots
+9 days apart, `docs/venue_semantics.md:225-237`, so a busy-looking diff is
+normal, not a red flag by itself). Commit it with a descriptive message,
+e.g. `Refresh the IBKR universe snapshot (monthly ritual)`.
+
+### 10.3 Alert-channel test
+
+How:
+
+```powershell
+python scripts/check_ibkr_recorder.py --state-path C:\nonexistent.json
+```
+
+This hits the "state file missing" branch
+(`scripts/check_ibkr_recorder.py:236-240`), which returns `CRITICAL`. Any
+non-`OK` status triggers both alert channels: the durable log sink
+(`_append_health_log`, appends to `logs\ibkr_health.log` by default --
+`scripts/check_ibkr_recorder.py:79,397-416`) and `send_alert`
+(`monitoring/heartbeat.py:79-113`, imported at
+`scripts/check_ibkr_recorder.py:74`). Expect **both**: a new line in
+`logs\ibkr_health.log`, and a Telegram message.
+
+If neither arrives, re-check the user-level environment variables
+`ALERT_METHOD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` -- set with
+`[Environment]::SetEnvironmentVariable('<NAME>', '<value>', 'User')` so
+they land in HKCU and are visible to Task-Scheduler-launched processes
+without any shell that sources `.env`.
+
+**These three must NEVER go in `.env`.** `send_alert` reads `os.environ`
+directly (`monitoring/heartbeat.py:83,86-87`) and, unlike `IBKRSettings`
+(which loads `.env` via pydantic-settings' `env_file=".env"`,
+`src/venues/ibkr/settings.py:28`), neither `monitoring/heartbeat.py` nor
+`scripts/check_ibkr_recorder.py` ever reads `.env` at all -- putting the
+alert vars there would silently do nothing; they have to be real process
+environment variables. And never paste the bot token into logs, docs, or
+chat: `send_alert` itself is careful never to log it
+(`monitoring/heartbeat.py:103-107`, "Never log the token; just the
+status.") -- follow the same rule everywhere else.
