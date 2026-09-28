@@ -10,11 +10,20 @@ passing). No network/Gateway; tmp_path only.
 Run-ledger fixtures mirror scripts/run_ibkr_paper.py's append site
 key-for-key (ts_utc, model_fingerprint, account, simulated, mode, intents,
 executed, rejected, orders[order_id, market_id, outcome, price, size,
-status, venue_order_id, perm_id, net_ev, holding_days]) -- a hand-drawn
-shape the real traversal never exercises is this team's documented past
-failure mode. Label-ledger fixtures go through climate.storage's own
-append_observations so they are byte-for-byte what
+status, venue_order_id, perm_id, question_id, net_ev, holding_days],
+open_groups) -- a hand-drawn shape the real traversal never exercises is
+this team's documented past failure mode. Label-ledger fixtures go through
+climate.storage's own append_observations so they are byte-for-byte what
 scripts/collect_climate_labels.py would have written.
+
+Fix round 1 (audit finding M2b, controller ruling R13): the first cut of
+`resolved_months` read the traded month off a run's own `ts_utc` -- WRONG,
+because a paper run trades whatever contract is currently on the ladder,
+not necessarily its own calendar month (a September run can trade the
+December contract, `gtm:2026-12`). That proxy credited a resolved month
+before any real bet on it had resolved -- anti-conservative, rejected in
+review. `question_id`/`open_groups` are the fix: real evidence of which
+contract was actually traded, threaded additively through the writer.
 """
 
 from __future__ import annotations
@@ -49,11 +58,21 @@ def _order(
     status: str = "filled",
     venue_order_id: str = "v1",
     perm_id: int = 1001,
+    # Deliberately NOT tied to any test's ts_utc: a sentinel month that no
+    # test's run ts_utc ever falls in, so a test that forgets to override
+    # this can never accidentally pass via the rejected ts_utc-month proxy.
+    question_id: str | None = "gtm:1999-01:0.80",
     net_ev: float = 0.05,
     holding_days: float = 20.0,
+    legacy: bool = False,
 ) -> dict:
-    """One order dict, key-for-key what run_ibkr_paper.py's append site writes."""
-    return {
+    """One order dict, key-for-key what run_ibkr_paper.py's append site
+    writes. ``question_id`` is the fix-round-1 additive field (controller
+    ruling R13) -- ``"gtm:<YYYY-MM>:<strike>"``, carried straight from
+    ``TradeDecision.question_id``. ``legacy=True`` omits it, mimicking a
+    record written before that fix.
+    """
+    order = {
         "order_id": order_id,
         "market_id": market_id,
         "outcome": outcome,
@@ -62,9 +81,12 @@ def _order(
         "status": status,
         "venue_order_id": venue_order_id,
         "perm_id": perm_id,
-        "net_ev": net_ev,
-        "holding_days": holding_days,
     }
+    if not legacy:
+        order["question_id"] = question_id
+    order["net_ev"] = net_ev
+    order["holding_days"] = holding_days
+    return order
 
 
 def _run_record(
@@ -72,15 +94,22 @@ def _run_record(
     ts_utc: str,
     simulated: bool,
     orders: list[dict] | None = None,
+    open_groups: list[str] | None = None,
     account: str = "DU12345",
     mode: str = "approve",
     model_fingerprint: str | None = "abc123",
+    legacy: bool = False,
     extra: dict | None = None,
 ) -> dict:
     """One run-ledger line, key-for-key what run_ibkr_paper.py appends.
 
-    ``extra`` merges in additional keys (e.g. a future field) to prove the
-    traversal tolerates keys it doesn't know about.
+    ``open_groups`` is the fix-round-1 additive field (controller ruling
+    R13) -- the sorted ``by_group`` keys ``load_open_commitments`` already
+    computes, e.g. ``["gtm:2026-12"]``; defaults to ``[]`` (no pre-existing
+    resting groups). ``legacy=True`` omits the key entirely, mimicking a
+    record written before that fix. ``extra`` merges in additional keys
+    (e.g. a future field) to prove the traversal tolerates keys it doesn't
+    know about.
     """
     orders = orders if orders is not None else []
     record = {
@@ -94,6 +123,8 @@ def _run_record(
         "rejected": 0,
         "orders": orders,
     }
+    if not legacy:
+        record["open_groups"] = open_groups if open_groups is not None else []
     if extra:
         record.update(extra)
     return record
@@ -266,13 +297,50 @@ def test_paper_days_zero_and_first_order_ts_none_when_no_real_run_yet(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
+def test_resolved_months_ignores_the_runs_own_ts_utc_month(tmp_path):
+    """The exact regression the fix corrects: a September run trading the
+    December contract must credit December (once labeled), never
+    September (the run's own calendar month, which is what the rejected
+    proxy used to credit)."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-09-15T00:00:00+00:00",  # run happens in September...
+                simulated=False,
+                orders=[_order(question_id="gtm:2026-12:0.80")],  # ...trades December
+            )
+        ],
+    )
+    # September's own label is published (it's not what was traded) but
+    # December's is not yet.
+    _write_labels_ledger(tmp_path, ["2026-09"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 10, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 0  # NOT credited via September
+
+    _write_labels_ledger(tmp_path, ["2026-12"])  # December prints, much later
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2027, 1, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 1  # credited via December, the real target
+
+
 def test_resolved_months_counts_distinct_traded_months_with_a_first_print_label(tmp_path):
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
         [
-            _run_record(ts_utc="2026-01-15T00:00:00+00:00", simulated=False, orders=[_order()]),
-            _run_record(ts_utc="2026-02-15T00:00:00+00:00", simulated=False, orders=[_order()]),
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            ),
+            _run_record(
+                ts_utc="2026-02-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-02:0.80")],
+            ),
         ],
     )
     _write_labels_ledger(tmp_path, ["2026-01", "2026-02"])
@@ -287,8 +355,14 @@ def test_resolved_months_excludes_traded_months_without_a_label(tmp_path):
     _write_runs_jsonl(
         runs_jsonl,
         [
-            _run_record(ts_utc="2026-01-15T00:00:00+00:00", simulated=False, orders=[_order()]),
-            _run_record(ts_utc="2026-02-15T00:00:00+00:00", simulated=False, orders=[_order()]),
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            ),
+            _run_record(
+                ts_utc="2026-02-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-02:0.80")],
+            ),
         ],
     )
     _write_labels_ledger(tmp_path, ["2026-01"])  # 2026-02 not yet published
@@ -303,7 +377,12 @@ def test_resolved_months_excludes_labels_without_a_traded_month(tmp_path):
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
-        [_run_record(ts_utc="2026-01-15T00:00:00+00:00", simulated=False, orders=[_order()])],
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            )
+        ],
     )
     _write_labels_ledger(tmp_path, ["2026-01", "2025-06"])
     progress = compute_paper_progress(
@@ -312,9 +391,31 @@ def test_resolved_months_excludes_labels_without_a_traded_month(tmp_path):
     assert progress.resolved_months == 1
 
 
+def test_resolved_months_ignores_orders_without_a_question_id(tmp_path):
+    """An order that carries no question_id (e.g. a foreign/non-gtm record,
+    or a null value) contributes no evidence -- it is not treated as
+    matching anything, and never falls back to the run's ts_utc."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id=None), _order(question_id="not-gtm-shaped")],
+            )
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2026-01"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 0
+
+
 def test_resolved_months_requires_a_non_empty_orders_list(tmp_path):
-    """A run with zero orders (e.g. nothing tradeable that day) does not
-    count as having 'traded' that month, even if the month later resolves."""
+    """A run with zero orders and no open_groups (e.g. nothing tradeable
+    and nothing already resting) does not count as having 'traded'
+    anything, even if some unrelated month later resolves."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -332,8 +433,14 @@ def test_resolved_months_dedupes_multiple_runs_in_the_same_month(tmp_path):
     _write_runs_jsonl(
         runs_jsonl,
         [
-            _run_record(ts_utc="2026-01-05T00:00:00+00:00", simulated=False, orders=[_order()]),
-            _run_record(ts_utc="2026-01-20T00:00:00+00:00", simulated=False, orders=[_order()]),
+            _run_record(
+                ts_utc="2026-01-05T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            ),
+            _run_record(
+                ts_utc="2026-01-20T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.85")],  # same month, diff strike
+            ),
         ],
     )
     _write_labels_ledger(tmp_path, ["2026-01"])
@@ -352,7 +459,12 @@ def test_resolved_months_counts_simulated_runs_orders_too(tmp_path):
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
-        [_run_record(ts_utc="2026-01-15T00:00:00+00:00", simulated=True, orders=[_order()])],
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=True,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            )
+        ],
     )
     _write_labels_ledger(tmp_path, ["2026-01"])
     progress = compute_paper_progress(
@@ -362,13 +474,44 @@ def test_resolved_months_counts_simulated_runs_orders_too(tmp_path):
     assert progress.paper_days == 0  # no real run -> the clock never started
 
 
+def test_resolved_months_credits_a_month_only_seen_via_open_groups(tmp_path):
+    """The other half of the fix: a month whose order was placed in an
+    EARLIER run and is still resting never re-appears in a LATER run's own
+    orders[] (placement idempotence, drop_already_committed) -- but it
+    must still be visible via that later run's open_groups, or the month
+    could never be credited at all once the placing run ages out of
+    relevance for this test's narrow window."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00",
+                simulated=False,
+                orders=[],  # nothing NEW placed this run...
+                open_groups=["gtm:2026-01"],  # ...but this group is already resting
+            )
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2026-01"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 1
+
+
 def test_resolved_months_ignores_a_revision_row_without_a_first_print(tmp_path):
     """latest_values()/first-print discipline: is_revision=True rows never
     stand in for a missing first-print row (Rule 603(e))."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
-        [_run_record(ts_utc="2026-01-15T00:00:00+00:00", simulated=False, orders=[_order()])],
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80")],
+            )
+        ],
     )
     # Manually seed a ledger with ONLY a revision row (contrived -- the real
     # writer never does this, but the traversal must not be fooled by it).
@@ -399,6 +542,33 @@ def test_resolved_months_ignores_a_revision_row_without_a_first_print(tmp_path):
     assert progress.resolved_months == 0
 
 
+def test_legacy_run_record_counts_for_paper_days_but_not_resolved_months(tmp_path):
+    """A record written before fix round 1 has neither question_id on its
+    orders nor an open_groups key at all. It must still start/advance the
+    paper_days clock (that logic is unchanged) but contribute NOTHING to
+    resolved_months -- a gap in the evidence can only DELAY go-live, never
+    hasten it."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-01T00:00:00+00:00",
+                simulated=False,
+                orders=[_order(legacy=True)],  # no question_id key at all
+                legacy=True,  # no open_groups key at all
+            )
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2026-01"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 1, 11, tzinfo=timezone.utc)
+    )
+    assert progress.paper_days == 10
+    assert progress.first_order_ts == "2026-01-01T00:00:00+00:00"
+    assert progress.resolved_months == 0
+
+
 def test_extra_unknown_keys_on_a_run_record_are_tolerated(tmp_path):
     """A run record may carry keys this function doesn't know about (e.g. a
     future field) without breaking the traversal."""
@@ -409,7 +579,7 @@ def test_extra_unknown_keys_on_a_run_record_are_tolerated(tmp_path):
             _run_record(
                 ts_utc="2026-01-15T00:00:00+00:00",
                 simulated=False,
-                orders=[_order()],
+                orders=[_order(question_id="gtm:2026-01:0.80")],
                 extra={"some_future_field": {"nested": True}, "audit_note": "ok"},
             )
         ],
@@ -455,11 +625,20 @@ def test_run_gtm_paper_computes_default_gate_inputs_from_the_ledgers(tmp_path, m
 
     test_now = datetime.now(timezone.utc)
     first_ts = test_now - timedelta(days=10, hours=12)  # safely floors to 10
+    # Deliberately a DIFFERENT month than first_ts's own calendar month --
+    # proves resolved_months is wired to the question_id evidence, not the
+    # rejected run-ts_utc-month proxy (fix round 1).
+    traded_month = "1999-01"
     _write_runs_jsonl(
         root / "paper" / "ibkr_paper_runs.jsonl",
-        [_run_record(ts_utc=first_ts.isoformat(), simulated=False, orders=[_order()])],
+        [
+            _run_record(
+                ts_utc=first_ts.isoformat(), simulated=False,
+                orders=[_order(question_id=f"gtm:{traded_month}:0.80")],
+            )
+        ],
     )
-    _write_labels_ledger(root, [f"{first_ts.year:04d}-{first_ts.month:02d}"])
+    _write_labels_ledger(root, [traded_month])
 
     captured: dict = {}
 

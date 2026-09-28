@@ -10,8 +10,9 @@ single flag. :func:`compute_paper_progress` derives both numbers instead,
 from the two ledgers that actually record what happened:
 
 - ``ibkr_paper_runs.jsonl`` (``scripts/run_ibkr_paper.py``'s append site) --
-  one line per paper run, each carrying ``ts_utc``, ``simulated``, and an
-  ``orders`` list.
+  one line per paper run, each carrying ``ts_utc``, ``simulated``, an
+  ``orders`` list (each order carrying its ``question_id``), and an
+  ``open_groups`` list of the book's already-resting contract groups.
 - the climate label ledger (``climate/storage.py``,
   ``<labels_root>/labels/labels_ledger.parquet``) -- the first-print NOAA
   values ``scripts/collect_climate_labels.py`` appends.
@@ -25,11 +26,19 @@ case (e.g. a documented backfill) where trusting the CLI is intentional.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from climate.storage import load_ledger
+
+#: Pulls the 'YYYY-MM' target month out of a "gtm:<YYYY-MM>[:...]" id --
+#: matches both a full order question_id ("gtm:2026-12:0.8", from
+#: EdgeSignal.question_id -- see scripts/run_ibkr_paper.py's load_intents)
+#: and an already-grouped id ("gtm:2026-12", from
+#: src.trading.reconcile._group_key / load_open_commitments' by_group).
+_GTM_MONTH_RE = re.compile(r"^gtm:(\d{4}-\d{2})(?::|$)")
 
 
 @dataclass(frozen=True)
@@ -62,6 +71,18 @@ def _parse_ts(text: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _extract_gtm_month(text: object) -> str | None:
+    """Best-effort 'YYYY-MM' extraction via ``_GTM_MONTH_RE``. Returns None
+    (never raises) for anything that isn't a matching string -- a
+    non-string, a non-``gtm`` question_id, or a malformed id must not take
+    down the go-live gate, just contribute no evidence.
+    """
+    if not isinstance(text, str):
+        return None
+    match = _GTM_MONTH_RE.match(text)
+    return match.group(1) if match else None
 
 
 def _iter_run_records(runs_jsonl: Path):
@@ -105,14 +126,29 @@ def compute_paper_progress(
     ``runs_jsonl`` or no ``simulated=false`` line yields ``paper_days=0``
     and ``first_order_ts=None``.
 
-    ``resolved_months``: the ``ibkr_paper_runs.jsonl`` schema
-    (``scripts/run_ibkr_paper.py``'s append site) has no per-order
-    target-month field -- only an opaque venue ``market_id`` -- so the
-    traded month is read off each RUN record's own ``ts_utc`` (one paper
-    run is one pass at the then-current, single live GTM ladder). A run's
-    calendar month (``YYYY-MM`` of its ``ts_utc``) counts as "traded" when
-    that run placed at least one order (non-empty ``orders``); simulated
-    rehearsal runs count HERE too (unlike ``paper_days``) because the
+    ``resolved_months``: a traded month is read off EVIDENCE the run
+    ledger carries about the actual contract traded, never off the run's
+    own ``ts_utc`` -- see "fix round 1" below for why that proxy was
+    rejected. Two additive fields (``scripts/run_ibkr_paper.py``'s append
+    site, audit finding M2b fix round 1 / controller ruling R13) carry
+    that evidence:
+
+    - each order's ``question_id`` (shaped ``"gtm:<YYYY-MM>:<strike>"`` --
+      ``EdgeSignal.question_id``, threaded through ``TradeDecision`` and
+      into the order record unchanged);
+    - the run-level ``open_groups`` list (the sorted ``by_group`` keys
+      from the ``load_open_commitments`` call the entrypoint already
+      makes, e.g. ``["gtm:2026-12"]``) -- this covers a month whose order
+      was placed in an EARLIER run and is still resting: placement
+      idempotence (``drop_already_committed``) means it correctly never
+      re-appears in a LATER run's own ``orders``, so without
+      ``open_groups`` that month's evidence would never surface in any
+      run record at all.
+
+    Both are parsed with the same ``"gtm:<YYYY-MM>"`` pattern
+    (:func:`_extract_gtm_month`); a month counts as "traded" the moment
+    it is named by either source, on ANY run record -- simulated
+    rehearsal runs count here too (unlike ``paper_days``) because the
     brief scopes this half of the definition to "any run's orders" -- a
     simulated-only month can't inflate the overall gate on its own since
     ``paper_days`` stays 0 without a real run, and
@@ -124,6 +160,23 @@ def compute_paper_progress(
     ``resolved_months=0`` -- it never falls back to the real data root
     (:func:`climate.paths.data_root`'s default), which would defeat
     ``tmp_path``-only tests.
+
+    A LEGACY run record written before this fix (fix round 1) has
+    neither ``question_id`` on its orders nor an ``open_groups`` key, so
+    it contributes NOTHING to ``resolved_months`` -- it is silently
+    invisible to this half of the computation, not an error. That
+    asymmetry is intentional and the whole point: a gap in the evidence
+    can only ever DELAY go-live (undercounting resolved months), never
+    hasten it. Contrast with the rejected calendar-month proxy this
+    function used before fix round 1, which read the traded month off
+    the RUN record's own ``ts_utc`` -- wrong because a paper run trades
+    whatever month's contract is currently on the ladder, not necessarily
+    the run's own calendar month (a September run can trade the December
+    contract, ``gtm:2026-12``); that proxy counted 2026-09 as traded
+    while the actual bet, 2026-12, hadn't even happened yet, and 2026-09's
+    own label prints in mid-October -- crediting a resolved month before
+    any real bet on it had resolved. That is anti-conservative (it
+    weakens a go-live gate) and was rejected in review.
 
     Missing/empty ``runs_jsonl`` yields ``PaperProgress(0, 0, None)``.
     Malformed JSON lines in ``runs_jsonl`` are skipped, not fatal.
@@ -150,13 +203,16 @@ def compute_paper_progress(
 
     traded_months: set[str] = set()
     for record in records:
-        orders = record.get("orders")
-        if not orders:
-            continue
-        parsed = _parse_ts(record.get("ts_utc"))
-        if parsed is None:
-            continue
-        traded_months.add(f"{parsed.year:04d}-{parsed.month:02d}")
+        for order in record.get("orders") or []:
+            if not isinstance(order, dict):
+                continue
+            month = _extract_gtm_month(order.get("question_id"))
+            if month is not None:
+                traded_months.add(month)
+        for group in record.get("open_groups") or []:
+            month = _extract_gtm_month(group)
+            if month is not None:
+                traded_months.add(month)
 
     resolved_months = 0
     if traded_months and labels_root is not None:

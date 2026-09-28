@@ -247,9 +247,25 @@ def main(argv: list[str] | None = None) -> int:
                  "outcome": d.order.outcome, "price": d.order.price, "size": d.order.size,
                  "status": d.order.status.value, "venue_order_id": d.order.venue_order_id,
                  "perm_id": d.order.perm_id,
+                 # Audit finding M2b fix round 1 (controller ruling R13):
+                 # target-month evidence, additive. question_id is shaped
+                 # "gtm:<YYYY-MM>:<strike>" (see load_intents' EdgeSignal
+                 # construction above) and is carried straight from the
+                 # TradeDecision -- not reconstructed from the order, which
+                 # has no target-month field at all.
+                 "question_id": d.question_id,
                  "net_ev": d.net_expected_value, "holding_days": d.holding_days}
                 for d in report.decisions if d.order is not None
             ],
+            # Audit finding M2b fix round 1 (controller ruling R13): the
+            # groups (per _group_key -- "gtm:<YYYY-MM>") this run's book
+            # already had resting BEFORE this run placed anything, e.g.
+            # ["gtm:2026-12"]. Without this, a month whose order was
+            # placed in an EARLIER run and is still resting (so dedup in
+            # drop_already_committed correctly never lets it re-appear in
+            # this run's own orders[]) would never surface in ANY run
+            # record's orders[] and so could never count as traded.
+            "open_groups": sorted(commitments.get("by_group", {}).keys()),
         }, default=str) + "\n")
     adapter.disconnect()
     return 0
