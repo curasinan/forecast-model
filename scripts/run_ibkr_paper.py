@@ -38,7 +38,7 @@ from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paths import data_root  # noqa: E402
 from src.domain.ids import MarketId  # noqa: E402
 from src.models.prediction import EdgeSignal  # noqa: E402
-from src.trading.executor import TradeIntent, TradingExecutor  # noqa: E402
+from src.trading.executor import TradeIntent, TradingExecutor, render_group_commitments  # noqa: E402
 from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
 from src.trading.reconcile import drop_already_committed, load_open_commitments  # noqa: E402
 from src.trading.risk_manager import RiskLimits  # noqa: E402
@@ -223,6 +223,22 @@ def main(argv: list[str] | None = None) -> int:
 
             report = executor.execute_intents(intents, mode=args.mode)
             print(report.summary())
+            # Correlated-group committed-book block (Task 3.6, controller
+            # ruling R16 fix for finding I-1): NOT computed from
+            # report.decisions alone (that can never show a DB-seeded
+            # commitment dedup correctly dropped before the executor ever
+            # saw it, e.g. the three resting gtm:2026-12 orders). The
+            # dollar figures come from the risk manager's live ledger
+            # (seed + this run); the order counts are the DB-seeded count
+            # (commitments["by_group_counts"], read above, before this
+            # run placed anything) plus this run's own count, added here
+            # by the one layer that holds both halves.
+            group_counts = dict(commitments["by_group_counts"])
+            for key, n in report.group_order_counts().items():
+                group_counts[key] = group_counts.get(key, 0) + n
+            group_block = render_group_commitments(executor.risk_manager.group_exposure(), group_counts)
+            if group_block:
+                print(group_block)
             if not executor.is_simulated:
                 updated = executor.sync()
                 print(f"synced with venue: {updated} order(s) updated")

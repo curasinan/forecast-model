@@ -107,6 +107,20 @@ class ExecutionReport:
     decisions: list[TradeDecision] = field(default_factory=list)
 
     def summary(self) -> str:
+        """This run's own analyze/propose/approve/execute/reject counts
+        and per-decision lines. Deliberately does NOT render per-group
+        committed-book totals (H5, Task 3.6) -- an `ExecutionReport` only
+        ever sees `self.decisions`, i.e. THIS run's own evaluations, and a
+        block computed purely from that can never show a DB-seeded
+        commitment a dedup pass correctly kept out of this run's decisions
+        altogether (controller ruling R16, finding I-1): the three resting
+        gtm:2026-12 orders ($29.64) are dropped by `drop_already_committed`
+        before the executor ever evaluates them, so a from-decisions-only
+        block can never print them, and a partially-seeded group would
+        under-report what is actually committed. See
+        `render_group_commitments` for the correct, ledger-backed block,
+        and `group_order_counts` for this run's own contribution to it.
+        """
         mode = "SIMULATED" if self.simulated else f"VENUE:{self.venue}"
         lines = [
             f"=== Execution Report ({self.timestamp:%Y-%m-%d %H:%M}) [{mode}] ===",
@@ -126,35 +140,73 @@ class ExecutionReport:
                     f"    [{status}] {d.question_title[:42]:<42} {d.direction:<16} "
                     f"edge={d.edge_pct:+.1%} {d.reason[:60]}"
                 )
-        groups = self._group_totals()
-        if groups:
-            lines.append("")
-            lines.append("  Correlated groups (committed notional per print, this run):")
-            for key in sorted(groups):
-                total, count = groups[key]
-                lines.append(f"    {key} = ${total:.2f} ({count} orders, 1 correlated bet)")
         return "\n".join(lines)
 
-    def _group_totals(self) -> dict[str, tuple[float, int]]:
-        """Committed notional + order count per correlated group (H5,
-        Task 3.6), from THIS run's executed decisions only -- a prior
-        run's already-resting orders (e.g. the three GTM strikes seeded
-        via `seed_group_exposure`) never appear in `self.decisions` at
-        all (dedup drops them before they reach the executor), so they
-        are not double-counted here; they show up in whichever run's
-        report first placed them. Ungrouped decisions (`group_key == ""`)
-        are omitted -- there is nothing "correlated" to report for them.
+    def group_order_counts(self) -> dict[str, int]:
+        """This run's OWN order count per correlated group (H5, Task 3.6).
+
+        Only THIS run's executed decisions -- never the DB-seeded book (a
+        prior run's or the venue's already-resting orders never appear in
+        `self.decisions` at all, since `drop_already_committed` drops them
+        before the executor evaluates anything). A caller wanting the full
+        committed-book count adds `load_open_commitments(db)
+        ["by_group_counts"]` to this (controller ruling R16): see
+        `render_group_commitments`. Ungrouped decisions (`group_key ==
+        ""`) are omitted -- there is nothing "correlated" to count there.
         """
-        groups: dict[str, tuple[float, int]] = {}
+        counts: dict[str, int] = {}
         for d in self.decisions:
             if not d.executed or d.order is None:
                 continue
             key = _group_key(d.question_id)
             if not key:
                 continue
-            total, count = groups.get(key, (0.0, 0))
-            groups[key] = (total + d.order.cost_usd, count + 1)
-        return groups
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+
+def render_group_commitments(group_exposure: dict[str, float], group_counts: dict[str, int]) -> str:
+    """Render the per-correlated-group COMMITTED BOOK block for a run's
+    printed report (H5, Task 3.6; controller ruling R16 fix for finding
+    I-1: the original block summed only this run's own placements, which
+    can never show a DB-seeded commitment dedup correctly kept out of this
+    run altogether, and under-reports a partially-seeded group).
+
+    A pure function fed two explicit dicts, deliberately NOT a method on
+    `ExecutionReport` and NOT importing `RiskManager` or
+    `src.trading.reconcile` here: `ExecutionReport` only ever sees this
+    run's own decisions, and `RiskManager`/`reconcile` are the two other
+    places that between them hold what this needs (the live group ledger,
+    and the DB-seeded order counts) -- gluing them here would mean
+    `executor.py` importing `reconcile.py`, which is unnecessary coupling
+    when the caller (`scripts/run_ibkr_paper.py`) already imports both and
+    can hand over plain dicts.
+
+    Args:
+        group_exposure: `RiskManager.group_exposure()` -- the live ledger,
+            i.e. whatever `seed_group_exposure` restored from the DB's
+            open book (a prior process's or the venue's resting
+            commitments) MAX'd against whatever THIS run's own
+            `add_exposure(..., group_key=...)` calls added on top. This is
+            the actual committed dollar figure -- seed AND this run
+            together, not this run alone.
+        group_counts: order count per group, ALREADY merged by the caller
+            -- typically `load_open_commitments(db)["by_group_counts"]`
+            (the DB-seeded count) plus `report.group_order_counts()`
+            (this run's own count) added together per key.
+
+    Returns "" (no block at all) when `group_exposure` is empty -- nothing
+    correlated to report.
+    """
+    if not group_exposure:
+        return ""
+    lines = ["Correlated groups (committed book per print -- DB-seeded + this run):"]
+    for key in sorted(group_exposure):
+        total = group_exposure[key]
+        count = group_counts.get(key, 0)
+        noun = "order" if count == 1 else "orders"
+        lines.append(f"  {key} = ${total:.2f} ({count} {noun}, 1 correlated bet)")
+    return "\n".join(lines)
 
 
 def _days_until(ts: datetime | None) -> int | None:

@@ -751,16 +751,23 @@ def load_open_commitments(db_path: str) -> dict:
     Group key: `_group_key(question_id)` -- see that function's contract.
 
     Returns `{"total_usd": float, "by_market": dict[str, float],
-    "by_group": dict[str, float]}`. A missing `db_path` returns the same
-    shape, all empty -- a book that has never been written has nothing
-    committed, which is different from a read failure and must not raise.
+    "by_group": dict[str, float], "by_group_counts": dict[str, int]}`.
+    `by_group_counts` (additive, controller ruling R16) counts the same
+    contributing rows `by_group` sums dollars from -- one per `_add` call,
+    from either source above -- so a run's printed report can state how
+    many orders make up a group's committed total, not just the dollar
+    figure (`src.trading.executor.render_group_commitments`). A missing
+    `db_path` returns the same shape, all empty -- a book that has never
+    been written has nothing committed, which is different from a read
+    failure and must not raise.
     """
-    empty: dict = {"total_usd": 0.0, "by_market": {}, "by_group": {}}
+    empty: dict = {"total_usd": 0.0, "by_market": {}, "by_group": {}, "by_group_counts": {}}
     if not os.path.exists(db_path):
         return empty
 
     by_market: dict[str, float] = {}
     by_group: dict[str, float] = {}
+    by_group_counts: dict[str, int] = {}
     total = 0.0
 
     conn = sqlite3.connect(str(db_path))
@@ -772,7 +779,9 @@ def load_open_commitments(db_path: str) -> dict:
             total += amount
             if market_id:
                 by_market[market_id] = by_market.get(market_id, 0.0) + amount
-            by_group[_group_key(question_id)] = by_group.get(_group_key(question_id), 0.0) + amount
+            group = _group_key(question_id)
+            by_group[group] = by_group.get(group, 0.0) + amount
+            by_group_counts[group] = by_group_counts.get(group, 0) + 1
 
         placeholders = ",".join("?" * len(CANDIDATE_STATUSES))
         committed_order_ids: set[str] = set()
@@ -794,7 +803,10 @@ def load_open_commitments(db_path: str) -> dict:
     finally:
         conn.close()
 
-    return {"total_usd": total, "by_market": by_market, "by_group": by_group}
+    return {
+        "total_usd": total, "by_market": by_market, "by_group": by_group,
+        "by_group_counts": by_group_counts,
+    }
 
 
 def _bought_leg_market_id(intent: "TradeIntent"):

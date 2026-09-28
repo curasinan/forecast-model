@@ -25,11 +25,24 @@ bug-ledger lessons it calls out):
   evaluated (order-dependent-cap-scaling lesson) -- this suite does not
   expect any edge-aware reordering, and pins that `execute_intents` does
   not sort.
+
+Fix round 1 (controller ruling R16, finding I-1): the run report's
+per-group block must render the COMMITTED BOOK -- `RiskManager.
+group_exposure()` (DB-seeded via `seed_group_exposure`, MAX'd, plus
+this run's own `add_exposure(group_key=...)` calls) and a matching
+order COUNT (DB-seeded `load_open_commitments(...)["by_group_counts"]`
+plus this run's own `ExecutionReport.group_order_counts()`) -- never a
+sum over `self.decisions` alone, which can never show a commitment
+`drop_already_committed` correctly kept out of a run's decisions
+altogether (the three resting gtm:2026-12 orders). See
+`TestRenderGroupCommitments`, `TestSummaryDoesNotRenderGroupsFromDecisionsAlone`,
+and `TestGroupCommitmentsBehaviorAgainstADB` below.
 """
 
 from __future__ import annotations
 
 import inspect
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -37,10 +50,18 @@ import pytest
 from src.domain.ids import MarketId
 from src.domain.models import Market
 from src.models.prediction import EdgeSignal
-from src.trading.executor import ExecutionReport, TradeDecision, TradeIntent, TradingExecutor
+from src.trading.executor import (
+    ExecutionReport,
+    TradeDecision,
+    TradeIntent,
+    TradingExecutor,
+    render_group_commitments,
+)
 from src.trading.executor import _group_key as executor_group_key
 from src.trading.order_manager import OrderSide, OrderStatus, TradeOrder
+from src.trading.position_tracker import PositionTracker
 from src.trading.reconcile import _group_key as reconcile_group_key
+from src.trading.reconcile import load_open_commitments
 from src.trading.risk_manager import RiskCheckResult, RiskLimits, RiskManager
 from tests.test_trading.test_executor_venue import FakeVenue
 
@@ -352,10 +373,98 @@ class TestExecutorThreadsGroupCap:
         assert d_high.executed and d_high.order.cost_usd <= 5.0 + 1e-6
 
 
+def _make_book(path) -> None:
+    """Create a v2-shaped paper book (PositionTracker owns the DDL) --
+    same helper pattern as test_placement_idempotence.py."""
+    PositionTracker(db_path=str(path))
+
+
+def _insert_placed_row(path, *, order_id: str, question_id: str, market_id: str,
+                       size: float, price: float) -> None:
+    """A resting `status='placed'` trade_log row -- shaped like a real
+    GTM order (size/price, not a pre-computed cost_usd) so the DB-driven
+    behavior tests below match production data, not a convenient fixture.
+    """
+    cost_usd = round(size * price, 2)
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        """INSERT INTO trade_log
+           (order_id, question_id, outcome, side, price, size, cost_usd, status,
+            reason, created_at, filled_at, market_id, venue, venue_order_id,
+            filled_size, perm_id, last_synced_utc)
+           VALUES (?, ?, 'YES', 'BUY', ?, ?, ?, 'placed', 'edge',
+                   '2026-08-25T10:00:00', NULL, ?, 'ibkr', 'V1', 0.0, '', NULL)""",
+        (order_id, question_id, price, size, cost_usd, market_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _merged_group_counts(commitments: dict, report: ExecutionReport) -> dict[str, int]:
+    """Exactly the merge scripts/run_ibkr_paper.py performs (ruling R16
+    item 6's threading): DB-seeded counts plus this run's own count,
+    added per group by the one layer holding both halves."""
+    counts = dict(commitments["by_group_counts"])
+    for key, n in report.group_order_counts().items():
+        counts[key] = counts.get(key, 0) + n
+    return counts
+
+
 # ===================================================================
-# Section C: run-report summary() per-group committed totals.
+# Section C: render_group_commitments -- the pure render function (H5,
+# Task 3.6; controller ruling R16 fix for finding I-1). Format-only
+# tests: these exercise ONLY string rendering from already-correct,
+# already-merged input dicts -- the "is this data actually correct"
+# question belongs to Section C2/C3 below, not here.
 # ===================================================================
-class TestSummaryPerGroupTotals:
+class TestRenderGroupCommitments:
+    def test_acceptance_format_three_strikes_one_correlated_bet(self):
+        """Acceptance (Task 3.6 brief, verbatim): `gtm:2026-12 = $29.64
+        (3 orders, 1 correlated bet)`."""
+        text = render_group_commitments({"gtm:2026-12": 29.64}, {"gtm:2026-12": 3})
+        assert "gtm:2026-12 = $29.64 (3 orders, 1 correlated bet)" in text
+
+    def test_singular_order_is_not_pluralized(self):
+        """Ruling item 4's in-passing pluralization fix: "1 orders" ->
+        "1 order"."""
+        text = render_group_commitments({"gtm:2026-12": 5.0}, {"gtm:2026-12": 1})
+        assert "gtm:2026-12 = $5.00 (1 order, 1 correlated bet)" in text
+        assert "1 orders" not in text
+
+    def test_empty_group_exposure_renders_nothing(self):
+        assert render_group_commitments({}, {}) == ""
+
+    def test_two_distinct_groups_each_get_their_own_line(self):
+        text = render_group_commitments(
+            {"gtm:2026-12": 10.0, "gtm:2026-11": 7.5},
+            {"gtm:2026-12": 1, "gtm:2026-11": 1},
+        )
+        assert "gtm:2026-12 = $10.00 (1 order, 1 correlated bet)" in text
+        assert "gtm:2026-11 = $7.50 (1 order, 1 correlated bet)" in text
+
+    def test_a_group_missing_from_group_counts_renders_zero_orders(self):
+        """group_counts is caller-merged and need not cover every
+        group_exposure key -- a defensive `.get(key, 0)`, not a
+        KeyError."""
+        text = render_group_commitments({"gtm:2026-12": 5.0}, {})
+        assert "gtm:2026-12 = $5.00 (0 orders, 1 correlated bet)" in text
+
+    def test_header_states_it_is_the_committed_book_seeded_plus_this_run(self):
+        """The corrected header wording (ruling item 3) -- must say what
+        it shows, not "this run" alone (the old, wrong wording)."""
+        text = render_group_commitments({"gtm:2026-12": 1.0}, {"gtm:2026-12": 1})
+        assert "committed book" in text.lower()
+        assert "seed" in text.lower()
+        assert "this run" in text.lower()
+
+
+# ===================================================================
+# Section C2: summary() must NOT render group commitments from
+# self.decisions alone (the actual fix for finding I-1) -- and
+# group_order_counts() (this run's own contribution, still correct)
+# is exposed for a caller to merge with the DB-seeded count.
+# ===================================================================
+class TestSummaryDoesNotRenderGroupsFromDecisionsAlone:
     def _decision(self, question_id: str, cost_usd: float) -> TradeDecision:
         order = TradeOrder(
             order_id="x", question_id=question_id, market_id="ibkr:1", side=OrderSide.BUY,
@@ -369,47 +478,150 @@ class TestSummaryPerGroupTotals:
             order=order, executed=True, reason="APPROVED",
         )
 
-    def test_acceptance_format_three_strikes_one_correlated_bet(self):
-        """Acceptance (Task 3.6 brief, verbatim): the measurement record's
-        report shows `gtm:2026-12 = $29.64 (3 orders, 1 correlated bet)`.
-        """
+    def test_summary_alone_never_prints_a_correlated_bet_line(self):
+        """Even with three executed decisions that would have summed to
+        the acceptance figure under the OLD (wrong) design, summary()
+        prints no group line at all -- it has no ledger to read, and
+        must not pretend otherwise."""
         report = ExecutionReport(decisions=[
             self._decision("gtm:2026-12:1.2", 9.86),
-            self._decision("gtm:2026-12:1.3", 9.86),
-            self._decision("gtm:2026-12:1.4", 9.92),
+            self._decision("gtm:2026-12:1.3", 9.84),
+            self._decision("gtm:2026-12:1.4", 9.94),
         ])
         report.trades_executed = 3
+        assert "correlated bet" not in report.summary()
 
-        text = report.summary()
+    def test_group_order_counts_reflects_this_runs_own_decisions(self):
+        report = ExecutionReport(decisions=[
+            self._decision("gtm:2026-12:1.2", 9.86),
+            self._decision("gtm:2026-12:1.3", 9.84),
+            self._decision("gtm:2026-11:1.0", 5.0),
+        ])
+        assert report.group_order_counts() == {"gtm:2026-12": 2, "gtm:2026-11": 1}
+
+    def test_group_order_counts_omits_ungrouped_and_unexecuted(self):
+        skipped = self._decision("gtm:2026-12:1.2", 10.0)
+        skipped.executed = False
+        ungrouped = self._decision("0xabc123", 10.0)
+        report = ExecutionReport(decisions=[skipped, ungrouped])
+        assert report.group_order_counts() == {}
+
+
+# ===================================================================
+# Section C3: RiskManager.group_exposure() -- the read-only ledger
+# snapshot the render path is now built on (ruling item 1).
+# ===================================================================
+class TestGroupExposureAccessor:
+    def test_group_exposure_combines_seed_and_this_runs_adds(self):
+        rm = RiskManager(bankroll=1000.0)
+        rm.seed_group_exposure({"gtm:2026-12": 8.0})
+        rm.add_exposure(7.0, group_key="gtm:2026-12")
+        assert rm.group_exposure() == {"gtm:2026-12": pytest.approx(15.0)}
+
+    def test_group_exposure_returns_a_copy_not_the_live_dict(self):
+        rm = RiskManager(bankroll=1000.0)
+        rm.add_exposure(5.0, group_key="gtm:2026-12")
+        snapshot = rm.group_exposure()
+        snapshot["gtm:2026-12"] = 999.0
+        assert rm.group_exposure()["gtm:2026-12"] == pytest.approx(5.0)
+
+    def test_group_exposure_empty_by_default(self):
+        assert RiskManager(bankroll=1000.0).group_exposure() == {}
+
+
+# ===================================================================
+# Section C4: the ruling's required BEHAVIOR test (item 5) -- a temp DB
+# shaped like the real book, run through the actual seeding path, no
+# venue, no Gateway. This is what proves finding I-1 is actually fixed:
+# the acceptance line must come out of DATA the three resting orders
+# would really produce, not a hand-built decisions list.
+# ===================================================================
+class TestGroupCommitmentsBehaviorAgainstADB:
+    def test_the_real_three_strike_book_renders_the_acceptance_line(self, tmp_path):
+        """29@0.34 / 41@0.24 / 71@0.14 -- the actual resting book
+        (docs/plans/2026-08-25-audit-remediation.md Task 0.2) -- must
+        render EXACTLY the brief's acceptance line, driven end-to-end
+        through load_open_commitments + seed_group_exposure +
+        render_group_commitments. This run places nothing new in the
+        group (mirrors production, where drop_already_committed drops
+        all three intents before the executor ever sees them) -- which
+        is exactly the scenario the OLD, decisions-only design could
+        never render at all (finding I-1)."""
+        db = tmp_path / "p.db"
+        _make_book(db)
+        _insert_placed_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
+                           market_id="ibkr:1", size=29.0, price=0.34)
+        _insert_placed_row(db, order_id="a2", question_id="gtm:2026-12:1.3",
+                           market_id="ibkr:2", size=41.0, price=0.24)
+        _insert_placed_row(db, order_id="a3", question_id="gtm:2026-12:1.4",
+                           market_id="ibkr:3", size=71.0, price=0.14)
+
+        commitments = load_open_commitments(str(db))
+        rm = RiskManager(bankroll=1000.0)
+        rm.seed_exposure(commitments["total_usd"])
+        rm.seed_group_exposure(commitments["by_group"])
+
+        # This run's own count is zero -- nothing new placed in the group.
+        group_counts = dict(commitments["by_group_counts"])
+
+        text = render_group_commitments(rm.group_exposure(), group_counts)
 
         assert "gtm:2026-12 = $29.64 (3 orders, 1 correlated bet)" in text
 
-    def test_ungrouped_decisions_produce_no_group_line(self):
-        report = ExecutionReport(decisions=[self._decision("0xabc123", 10.0)])
-        report.trades_executed = 1
-        text = report.summary()
-        assert "correlated bet" not in text
+    def test_a_new_placement_this_run_adds_to_the_seeded_book_not_shown_alone(self, tmp_path):
+        """The finding's own misleading example: a group seeded at $8
+        plus a $7 placement THIS run must render $15.00 committed across
+        2 orders -- never $7.00, which is what the OLD (wrong) design
+        would have shown by summing only this run's own decisions."""
+        db = tmp_path / "p.db"
+        _make_book(db)
+        _insert_placed_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
+                           market_id="ibkr:1", size=8.0, price=1.0)
 
-    def test_skipped_decisions_do_not_count_toward_group_totals(self):
-        skipped = self._decision("gtm:2026-12:1.2", 10.0)
-        skipped.executed = False
-        report = ExecutionReport(decisions=[
-            skipped,
-            self._decision("gtm:2026-12:1.3", 5.0),
-        ])
-        report.trades_executed = 1
-        text = report.summary()
-        assert "gtm:2026-12 = $5.00 (1 orders, 1 correlated bet)" in text
+        commitments = load_open_commitments(str(db))
+        rm = RiskManager(bankroll=1000.0)
+        rm.seed_exposure(commitments["total_usd"])
+        rm.seed_group_exposure(commitments["by_group"])
 
-    def test_two_distinct_groups_each_get_their_own_line(self):
-        report = ExecutionReport(decisions=[
-            self._decision("gtm:2026-12:1.2", 10.0),
-            self._decision("gtm:2026-11:1.0", 7.5),
-        ])
-        report.trades_executed = 2
-        text = report.summary()
-        assert "gtm:2026-12 = $10.00 (1 orders, 1 correlated bet)" in text
-        assert "gtm:2026-11 = $7.50 (1 orders, 1 correlated bet)" in text
+        # THIS run places a second order in the same group.
+        rm.add_exposure(7.0, group_key="gtm:2026-12")
+        group_counts = dict(commitments["by_group_counts"])
+        group_counts["gtm:2026-12"] = group_counts.get("gtm:2026-12", 0) + 1
+
+        text = render_group_commitments(rm.group_exposure(), group_counts)
+
+        assert "gtm:2026-12 = $15.00 (2 orders, 1 correlated bet)" in text
+        assert "$7.00" not in text
+
+    def test_end_to_end_through_a_real_executor_run(self, tmp_path):
+        """The full production wiring (ruling item 6), using FakeVenue
+        instead of a real Gateway: seed from the DB, run one new intent
+        through TradingExecutor.execute_intents, merge
+        report.group_order_counts() with the DB-seeded count exactly as
+        scripts/run_ibkr_paper.py now does, and render."""
+        db = tmp_path / "p.db"
+        _make_book(db)
+        _insert_placed_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
+                           market_id="ibkr:99", size=8.0, price=1.0)
+        commitments = load_open_commitments(str(db))
+
+        ex = TradingExecutor(
+            venue=FakeVenue(read_only=True), bankroll=1000.0, db_path=str(tmp_path / "t.db"),
+            risk_limits=RiskLimits(max_position_usd=10.0, max_group_usd=15.0,
+                                   max_total_exposure_usd=1000.0),
+        )
+        ex.risk_manager.seed_exposure(commitments["total_usd"])
+        ex.risk_manager.seed_group_exposure(commitments["by_group"])
+
+        # $7 of headroom left (15 - 8) in the same group.
+        intent = TradeIntent(edge=_edge(question_id="gtm:2026-12:1.3"), market=_ibkr_market())
+        report = ex.execute_intents([intent], mode="auto")
+
+        group_counts = _merged_group_counts(commitments, report)
+        text = render_group_commitments(ex.risk_manager.group_exposure(), group_counts)
+
+        assert report.trades_executed == 1
+        assert "gtm:2026-12 = $15.00 (2 orders, 1 correlated bet)" in text
 
 
 # ===================================================================
@@ -448,3 +660,27 @@ def test_run_ibkr_paper_seeds_group_exposure_next_to_total_exposure_inside_the_l
     assert seed_total_pos > lock_pos
     assert seed_group_pos > lock_pos
     assert "commitments[\"by_group\"]" in source or "commitments['by_group']" in source
+
+
+def test_run_ibkr_paper_renders_the_committed_book_from_the_ledger_not_the_report_alone():
+    """Ruling R16 item 6's threading requirement, pinned structurally the
+    same way (a live Gateway is out of reach for a unit test): the
+    printed group block must be built from `risk_manager.group_exposure()`
+    (the ledger) and `commitments["by_group_counts"]` (the DB-seeded
+    count) merged with the report's OWN count -- not from `report.
+    summary()` alone, which cannot see the seeded book (finding I-1)."""
+    import scripts.run_ibkr_paper as mod
+
+    source = inspect.getsource(mod.main)
+    lock_pos = source.index("with acquire_db_lock(")
+    report_pos = source.index("executor.execute_intents(")
+    render_pos = source.index("render_group_commitments(")
+    group_exposure_pos = source.index("executor.risk_manager.group_exposure()")
+    by_group_counts_pos = source.index("commitments[\"by_group_counts\"]")
+
+    for marker_pos in (report_pos, render_pos, group_exposure_pos, by_group_counts_pos):
+        assert marker_pos > lock_pos
+    # The block is rendered AFTER the executor has run (it needs this
+    # run's own count/exposure on top of the seed), not before.
+    assert render_pos > report_pos
+    assert group_exposure_pos > report_pos

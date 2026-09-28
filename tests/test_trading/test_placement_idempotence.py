@@ -156,7 +156,9 @@ def test_exposure_seeded_from_db_can_exhaust_headroom_and_reject():
 # ------------------------------------------------------------------ (c) load_open_commitments
 def test_missing_db_file_returns_the_empty_shape(tmp_path):
     commitments = load_open_commitments(str(tmp_path / "does_not_exist.db"))
-    assert commitments == {"total_usd": 0.0, "by_market": {}, "by_group": {}}
+    assert commitments == {
+        "total_usd": 0.0, "by_market": {}, "by_group": {}, "by_group_counts": {},
+    }
 
 
 def test_load_open_commitments_avoids_double_counting_a_partial_fill(tmp_path):
@@ -165,6 +167,15 @@ def test_load_open_commitments_avoids_double_counting_a_partial_fill(tmp_path):
     position row must not be added on top of that -- 9.84, not 12.24.
     A filled row is no longer a trade_log commitment, so it contributes
     only through its (now fully-sized) position: 9.86.
+
+    `by_group_counts` (controller ruling R16, additive) counts the SAME
+    contributing rows `by_group` sums dollars from: a1 contributes once,
+    via the trade_log loop (its own partial position is skipped, per the
+    no-double-counting rule above); a2 contributes once, via the
+    positions loop (its trade_log row is 'filled', not a candidate
+    status, so it's never in committed_order_ids). Two rows, both in
+    "gtm:2026-12" -> count 2, not 1 (one per source row) and not 4 (not
+    per dollar).
     """
     db = tmp_path / "p.db"
     _make_book(db)
@@ -183,6 +194,7 @@ def test_load_open_commitments_avoids_double_counting_a_partial_fill(tmp_path):
     assert commitments["by_market"]["ibkr:712856754"] == pytest.approx(9.84)
     assert commitments["by_market"]["ibkr:712856759"] == pytest.approx(9.86)
     assert commitments["by_group"]["gtm:2026-12"] == pytest.approx(9.84 + 9.86)
+    assert commitments["by_group_counts"]["gtm:2026-12"] == 2
 
 
 def test_load_open_commitments_ignores_cancelled_and_rejected_rows(tmp_path):
@@ -195,7 +207,9 @@ def test_load_open_commitments_ignores_cancelled_and_rejected_rows(tmp_path):
 
     commitments = load_open_commitments(str(db))
 
-    assert commitments == {"total_usd": 0.0, "by_market": {}, "by_group": {}}
+    assert commitments == {
+        "total_usd": 0.0, "by_market": {}, "by_group": {}, "by_group_counts": {},
+    }
 
 
 def test_load_open_commitments_group_key_drops_the_trailing_strike_segment(tmp_path):
@@ -207,6 +221,28 @@ def test_load_open_commitments_group_key_drops_the_trailing_strike_segment(tmp_p
     commitments = load_open_commitments(str(db))
 
     assert commitments["by_group"] == {"gtm:2026-12": 5.0}
+    assert commitments["by_group_counts"] == {"gtm:2026-12": 1}
+
+
+def test_load_open_commitments_by_group_counts_counts_rows_not_dollars(tmp_path):
+    """Controller ruling R16: `by_group_counts` is an order COUNT, not a
+    dollar-weighted figure -- three differently-sized rows in the same
+    group must count 3, matching the real book's three GTM strikes
+    (29@0.34 / 41@0.24 / 71@0.14, unequal cost_usd, same group)."""
+    db = tmp_path / "p.db"
+    _make_book(db)
+    _insert_trade_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
+                      market_id="ibkr:1", cost_usd=9.86, status="placed", size=29.0, price=0.34)
+    _insert_trade_row(db, order_id="a2", question_id="gtm:2026-12:1.3",
+                      market_id="ibkr:2", cost_usd=9.84, status="placed", size=41.0, price=0.24)
+    _insert_trade_row(db, order_id="a3", question_id="gtm:2026-12:1.4",
+                      market_id="ibkr:3", cost_usd=9.94, status="placed", size=71.0, price=0.14)
+
+    commitments = load_open_commitments(str(db))
+
+    assert commitments["total_usd"] == pytest.approx(29.64)
+    assert commitments["by_group"] == {"gtm:2026-12": pytest.approx(29.64)}
+    assert commitments["by_group_counts"] == {"gtm:2026-12": 3}
 
 
 # ------------------------------------------------------------------ (d) drop_already_committed

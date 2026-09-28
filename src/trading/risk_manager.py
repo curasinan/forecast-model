@@ -299,6 +299,25 @@ class RiskManager:
         """
         self._total_exposure = max(self._total_exposure, total_usd)
 
+    def group_exposure(self) -> dict[str, float]:
+        """Read-only snapshot of the live per-group ledger (H5, Task 3.6;
+        controller ruling R16 fix for finding I-1).
+
+        This is the COMMITTED BOOK per correlated print, not just this
+        process's own placements: whatever `seed_group_exposure` restored
+        from the DB's open book (a prior process's, or the venue's,
+        resting commitments) MAX'd against whatever `add_exposure(...,
+        group_key=...)` has added since. A run's printed report should
+        read this (see `src.trading.executor.render_group_commitments`)
+        rather than summing its own decisions, which can never show a
+        commitment dedup correctly kept out of that run altogether (e.g.
+        the three resting gtm:2026-12 orders, $29.64).
+
+        A COPY, not the live dict -- callers must not be able to mutate
+        `RiskManager` state through the object this returns.
+        """
+        return dict(self._group_exposure)
+
     def seed_group_exposure(self, by_group: dict[str, float]) -> None:
         """Restore per-group commitments this process did not itself accumulate.
 
