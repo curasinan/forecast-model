@@ -140,6 +140,22 @@ class PositionTracker:
         if order.status in (OrderStatus.FILLED, OrderStatus.SIMULATED):
             self._open_position(order)
 
+    def backfill_perm_id(self, order_id: str, perm_id: str) -> bool:
+        """Set ``trade_log.perm_id`` for ``order_id`` ONLY where it is still
+        empty (final-review finding I-1). A targeted UPDATE rather than
+        ``record_trade``'s INSERT OR REPLACE: it touches that one column and
+        can never overwrite a permId already on file. Returns True if a row
+        changed."""
+        if not perm_id:
+            return False
+        with sqlite3.connect(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE trade_log SET perm_id = ? "
+                "WHERE order_id = ? AND (perm_id IS NULL OR perm_id = '')",
+                (str(perm_id), order_id),
+            )
+            return cur.rowcount > 0
+
     def _open_position(self, order: TradeOrder) -> None:
         """Record a new open position (idempotent per order_id)."""
         with sqlite3.connect(self._db_path) as conn:

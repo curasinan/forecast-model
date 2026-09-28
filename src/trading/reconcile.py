@@ -22,8 +22,11 @@ Join key (controller ruling R1): the venue's permId, normalized to `str`
 on BOTH sides -- `str(order.venue_meta.get("perm_id") or "")` against the
 TEXT `trade_log.perm_id`. IBKR order ids are per-client and meaningless
 across sessions; permId is the only stable identity. A book row with no
-permId on file is SKIPPED with a note (surfaced, never guessed) -- fix it
-with `scripts/migrations/migrate_ibkr_paper_v2.py`, not by inference here.
+permId on file is SKIPPED with a note AND counted in
+`ReconcileReport.skipped_missing_perm_id` (surfaced, never guessed; the
+sync entrypoint reports such a run unhealthy -- final-review finding I-1)
+-- fix it with `scripts/migrations/migrate_ibkr_paper_v2.py`, not by
+inference here.
 
 A run happens in two phases inside ONE transaction: every conclusion is
 planned first (reads only), the safety guards below judge the plan as a
@@ -126,10 +129,19 @@ class ReconcileReport:
     unparseable `market_id`); each such row is named in `notes`, so the
     difference is never silent.
 
+    `skipped_missing_perm_id` (final-review finding I-1) counts the
+    candidate rows skipped because `trade_log.perm_id` is empty -- a row
+    that can never be joined to venue state, so its fills are invisible to
+    this book until an operator backfills it. It is counted separately from
+    every other skip (an unparseable `market_id` stays a note only) because
+    it is the one skip a healthy book must never have: the sync entrypoint
+    turns any non-zero value into an unhealthy (`ok: false`) run record.
+
     `aborted` is True when the mass-cancellation guard (ruling R8) stopped
     the run: NOTHING was written, every outcome bucket is zero, and `notes`
-    carries the reason and how to override it. `examined` and
-    `unmatched_venue_orders` still describe what was observed.
+    carries the reason and how to override it. `examined`,
+    `unmatched_venue_orders` and `skipped_missing_perm_id` still describe
+    what was observed.
     """
 
     examined: int = 0
@@ -138,6 +150,7 @@ class ReconcileReport:
     cancelled: int = 0
     unchanged: int = 0
     unmatched_venue_orders: int = 0
+    skipped_missing_perm_id: int = 0
     notes: list[str] = field(default_factory=list)
     aborted: bool = False
 
@@ -205,10 +218,17 @@ def reconcile_paper_book(db_path: str, venue, now: datetime | None = None, *,
 
     logger.info(
         "reconcile: aborted=%s examined=%d filled=%d partial=%d cancelled=%d unchanged=%d "
-        "unmatched_venue_orders=%d notes=%d",
+        "unmatched_venue_orders=%d skipped_missing_perm_id=%d notes=%d",
         report.aborted, report.examined, report.filled, report.partially_filled,
-        report.cancelled, report.unchanged, report.unmatched_venue_orders, len(report.notes),
+        report.cancelled, report.unchanged, report.unmatched_venue_orders,
+        report.skipped_missing_perm_id, len(report.notes),
     )
+    if report.skipped_missing_perm_id:
+        logger.error(
+            "reconcile: %d candidate row(s) have NO perm_id on file and are outside fill "
+            "capture until backfilled (scripts/migrations/migrate_ibkr_paper_v2.py)",
+            report.skipped_missing_perm_id,
+        )
     return report
 
 
@@ -311,6 +331,13 @@ def _reconcile(conn: sqlite3.Connection, venue, ts: str, stamp: datetime,
 
     # -- phase 1: plan (reads only) --------------------------------------
     plans = [_plan_row(conn, row, open_by_perm, positions, claimed) for row in rows]
+    # I-1: counted here, at planning time (an observation, like `examined`),
+    # so an R8 abort below cannot hide it. A 'skipped' plan with an empty
+    # perm_id is exactly the missing-permId skip in _plan_row; every other
+    # skip carries the row's (non-empty) permId.
+    report.skipped_missing_perm_id = sum(
+        1 for plan in plans if plan.kind == "skipped" and not plan.perm_id
+    )
 
     _note_unmatched_venue_orders(conn, open_by_perm, orders_without_perm, report)
 

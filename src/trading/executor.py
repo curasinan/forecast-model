@@ -486,10 +486,25 @@ class TradingExecutor:
         return ok
 
     def sync(self) -> int:
-        """Pull fill/cancel status from the venue for placed orders; record fills."""
+        """Pull fill/cancel status from the venue for placed orders; record fills.
+
+        Also backfills any permId the venue had not yet assigned when this
+        run's orders were acked (final-review finding I-1, see
+        ``OrderManager.backfill_perm_ids``). It lives here rather than in
+        ``scripts/run_ibkr_paper.py`` because this is already the one step
+        that re-reads venue truth for this run's placed orders and persists
+        it, and the executor is the layer holding both halves -- the
+        in-memory orders and the book -- so the entrypoint needs no new
+        plumbing, and any future caller of ``sync`` gets it too. Read-only
+        at the venue; a simulated executor makes no venue call at all.
+        Returns the number of orders whose fill/cancel status changed (the
+        backfill count is logged, not added in).
+        """
         updated = self._order_manager.sync_with_venue()
         for order in self._order_manager.filled_orders:
             self._position_tracker.record_trade(order)  # INSERT OR REPLACE keeps it idempotent
+        for order in self._order_manager.backfill_perm_ids():
+            self._position_tracker.backfill_perm_id(order.order_id, order.perm_id)
         return updated
 
     def get_portfolio(self) -> dict:

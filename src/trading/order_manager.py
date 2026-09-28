@@ -358,6 +358,70 @@ class OrderManager:
                 updated += 1
         return updated
 
+    def backfill_perm_ids(self) -> list[TradeOrder]:
+        """Fill in a permId the venue had not yet assigned at ack time.
+
+        Final-review finding I-1: the IBKR adapter reads ``trade.order.
+        permId`` after a fixed 1s wait, so a slow Gateway acks an order with
+        permId 0/None, stored as ``""``. Durable reconciliation joins on
+        permId only, so such an order would sit outside fill capture
+        forever. This re-reads the venue's resting orders once
+        (``get_all_open_orders()``, whose ``venue_meta["perm_id"]`` is
+        populated by then) and adopts the permId of THIS run's order.
+
+        READ-ONLY at the venue: one open-order fetch, never a placement,
+        cancellation or modification. Never guesses:
+
+        - only still-open orders with a venue order id and NO permId are
+          candidates -- a permId already on file is never overwritten;
+        - a venue order must match on venue order id AND leg contract
+          (IBKR order ids are per-client, so an id alone could name another
+          client's order);
+        - zero or several distinct non-zero permIds for that (id, contract)
+          leave the order untouched (logged) -- the next reconcile then
+          counts it loudly (``ReconcileReport.skipped_missing_perm_id``).
+
+        Returns the orders whose ``perm_id`` was filled in, for the caller
+        to persist. No-op (and no venue call) when simulating, when nothing
+        is missing, or when the venue has no cross-client open-order read.
+        """
+        if self._simulate:
+            return []
+        missing = [o for o in self.open_orders if o.venue_order_id and not o.perm_id]
+        if not missing:
+            return []
+        fetch = getattr(self._venue, "get_all_open_orders", None)
+        if fetch is None:
+            logger.warning(
+                "[%s] %d order(s) lack a permId but the venue offers no open-order "
+                "re-read; left empty -- the next reconcile will flag them",
+                self._venue.name, len(missing),
+            )
+            return []
+        venue_orders = fetch()
+        filled: list[TradeOrder] = []
+        for order in missing:
+            candidates = {
+                str((v.venue_meta or {}).get("perm_id") or "")
+                for v in venue_orders
+                if str(v.order_id) == order.venue_order_id
+                and str(v.request.market_id) == order.market_id
+            }
+            candidates.discard("")
+            if len(candidates) != 1:
+                logger.warning(
+                    "[%s] %s (venue %s): permId still %s after re-reading open orders; "
+                    "trade_log.perm_id stays empty -- the next reconcile will flag it",
+                    self._venue.name, order.order_id, order.venue_order_id,
+                    "ambiguous" if candidates else "unassigned",
+                )
+                continue
+            order.perm_id = candidates.pop()
+            filled.append(order)
+            logger.info("[%s] %s (venue %s): permId %s backfilled after ack",
+                        self._venue.name, order.order_id, order.venue_order_id, order.perm_id)
+        return filled
+
     def cancel_order(self, order_id: str) -> bool:
         order = next((o for o in self._orders if o.order_id == order_id), None)
         if not order:

@@ -32,11 +32,17 @@ Safety properties:
   operator who has confirmed the cancellations at the venue. An aborted run
   is reported and treated as unhealthy (exit 1, `ok: false` in the run
   ledger) -- it is not a crash, but it is not success either.
+- A candidate book row with no permId on file (final-review finding I-1)
+  can never be joined to venue state, so its fills are invisible. Such a
+  run still reconciles every other row, but is ALSO reported unhealthy
+  (exit 1, `ok: false`, `skipped_missing_perm_id` > 0) so the health
+  probe's SYNC_STALE axis fires instead of the gap staying silent.
 
 Run ledger: every invocation appends exactly one JSON line to
 `<db_path's data root>/paper/ibkr_sync_runs.jsonl`. Task 2.2's health probe
-keys on the `ok` field, which is true only when the run completed AND the
-mass-cancellation guard did not fire. An unhandled exception during
+keys on the `ok` field, which is true only when the run completed, the
+mass-cancellation guard did not fire, AND no candidate row was skipped for
+a missing permId (`report_is_healthy`). An unhandled exception during
 reconciliation still gets a best-effort line with `ok: false` before this
 process exits 1, so the health probe sees a failure instead of just a gap.
 
@@ -70,22 +76,45 @@ RUNS_FILENAME = "ibkr_sync_runs.jsonl"
 
 
 # ---------------------------------------------------------------- pure helpers
+def report_is_healthy(report: ReconcileReport) -> bool:
+    """True only for a run that completed without the mass-cancellation
+    guard firing AND left no candidate row outside fill capture.
+
+    Final-review finding I-1: a candidate row with no permId on file is
+    skipped by `reconcile_paper_book` on every run. Before this check the
+    run still recorded `ok: true`, so an order whose permId was not yet
+    assigned at ack time dropped out of fill capture with nothing ever
+    alerting. Choice: report such a run as `ok: false` (and exit 1) rather
+    than inventing a new ledger field the health probe would have to learn
+    -- `ok: false` lines never refresh the probe's last-successful-sync
+    timestamp, so the EXISTING SYNC_STALE axis
+    (`scripts/check_ibkr_recorder.py`) fires once the gap outlives its
+    threshold, and keeps firing until the row is backfilled. The
+    reconciliation itself still ran and wrote every other conclusion; only
+    the health verdict changes.
+    """
+    return not report.aborted and report.skipped_missing_perm_id == 0
+
+
 def build_jsonl_record(report: ReconcileReport, *, account: str, db: str,
                        ok: bool | None = None, ts: datetime | None = None) -> dict:
     """One run-ledger record from a `ReconcileReport` (Task 2.2's health probe
     keys on `ok`).
 
-    `ok` defaults to `not report.aborted` -- a run that completed without the
-    mass-cancellation guard firing. Pass `ok=False` explicitly for the
-    best-effort record written when reconciliation raised: `report` is then
-    a placeholder (typically `ReconcileReport(notes=[...])`) carrying only
-    what is known, and the caller states the outcome rather than letting the
-    placeholder's default `aborted=False` imply success.
+    `ok` defaults to :func:`report_is_healthy` -- a run that completed
+    without the mass-cancellation guard firing and with no row skipped for
+    a missing permId. Pass `ok=False` explicitly for the best-effort record
+    written when reconciliation raised: `report` is then a placeholder
+    (typically `ReconcileReport(notes=[...])`) carrying only what is known,
+    and the caller states the outcome rather than letting the placeholder's
+    default `aborted=False` imply success. An explicit `ok` can only ever
+    make the verdict WORSE: `ok=True` never masks an unhealthy report.
     """
     stamp = ts or datetime.now(timezone.utc)
+    healthy = report_is_healthy(report)
     return {
         "ts_utc": stamp.isoformat(),
-        "ok": (not report.aborted) if ok is None else ok,
+        "ok": healthy if ok is None else (bool(ok) and healthy),
         "aborted": report.aborted,
         "examined": report.examined,
         "filled": report.filled,
@@ -93,6 +122,7 @@ def build_jsonl_record(report: ReconcileReport, *, account: str, db: str,
         "cancelled": report.cancelled,
         "unchanged": report.unchanged,
         "unmatched_venue_orders": report.unmatched_venue_orders,
+        "skipped_missing_perm_id": report.skipped_missing_perm_id,
         "notes": list(report.notes),
         "account": account,
         "db": db,
@@ -105,6 +135,7 @@ def format_report(report: ReconcileReport) -> str:
         f"examined={report.examined} filled={report.filled} "
         f"partially_filled={report.partially_filled} cancelled={report.cancelled} "
         f"unchanged={report.unchanged} unmatched_venue_orders={report.unmatched_venue_orders} "
+        f"skipped_missing_perm_id={report.skipped_missing_perm_id} "
         f"aborted={report.aborted}"
     ]
     for note in report.notes:
@@ -179,10 +210,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(format_report(report))
-    _append_jsonl(runs_path, build_jsonl_record(report, account=adapter.account or "",
-                                                db=str(db_path)))
+    record = build_jsonl_record(report, account=adapter.account or "", db=str(db_path))
+    _append_jsonl(runs_path, record)
+    if report.skipped_missing_perm_id:
+        print(f"UNHEALTHY: {report.skipped_missing_perm_id} book row(s) have no perm_id on "
+              "file and are outside fill capture -- backfill with "
+              "scripts/migrations/migrate_ibkr_paper_v2.py", file=sys.stderr)
     adapter.disconnect()
-    return 0 if not report.aborted else 1
+    return 0 if record["ok"] else 1
 
 
 if __name__ == "__main__":

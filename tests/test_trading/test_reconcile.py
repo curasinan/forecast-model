@@ -654,6 +654,55 @@ def test_row_without_a_perm_id_is_skipped_and_noted(tmp_path):
     assert row["last_synced_utc"] is None
 
 
+def test_missing_perm_id_skip_is_counted_not_just_noted(tmp_path):
+    """Final-review I-1: a note alone let the sync ledger keep ok:true while
+    a new order sat outside fill capture forever. The skip is now counted in
+    its own bucket, which scripts/sync_ibkr_paper.py turns into ok:false."""
+    db = tmp_path / "ibkr_paper.db"
+    _make_book(db)
+    _insert_order_row(db, perm_id="")
+    venue = FakeSyncVenue(open_orders=[], positions=[_venue_position(quantity=29.0)])
+
+    report = reconcile_paper_book(str(db), venue)
+
+    assert report.skipped_missing_perm_id == 1
+    assert report.aborted is False
+
+
+def test_unparseable_market_id_skip_is_not_counted_as_missing_perm_id(tmp_path):
+    """The counter is specific: a row skipped for another reason (here an
+    unreadable market_id) stays a note, not a missing-permId count."""
+    db = tmp_path / "ibkr_paper.db"
+    _make_book(db)
+    _insert_order_row(db, perm_id="111")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE trade_log SET market_id = 'garbage' WHERE order_id = 'a1'")
+    conn.commit()
+    conn.close()
+    venue = FakeSyncVenue(open_orders=[_venue_order(perm_id=222, order_id="V2")])
+
+    report = reconcile_paper_book(str(db), venue)
+
+    assert any("cannot read a conId" in n for n in report.notes)
+    assert report.skipped_missing_perm_id == 0
+
+
+def test_missing_perm_id_count_survives_a_mass_cancel_abort(tmp_path):
+    """Like `examined`, the count is an observation, so an R8 abort (which
+    zeroes every OUTCOME bucket) must not hide it."""
+    db = tmp_path / "ibkr_paper.db"
+    _make_book(db)
+    _insert_order_row(db, order_id="a1", perm_id="")
+    _insert_order_row(db, order_id="b2", perm_id="222", con_id=OTHER_CON,
+                      question_id="gtm-2026-12-9.9")
+    venue = FakeSyncVenue(open_orders=[], positions=[])  # empty list -> R8 abort on b2
+
+    report = reconcile_paper_book(str(db), venue)
+
+    assert report.aborted is True
+    assert report.skipped_missing_perm_id == 1
+
+
 def test_foreign_venue_order_is_counted_and_never_written(tmp_path):
     db = tmp_path / "ibkr_paper.db"
     _make_book(db)

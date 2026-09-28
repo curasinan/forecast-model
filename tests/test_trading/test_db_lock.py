@@ -139,10 +139,31 @@ def test_build_jsonl_record_carries_every_contract_field():
         "cancelled": 0,
         "unchanged": 1,
         "unmatched_venue_orders": 2,
+        "skipped_missing_perm_id": 0,
         "notes": ["note one", "note two"],
         "account": "DU123456",
         "db": "C:/x/ibkr_paper.db",
     }
+
+
+def test_build_jsonl_record_ok_false_when_a_row_is_missing_its_perm_id():
+    """Final-review I-1: a candidate row reconcile had to skip for a missing
+    permId is outside fill capture -- the run must not report healthy, so
+    the health probe's SYNC_STALE axis eventually fires."""
+    rep = _report(skipped_missing_perm_id=1)
+    record = build_jsonl_record(rep, account="DU1", db="db.db")
+    assert record["ok"] is False
+    assert record["aborted"] is False
+    assert record["skipped_missing_perm_id"] == 1
+
+
+def test_build_jsonl_record_explicit_ok_true_cannot_mask_a_missing_perm_id():
+    rep = _report(skipped_missing_perm_id=2)
+    assert build_jsonl_record(rep, account="DU1", db="db.db", ok=True)["ok"] is False
+
+
+def test_format_report_shows_the_missing_perm_id_count():
+    assert "skipped_missing_perm_id=3" in format_report(_report(skipped_missing_perm_id=3))
 
 
 def test_build_jsonl_record_ok_false_when_aborted():
