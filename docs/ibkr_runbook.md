@@ -339,18 +339,23 @@ section 6 and expect the recorder to be `Running` within 5 minutes.
 ## 10. Monthly rituals
 
 Three checks belong in the same monthly sitting because the first one has a
-hard deadline: `.env` currently holds `IBKR_COMMISSION_PER_CONTRACT=0.01`
-and `IBKR_FEES_VERIFIED_ON=2026-08-25` (as of this writing, 2026-08-27), and
-`FlatCommissionFeeModel`'s 30-day staleness window (section below) turns
-that into a hard failure on **2026-09-24** if nobody re-verifies first. Do
-all three before the 20th of each month so there is buffer before the
-cliff.
+hard deadline. **The authoritative source for whether this is current is
+the live `.env` value, not this paragraph or the table below** -- this
+section is rewritten only when someone happens to touch it, so read
+`IBKR_FEES_VERIFIED_ON` directly out of `.env` before trusting any date
+written here. As of this writing (2026-09-28, Date verified: 2026-09-28),
+`.env` holds `IBKR_COMMISSION_PER_CONTRACT=0.01` and
+`IBKR_FEES_VERIFIED_ON=2026-09-28` (that month's ritual completed that day;
+commission re-verified unchanged at 0.01), and `FlatCommissionFeeModel`'s
+30-day staleness window (section below) turns that into a hard failure
+around **2026-10-28** if nobody re-verifies first. Do all three before the
+20th of each month so there is buffer before the cliff.
 
-| Ritual | Cadence | First due |
+| Ritual | Cadence | Next due |
 | --- | --- | --- |
-| Fee re-verify + `.env` date bump | Monthly, before the 20th | **2026-09-20** |
-| Universe snapshot refresh | Monthly, same sitting | 2026-09-20 |
-| Alert-channel test | Monthly, same sitting | 2026-09-20 |
+| Fee re-verify + `.env` date bump | Monthly, before the 20th | **2026-10-20** |
+| Universe snapshot refresh | Monthly, same sitting | 2026-10-20 |
+| Alert-channel test | Monthly, same sitting | 2026-10-20 |
 
 ### 10.1 Fee re-verify + `.env` date bump
 
@@ -404,7 +409,10 @@ Then update **both** `.env` values:
   30-day clock).
 
 The value has been `0.01` at every probe since 2026-08-16
-(`docs/venue_semantics.md:199-206`, `docs/venue_semantics.md:225-237`). A
+(`docs/venue_semantics.md:199-206`, `docs/venue_semantics.md:225-237`),
+including the 2026-09-28 monthly re-verify (unchanged; not yet logged in
+`docs/venue_semantics.md` as of this writing -- do that when next touching
+this ritual). A
 **changed** value is itself an alert-worthy finding, not routine drift: do
 not silently bump the date and move on -- record the discrepancy (old
 value, new value, which probe/statement) in `docs/venue_semantics.md`

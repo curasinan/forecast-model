@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     open_meteo_base_url: str = ""  # empty → auto: customer host if key else public
     open_meteo_allow_noncommercial: bool = False  # research-only escape hatch
     # Keep weather Parquet/SQLite off OneDrive (SQLite + sync = corruption risk).
-    # Empty → %LOCALAPPDATA%/polymarket_weather on Windows, else ~/.local/share/...
+    # Empty → ~/quant_data/polymarket_weather (see weather/paths.py). NEVER
+    # %LOCALAPPDATA% -- packaged-app trap, retired 2026-08-25 (docs/MIGRATION_CHECKPOINT.md sec. 3).
     weather_data_root: str = ""
     weather_min_liquidity: float = 1000.0
     weather_min_volume: float = 5000.0

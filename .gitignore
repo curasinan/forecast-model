@@ -58,10 +58,14 @@ context-hub/
 
 # Operator scratch/junk kept outside version control (untracked as of the
 # 2026-09-28 docs rewrite; adding these patterns does not remove anything
-# already committed)
+# already committed). bist_brief/ is a whole-directory ignore -- it does
+# NOT untrack bist_brief/RUN_INSTRUCTIONS.md, dashboard.py, engine.py, or
+# report.py, which stay tracked and visible in `git status` regardless
+# (gitignore never affects already-tracked paths); it only stops new
+# untracked scratch files under bist_brief/ (news_*.py, preopen_*,
+# inject_news*.py, and similar one-off scripts/exports) from showing up as
+# untracked or being swept in by a future `git add -A`.
 logs/
 .agents/
 *.zip
-bist_brief/preopen_*
-bist_brief/news_*
-bist_brief/inject_news*
+bist_brief/
