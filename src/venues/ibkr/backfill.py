@@ -108,7 +108,11 @@ class BackfillResult:
 
 
 def recorded_dates(data_root: str | Path) -> set[date]:
-    """UTC dates for which the sweep recorder wrote at least one file."""
+    """UTC dates for which the sweep recorder wrote at least one file.
+
+    A day is considered recorded when it has at least one parquet file
+    under quotes/date=YYYY-MM-DD/. Empty partitions are not counted.
+    """
     quotes = Path(data_root) / "quotes"
     found: set[date] = set()
     if not quotes.is_dir():
@@ -125,11 +129,46 @@ def recorded_dates(data_root: str | Path) -> set[date]:
     return found
 
 
+def backfilled_dates(data_root: str | Path) -> set[date]:
+    """UTC dates for which hourly backfill wrote at least one file.
+
+    A day is considered backfilled when it has at least one parquet file
+    under quotes_hourly/date=YYYY-MM-DD/. Empty partitions are not counted.
+    Partial backfills (empty directories) do not count as done; the next
+    backfill will refetch the day in full.
+    """
+    quotes_hourly = Path(data_root) / "quotes_hourly"
+    found: set[date] = set()
+    if not quotes_hourly.is_dir():
+        return found
+    for child in quotes_hourly.iterdir():
+        if not child.name.startswith("date=") or not child.is_dir():
+            continue
+        if not any(child.glob("*.parquet")):
+            continue
+        try:
+            found.add(date.fromisoformat(child.name[len("date="):]))
+        except ValueError:
+            logger.warning("ignoring unparseable partition %s", child.name)
+    return found
+
+
 def missing_dates(data_root: str | Path, start: date, end: date) -> list[date]:
-    """Dates in [start, end] with no sweep file, clipped to available history."""
+    """Dates in [start, end] with no sweep file and not already backfilled, clipped to available history.
+
+    A date is considered complete if it either:
+    - Has at least one parquet file in quotes/date=YYYY-MM-DD/ (from sweep recorder), OR
+    - Has at least one parquet file in quotes_hourly/date=YYYY-MM-DD/ (from historical backfill)
+
+    Empty partitions (directories with no parquet files) are not considered complete
+    and will be re-fetched. The day-granularity contract: a day with ANY hourly parquet
+    counts as done; partial days are not re-fetched.
+    """
     if end < start:
         raise ValueError(f"end {end} is before start {start}")
     have = recorded_dates(data_root)
+    backfilled = backfilled_dates(data_root)
+    have = have | backfilled  # union: dates from either source count as done
     start = max(start, HISTORY_STARTS)
     days = (end - start).days
     return [d for i in range(days + 1)

@@ -13,6 +13,7 @@ from src.venues.ibkr.backfill import (
     HISTORY_STARTS,
     BackfillRequest,
     HistoricalBackfiller,
+    backfilled_dates,
     bar_to_row,
     missing_dates,
     plan_requests,
@@ -31,6 +32,16 @@ def make_sweep_dirs(root, days: list[str], empty: list[str] = ()):
         (root / "quotes" / f"date={day}").mkdir(parents=True)
 
 
+def make_backfilled_dirs(root, days: list[str], empty: list[str] = ()):
+    """Create quotes_hourly/date=D/ with parquet files (or empty dirs if in empty list)."""
+    for day in days:
+        d = root / "quotes_hourly" / f"date={day}"
+        d.mkdir(parents=True)
+        (d / "hourly-run1.parquet").write_bytes(b"stub")
+    for day in empty:  # partition exists but holds no backfill file
+        (root / "quotes_hourly" / f"date={day}").mkdir(parents=True)
+
+
 class TestGapDetection:
     def test_recorded_dates_ignores_empty_partitions(self, tmp_path):
         make_sweep_dirs(tmp_path, ["2026-08-16", "2026-08-17"], empty=["2026-08-18"])
@@ -38,6 +49,17 @@ class TestGapDetection:
 
     def test_recorded_dates_on_missing_tree(self, tmp_path):
         assert recorded_dates(tmp_path / "nope") == set()
+
+    def test_backfilled_dates_finds_hourly_parquets(self, tmp_path):
+        make_backfilled_dirs(tmp_path, ["2026-08-16", "2026-08-17"])
+        assert backfilled_dates(tmp_path) == {date(2026, 8, 16), date(2026, 8, 17)}
+
+    def test_backfilled_dates_ignores_empty_partitions(self, tmp_path):
+        make_backfilled_dirs(tmp_path, ["2026-08-16"], empty=["2026-08-17"])
+        assert backfilled_dates(tmp_path) == {date(2026, 8, 16)}
+
+    def test_backfilled_dates_on_missing_tree(self, tmp_path):
+        assert backfilled_dates(tmp_path / "nope") == set()
 
     def test_missing_dates_finds_the_hole(self, tmp_path):
         make_sweep_dirs(tmp_path, ["2026-08-16", "2026-08-17", "2026-08-23"])
@@ -52,6 +74,33 @@ class TestGapDetection:
     def test_reversed_window_is_an_error(self, tmp_path):
         with pytest.raises(ValueError):
             missing_dates(tmp_path, date(2026, 8, 20), date(2026, 8, 10))
+
+    def test_missing_dates_excludes_backfilled_dates(self, tmp_path):
+        # Day D is in quotes_hourly but NOT in quotes
+        # missing_dates should not re-plan D since it's already backfilled
+        make_backfilled_dirs(tmp_path, ["2026-08-18"])
+        gaps = missing_dates(tmp_path, date(2026, 8, 16), date(2026, 8, 20))
+        # All days in range are missing from quotes, but 2026-08-18 is backfilled,
+        # so it should not appear in the missing list
+        assert date(2026, 8, 18) not in gaps
+        assert date(2026, 8, 16) in gaps  # not backfilled
+        assert date(2026, 8, 19) in gaps  # not backfilled
+        assert date(2026, 8, 20) in gaps  # not backfilled
+
+    def test_missing_dates_ignores_empty_backfill_partitions(self, tmp_path):
+        # An empty quotes_hourly/date=D/ (no parquet) doesn't count as backfilled
+        make_backfilled_dirs(tmp_path, [], empty=["2026-08-18"])
+        gaps = missing_dates(tmp_path, date(2026, 8, 16), date(2026, 8, 20))
+        # All days are missing, including 2026-08-18 (empty partition)
+        assert date(2026, 8, 18) in gaps
+
+    def test_missing_dates_with_missing_backfill_tree(self, tmp_path):
+        # If quotes_hourly/ doesn't exist at all, behavior is unchanged
+        gaps = missing_dates(tmp_path, date(2026, 8, 16), date(2026, 8, 20))
+        # All days in range should be in gaps
+        expected = [date(2026, 8, 16), date(2026, 8, 17), date(2026, 8, 18),
+                    date(2026, 8, 19), date(2026, 8, 20)]
+        assert gaps == expected
 
 
 class TestPlanning:
