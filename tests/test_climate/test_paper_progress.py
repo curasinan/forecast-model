@@ -24,6 +24,18 @@ December contract, `gtm:2026-12`). That proxy credited a resolved month
 before any real bet on it had resolved -- anti-conservative, rejected in
 review. `question_id`/`open_groups` are the fix: real evidence of which
 contract was actually traded, threaded additively through the writer.
+
+Fix round 2 (audit finding M2b, controller ruling R14 -- extends R13): two
+further anti-conservative gaps in the round-1 evidence. (1) A simulated
+rehearsal run's orders/open_groups were still counted; round 1's argument
+that this couldn't inflate the gate alone (paper_days stays 0 without a
+real run) is false once ANY real run has ever happened. (2) Every order in
+orders[] was counted regardless of `status` -- TradingExecutor attaches
+`decision.order` as soon as the risk check passes, before operator
+approval or venue placement can fail, so a declined ('pending') or
+rejected order was wrongly credited. R14: only `simulated=False` records
+contribute evidence, and within them only `status in {"placed", "filled"}`
+orders count. Both filters are delay-only.
 """
 
 from __future__ import annotations
@@ -450,19 +462,111 @@ def test_resolved_months_dedupes_multiple_runs_in_the_same_month(tmp_path):
     assert progress.resolved_months == 1
 
 
-def test_resolved_months_counts_simulated_runs_orders_too(tmp_path):
-    """Unlike paper_days, resolved_months is scoped to 'any run's orders'
-    per the brief -- a simulated/rehearsal run's traded month still counts
-    here. This alone cannot inflate the overall go-live gate: paper_days
-    stays 0 without a real (simulated=false) run, and evaluate_hindcast_go_live
-    requires BOTH thresholds to clear."""
+def test_resolved_months_excludes_simulated_runs_orders(tmp_path):
+    """R14 (fix round 2) flips fix round 1's behavior: a simulated
+    rehearsal run's orders no longer credit resolved_months. Fix round
+    1's safety argument -- "a simulated-only month can't inflate the gate
+    because paper_days stays 0 without a real run" -- is FALSE once any
+    real run has ever happened: paper_days then reflects that real run's
+    own start date (> 0), and every rehearsal since could still add
+    months for free under the old rule. This test pins exactly that
+    scenario: a real run has already started the clock, and a LATER
+    rehearsal's month must still not be credited."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(  # a real run: the paper_days clock is running
+                ts_utc="2025-01-01T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2025-01:0.80")],
+            ),
+            _run_record(  # a later rehearsal -- must not add its own month
+                ts_utc="2026-06-15T00:00:00+00:00", simulated=True,
+                orders=[_order(question_id="gtm:2026-06:0.80")],
+            ),
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2025-01", "2026-06"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 7, 1, tzinfo=timezone.utc)
+    )
+    assert progress.paper_days > 0  # a real run HAS happened...
+    assert progress.resolved_months == 1  # ...yet only 2025-01 (real) is credited, not 2026-06
+
+
+def test_resolved_months_excludes_open_groups_from_a_simulated_record(tmp_path):
+    """R14: open_groups is likewise read only from simulated=False
+    records. A simulated record's open_groups must not credit, while an
+    otherwise-identical real record's does."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
         [
             _run_record(
                 ts_utc="2026-01-15T00:00:00+00:00", simulated=True,
-                orders=[_order(question_id="gtm:2026-01:0.80")],
+                orders=[], open_groups=["gtm:2026-01"],
+            )
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2026-01"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 0
+
+    # An otherwise-identical REAL record's open_groups DOES credit.
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[], open_groups=["gtm:2026-01"],
+            )
+        ],
+    )
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 1
+
+
+@pytest.mark.parametrize("status", ["pending", "rejected", "cancelled"])
+def test_resolved_months_excludes_orders_that_were_never_actually_placed(tmp_path, status):
+    """R14: TradingExecutor attaches TradeDecision.order as soon as the
+    risk check passes -- BEFORE operator approval and before venue
+    placement can fail -- so an order the operator declined ('pending',
+    never approved) or that was rejected/cancelled still appears in
+    orders[] (the writer's own filter is only `d.order is not None`) but
+    represents no actual bet and must not credit its month."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80", status=status)],
+            )
+        ],
+    )
+    _write_labels_ledger(tmp_path, ["2026-01"])
+    progress = compute_paper_progress(
+        runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
+    )
+    assert progress.resolved_months == 0
+
+
+@pytest.mark.parametrize("status", ["placed", "filled"])
+def test_resolved_months_counts_orders_that_were_actually_placed(tmp_path, status):
+    """The positive side of the same R14 filter: a 'placed' order (resting
+    at the venue) or a 'filled' one (confirmed at sync time, before the
+    ledger write) both credit their month."""
+    runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
+    _write_runs_jsonl(
+        runs_jsonl,
+        [
+            _run_record(
+                ts_utc="2026-01-15T00:00:00+00:00", simulated=False,
+                orders=[_order(question_id="gtm:2026-01:0.80", status=status)],
             )
         ],
     )
@@ -471,7 +575,6 @@ def test_resolved_months_counts_simulated_runs_orders_too(tmp_path):
         runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 3, 1, tzinfo=timezone.utc)
     )
     assert progress.resolved_months == 1
-    assert progress.paper_days == 0  # no real run -> the clock never started
 
 
 def test_resolved_months_credits_a_month_only_seen_via_open_groups(tmp_path):

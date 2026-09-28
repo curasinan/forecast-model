@@ -40,6 +40,18 @@ from climate.storage import load_ledger
 #: src.trading.reconcile._group_key / load_open_commitments' by_group).
 _GTM_MONTH_RE = re.compile(r"^gtm:(\d{4}-\d{2})(?::|$)")
 
+#: Fix round 2 (audit finding M2b, controller ruling R14): the only
+#: src.trading.order_manager.OrderStatus values that represent a contract
+#: actually confirmed at the venue. TradingExecutor attaches
+#: TradeDecision.order as soon as the risk check passes -- BEFORE operator
+#: approval and before venue placement can fail -- so "pending" (built,
+#: never approved/placed) and "rejected" (operator declined or venue
+#: refused) both appear in a real run's orders[] without representing an
+#: actual bet. "cancelled" is excluded for the same reason. "simulated"
+#: never needs to appear here: whole simulated=true records are dropped
+#: before this set is even consulted (see compute_paper_progress).
+_COUNTED_ORDER_STATUSES = frozenset({"placed", "filled"})
+
 
 @dataclass(frozen=True)
 class PaperProgress:
@@ -146,37 +158,58 @@ def compute_paper_progress(
       run record at all.
 
     Both are parsed with the same ``"gtm:<YYYY-MM>"`` pattern
-    (:func:`_extract_gtm_month`); a month counts as "traded" the moment
-    it is named by either source, on ANY run record -- simulated
-    rehearsal runs count here too (unlike ``paper_days``) because the
-    brief scopes this half of the definition to "any run's orders" -- a
-    simulated-only month can't inflate the overall gate on its own since
-    ``paper_days`` stays 0 without a real run, and
-    ``evaluate_hindcast_go_live`` requires both thresholds to clear. A
-    traded month is RESOLVED once the label ledger carries a first-print
-    (``is_revision=False``) row for ``series == "gtm"`` at that exact
-    ``"YYYY-MM"`` period (:func:`climate.storage.load_ledger`).
+    (:func:`_extract_gtm_month`). Fix round 2 (audit finding M2b,
+    controller ruling R14 -- extends R13) applies two FURTHER filters on
+    top of that evidence, each delay-only (they can only shrink the
+    traded-month set, never grow it):
+
+    - ONLY records with ``simulated`` exactly ``False`` contribute
+      evidence at all -- neither their ``orders`` nor their
+      ``open_groups``. Fix round 1 argued a simulated-only month
+      couldn't inflate the gate because ``paper_days`` stays 0 without a
+      real run; that argument is FALSE once ANY real run has ever
+      happened -- ``paper_days`` then reflects that real run's own start
+      date, and every ``--simulate`` rehearsal run since then could
+      still add months for free. Rehearsal fills must never land in the
+      measured book (the same invariant already upheld for
+      ``trade_log``/``positions``), so rehearsal evidence is excluded
+      here too, root and branch, regardless of whether a real run has
+      started the ``paper_days`` clock.
+    - Within a real (``simulated=False``) record, only an order whose
+      ``status`` is ``"placed"`` or ``"filled"`` counts
+      (:data:`_COUNTED_ORDER_STATUSES`). ``TradingExecutor`` attaches
+      ``TradeDecision.order`` as soon as the risk check passes -- BEFORE
+      operator approval and before venue placement can fail -- so an
+      order the operator declined (``"pending"``, never approved) or the
+      venue rejected (``"rejected"``) still appears in ``orders[]`` (the
+      writer's own filter is only ``d.order is not None``) but
+      represents no actual bet and must not credit its month.
+
+    A traded month is RESOLVED once the label ledger carries a
+    first-print (``is_revision=False``) row for ``series == "gtm"`` at
+    that exact ``"YYYY-MM"`` period (:func:`climate.storage.load_ledger`).
     ``labels_root=None`` or a ledger file that doesn't exist yet yields
     ``resolved_months=0`` -- it never falls back to the real data root
     (:func:`climate.paths.data_root`'s default), which would defeat
     ``tmp_path``-only tests.
 
-    A LEGACY run record written before this fix (fix round 1) has
-    neither ``question_id`` on its orders nor an ``open_groups`` key, so
-    it contributes NOTHING to ``resolved_months`` -- it is silently
-    invisible to this half of the computation, not an error. That
-    asymmetry is intentional and the whole point: a gap in the evidence
-    can only ever DELAY go-live (undercounting resolved months), never
-    hasten it. Contrast with the rejected calendar-month proxy this
-    function used before fix round 1, which read the traded month off
-    the RUN record's own ``ts_utc`` -- wrong because a paper run trades
-    whatever month's contract is currently on the ladder, not necessarily
-    the run's own calendar month (a September run can trade the December
-    contract, ``gtm:2026-12``); that proxy counted 2026-09 as traded
-    while the actual bet, 2026-12, hadn't even happened yet, and 2026-09's
-    own label prints in mid-October -- crediting a resolved month before
-    any real bet on it had resolved. That is anti-conservative (it
-    weakens a go-live gate) and was rejected in review.
+    A LEGACY run record written before fix round 1 has neither
+    ``question_id`` on its orders nor an ``open_groups`` key, so it
+    contributes NOTHING to ``resolved_months`` regardless of the R14
+    filters above. Every one of these gaps -- legacy shape, a simulated
+    record, an unplaced/unfilled order -- is intentionally asymmetric:
+    missing or filtered evidence can only ever DELAY go-live
+    (undercounting resolved months), never hasten it. Contrast with the
+    rejected calendar-month proxy this function used before fix round 1,
+    which read the traded month off the RUN record's own ``ts_utc`` --
+    wrong because a paper run trades whatever month's contract is
+    currently on the ladder, not necessarily the run's own calendar month
+    (a September run can trade the December contract, ``gtm:2026-12``);
+    that proxy counted 2026-09 as traded while the actual bet, 2026-12,
+    hadn't even happened yet, and 2026-09's own label prints in
+    mid-October -- crediting a resolved month before any real bet on it
+    had resolved. That is anti-conservative (it weakens a go-live gate)
+    and was rejected in review.
 
     Missing/empty ``runs_jsonl`` yields ``PaperProgress(0, 0, None)``.
     Malformed JSON lines in ``runs_jsonl`` are skipped, not fatal.
@@ -203,9 +236,16 @@ def compute_paper_progress(
 
     traded_months: set[str] = set()
     for record in records:
+        # R14: a simulated (rehearsal) record contributes NO evidence at
+        # all -- not its orders, not its open_groups. Mirrors the strict
+        # identity check paper_days already uses above.
+        if record.get("simulated") is not False:
+            continue
         for order in record.get("orders") or []:
             if not isinstance(order, dict):
                 continue
+            if order.get("status") not in _COUNTED_ORDER_STATUSES:
+                continue  # R14: pending/rejected/cancelled never traded
             month = _extract_gtm_month(order.get("question_id"))
             if month is not None:
                 traded_months.add(month)
