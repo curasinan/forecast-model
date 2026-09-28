@@ -204,6 +204,14 @@ Cross-cutting rulebook facts:
   commission" — the API observation wins: model it as a flat per-contract
   commission, with the price sum ≈ $1.00 at mid. Re-verify against real
   fills on paper. (2026-08-16, follow-up report section 5.)
+- **Commission re-verified UNCHANGED at $0.01 USD per contract, 2026-09-28**
+  (monthly ritual, runbook §10.1; no real fill yet, so still whatIf-based).
+  All four order-type probes accepted with `commission=0.01
+  commissionCurrency='USD'` (min/max still the DBL_MAX sentinel); discovery
+  found 3,769 contracts / 3,702 tradable and the universe snapshot was
+  refreshed in the same run. `.env` `IBKR_FEES_VERIFIED_ON` bumped to
+  2026-09-28 (next StaleFeeError cliff 2026-10-28). Evidence:
+  `docs/stage0_report_2026-09-28_paper.md` section 5.
 - **Price-sum check (one illiquid sample pair, delayed quotes):**
   YES bid/ask 0.03/0.06, NO bid/ask 0.94/0.97 → bid-sum 0.97, ask-sum 1.03,
   **mid-sum 1.00** — consistent with the flat-commission model above, not
