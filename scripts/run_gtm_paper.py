@@ -183,6 +183,10 @@ def main(argv: list[str] | None = None) -> int:
             f"could not parse a sweep timestamp from {bad_path} "
             "(unrecognised filename; expected quotes-HHMMSSZ.parquet)"
         )
+    # payload["inits"] covers the PRICED LADDER's target months only
+    # (climate.paper.inits_for_priced_targets), and each must carry
+    # min(expected latest init, target) -- final-review finding C-1; the
+    # same shared check runs in scripts/run_ibkr_paper.py.
     reasons += check_staleness(
         sweep_ts=sweep_ts,
         signal_ts=None,

@@ -142,6 +142,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     sweep_ts = parse_ts_utc(payload["sweep_ts_utc"]) if payload.get("sweep_ts_utc") else None
     signal_ts = parse_ts_utc(payload["ts_utc"]) if payload.get("ts_utc") else None
+    # Same shared init rule as scripts/run_gtm_paper.py (final-review C-1):
+    # "inits" is scoped to the priced ladder by the writer, and each target
+    # must carry min(expected latest init, target). A pre-fix payload whose
+    # "inits" still lists resolved history refuses here -- regenerate it.
     reasons += check_staleness(
         sweep_ts=sweep_ts,
         signal_ts=signal_ts,

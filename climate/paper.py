@@ -139,6 +139,42 @@ def freshest_init_by_target(
     }
 
 
+#: Init reported for a PRICED target that ``freshest_init_by_target`` could
+#: not attribute -- never equal to a real 'YYYY-MM', so the gate refuses it.
+UNKNOWN_INIT = "unknown"
+
+
+def inits_for_priced_targets(
+    inits: Mapping[str, str], ladder: pd.DataFrame
+) -> dict[str, str]:
+    """Restrict ``inits`` to the target months actually on the priced ladder.
+
+    Final-review finding C-1: ``run_paper`` used to hand the staleness gate
+    the freshest init of EVERY target month in the training frame --
+    including every resolved month back to 1993 -- and
+    :func:`climate.paper_criteria.check_staleness` requires the expected
+    latest init for each, so any real frame was refused on every run.
+    Only a PRICED target's init can make a price stale, so only those are
+    gated.
+
+    Fail closed on the scoping itself: when ``inits`` is non-empty (the
+    frame can report inits at all) but a priced target has no entry, that
+    target is kept with :data:`UNKNOWN_INIT`, which the gate refuses --
+    never silently dropped. (``freshest_init_by_target`` with
+    ``fitted_leads`` covers every target ``predictive_by_target_month``
+    can price, so this is a belt, not an expected path.) An empty
+    ``inits`` -- a frame without ``init_date``, the documented
+    synthetic-frame path -- stays empty, and an empty ladder prices
+    nothing, so it gates nothing.
+    """
+    if ladder is None or ladder.empty or "target_month" not in ladder.columns:
+        return {}
+    if not inits:
+        return {}
+    priced = sorted({str(t) for t in ladder["target_month"].dropna()})
+    return {t: inits.get(t, UNKNOWN_INIT) for t in priced}
+
+
 def run_paper(
     frame: pd.DataFrame,
     model: EmosModel,
@@ -161,11 +197,14 @@ def run_paper(
     ``quotes-HHMMSSZ`` name when ``quotes_df`` was loaded from disk (via
     ``ticks_root``); None when a caller injected ``quotes_df`` directly
     (tests -- there is no sweep file to be stale) -- and ``inits``, the
-    freshest SEAS5 init month behind each target
+    freshest SEAS5 init month behind each target ON THE PRICED LADDER
     (:func:`freshest_init_by_target`, called with ``fitted_leads=
     model.params.keys()`` so a lead the model skipped can never be
     reported as the init behind a price -- see that function's docstring
-    for why the unfiltered form is unsafe here). It also carries
+    for why the unfiltered form is unsafe here -- then scoped by
+    :func:`inits_for_priced_targets`, final-review finding C-1: resolved
+    history in the training frame is never priced, so it is never gated).
+    It also carries
     ``model_fingerprint`` (audit finding M2a) -- the short sha256 of
     ``model``'s canonical JSON (:func:`climate.fit.model_fingerprint`) --
     so every order ``scripts/run_ibkr_paper.py`` places from this payload
@@ -202,7 +241,9 @@ def run_paper(
         "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sweep_ts_utc": sweep_ts_utc,
         "model_fingerprint": model_fingerprint(model),
-        "inits": freshest_init_by_target(frame, fitted_leads=model.params.keys()),
+        "inits": inits_for_priced_targets(
+            freshest_init_by_target(frame, fitted_leads=model.params.keys()), gated
+        ),
         "n_quotes": int(len(quotes_df)),
         "n_ladder": int(len(gated)),
         "n_tradeable": n_tradeable,

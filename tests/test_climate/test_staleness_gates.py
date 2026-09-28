@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from climate.emos import EmosModel, LeadParams
 from climate.ladder import sweep_ts_from_path
@@ -104,6 +105,64 @@ def test_none_inputs_skip_only_their_own_check():
     that HAS the data should ever pass (see scripts/run_gtm_paper.py and
     scripts/run_ibkr_paper.py, which always pass real values)."""
     assert check_staleness(sweep_ts=None, signal_ts=None, inits_by_target=None, now=NOW) == []
+
+
+# Final-review finding C-1: a target month T can only ever have inits <= T
+# (SEAS5 leadtime_month=1 IS the init month -- climate/dataset.py), so for a
+# current/past target the freshest init that can physically exist is T
+# itself. The gate now requires init == min(expected_latest_init(today), T):
+# maximally strict, never unsatisfiable.
+SEPT_10 = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)  # expected init '2026-09'
+
+
+def test_live_target_before_the_expected_month_passes_with_its_own_init_month():
+    # Target 2026-08 checked on Sept 10: its freshest possible init is
+    # 2026-08 (lead 1). The old rule demanded '2026-09' -- impossible.
+    assert expected_latest_init(SEPT_10.date()) == "2026-09"
+    reasons = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"2026-08": "2026-08"}, now=SEPT_10,
+    )
+    assert reasons == []
+
+
+def test_live_target_before_the_expected_month_with_a_stale_init_is_refused():
+    # Guard catches known-bad: init < min(expected, T) is genuinely stale.
+    reasons = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"2026-08": "2026-07"}, now=SEPT_10,
+    )
+    assert len(reasons) == 1
+    assert "2026-08" in reasons[0] and "2026-07" in reasons[0]
+
+
+def test_future_target_still_requires_the_expected_latest_init():
+    # T > expected: min(expected, T) == expected -- unchanged strictness.
+    stale = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"2026-12": "2026-08"}, now=SEPT_10,
+    )
+    assert len(stale) == 1 and "2026-12" in stale[0] and "2026-09" in stale[0]
+    fresh = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"2026-12": "2026-09"}, now=SEPT_10,
+    )
+    assert fresh == []
+
+
+def test_an_init_later_than_its_own_target_is_refused():
+    # Physically impossible (init <= target always) -> a data bug; must not
+    # pass just because it is "fresh".
+    reasons = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"2026-08": "2026-09"}, now=SEPT_10,
+    )
+    assert len(reasons) == 1
+
+
+def test_a_malformed_target_key_gets_no_relaxation():
+    # Fail closed: only a clean 'YYYY-MM' target earns the min(expected, T)
+    # rule. '1999' would otherwise compare below '2026-09' and let init
+    # '1999' through.
+    reasons = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target={"1999": "1999"}, now=SEPT_10,
+    )
+    assert len(reasons) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -417,3 +476,241 @@ def test_run_ibkr_paper_refuses_present_but_null_sweep_ts_utc_before_adapter_con
     captured = capsys.readouterr()
     assert "sweep_ts_utc" in captured.err
     assert "inits" not in captured.err  # isolated: only the sweep reason fired
+
+
+# --------------------------------------------------------------------------- #
+# Final-review finding C-1: the init gate is scoped to the PRICED LADDER.
+#
+# run_paper used to report ``inits`` for every target month in the whole
+# training frame -- every resolved (init, lead) row back to 1993 -- and the
+# gate demanded the expected latest init of each, so any real frame (which
+# always carries resolved history) was refused on every run. Every earlier
+# test frame here was all-unresolved, which is why the suite stayed green.
+# --------------------------------------------------------------------------- #
+
+
+def _shift_month(ym: str, k: int) -> str:
+    year, month = (int(p) for p in ym.split("-"))
+    idx = year * 12 + (month - 1) + k
+    return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+
+
+def _model_leads(*leads: int) -> EmosModel:
+    model = EmosModel(trend=False)
+    for lead in leads:
+        model.params[lead] = LeadParams(
+            lead_month=lead, a=0.0, b=1.0, c=0.01, d=0.0, n_train=10, train_crps=0.1
+        )
+    return model
+
+
+def _row(target: str, init: str, lead: int, y_c: float = np.nan) -> dict:
+    return {
+        "target_month": target,
+        "lead_month": lead,
+        "init_date": pd.Timestamp(f"{init}-01"),
+        "y_C": y_c,
+        "fc_mean_C": 1.10,
+        "fc_sd_C": 0.12,
+        "target_year_frac": int(target[:4]) + (int(target[5:]) - 0.5) / 12,
+        "month_of_year": int(target[5:]),
+    }
+
+
+def _mixed_history_frame(live_target: str, live_init: str, live_lead: int) -> pd.DataFrame:
+    """Resolved 2006 history (y_C known, like every real frame) plus one
+    live, unresolved target."""
+    return pd.DataFrame([
+        _row("2006-01", "2006-01", 1, y_c=0.45),
+        _row("2006-02", "2006-01", 2, y_c=0.50),
+        _row(live_target, live_init, live_lead),
+    ])
+
+
+def _quotes_for(target: str) -> pd.DataFrame:
+    return pd.DataFrame({
+        "con_id": [101], "target_month": [target], "strike": [0.6],
+        "bid": [0.40], "ask": [0.44], "yes_mid": [0.42], "no_mid": [0.56],
+        "spread": [0.04], "suspect_quote": [False],
+        "target_month_source": ["label"],
+    })
+
+
+def test_run_paper_inits_cover_only_the_priced_ladder_and_the_gate_passes():
+    from climate.paper import run_paper
+
+    frame = _mixed_history_frame("2026-12", "2026-09", 4)
+    payload = run_paper(frame, _model_leads(1, 2, 4), quotes_df=_quotes_for("2026-12"))
+
+    assert payload["n_ladder"] == 1
+    # The resolved 2006 rows are in the frame (and even in
+    # predictive_targets) but were never priced -- they must not be gated.
+    assert "2006-01" in payload["predictive_targets"]
+    assert payload["inits"] == {"2026-12": "2026-09"}
+    assert check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target=payload["inits"], now=SEPT_10,
+    ) == []
+
+
+def test_run_paper_live_target_before_the_expected_month_passes():
+    from climate.paper import run_paper
+
+    frame = _mixed_history_frame("2026-08", "2026-08", 1)
+    payload = run_paper(frame, _model_leads(1, 2), quotes_df=_quotes_for("2026-08"))
+
+    assert payload["inits"] == {"2026-08": "2026-08"}
+    assert check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target=payload["inits"], now=SEPT_10,
+    ) == []
+
+
+def test_run_paper_still_refuses_a_priced_target_with_a_stale_init():
+    """Guard catches known-bad: scoping to the ladder must not let a
+    genuinely stale PRICED target through. 2026-12's only row is from the
+    2026-08 init (a missed September fetch) while an unpriced target sits on
+    a fresh init -- the priced one is what the gate must see."""
+    from climate.paper import run_paper
+
+    frame = pd.concat([
+        _mixed_history_frame("2026-12", "2026-08", 5),
+        pd.DataFrame([_row("2027-01", "2026-09", 5)]),
+    ], ignore_index=True)
+    payload = run_paper(frame, _model_leads(1, 2, 5), quotes_df=_quotes_for("2026-12"))
+
+    assert payload["inits"] == {"2026-12": "2026-08"}
+    reasons = check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target=payload["inits"], now=SEPT_10,
+    )
+    assert len(reasons) == 1
+    assert "2026-12" in reasons[0] and "2026-08" in reasons[0]
+
+
+def test_priced_target_with_no_known_init_is_kept_as_unknown_and_refused():
+    """Fail closed: when the frame CAN report inits (it has init_date) but a
+    priced target has none, the target is kept with an 'unknown' init (which
+    the gate refuses) rather than silently dropped by the ladder scoping."""
+    from climate.paper import inits_for_priced_targets
+
+    ladder = pd.DataFrame({"target_month": ["2026-12", "2027-01"]})
+    inits = inits_for_priced_targets({"2026-12": "2026-09", "2006-01": "2006-01"}, ladder)
+    assert inits == {"2026-12": "2026-09", "2027-01": "unknown"}
+    assert len(check_staleness(
+        sweep_ts=None, signal_ts=None, inits_by_target=inits, now=SEPT_10,
+    )) == 1
+    # A frame with no init_date at all still reports "no known inits" (the
+    # documented synthetic-frame path), and an empty ladder prices nothing.
+    assert inits_for_priced_targets({}, ladder) == {}
+    assert inits_for_priced_targets({"2026-12": "2026-09"}, pd.DataFrame()) == {}
+
+
+def _write_fresh_sweep(ticks_root, ts: datetime) -> None:
+    sweep_dir = ticks_root / "quotes" / f"date={ts.strftime('%Y-%m-%d')}"
+    sweep_dir.mkdir(parents=True)
+    _sweep_rows(ts.isoformat()).to_parquet(
+        sweep_dir / ts.strftime("quotes-%H%M%SZ.parquet"), index=False
+    )
+
+
+def _run_gtm_paper_on_mixed_frame(tmp_path, monkeypatch, live_init_offset: int):
+    """scripts/run_gtm_paper.py end to end on the reviewer's repro shape: a
+    real-looking frame {2006 resolved, live target} plus a FRESH,
+    correctly-named sweep on disk. The live target sits 3 months after the
+    expected init month; its init is ``expected + live_init_offset``."""
+    import climate.paper as paper_mod
+    import scripts.run_gtm_paper as run_gtm_paper_mod
+
+    now = datetime.now(timezone.utc)
+    expected = expected_latest_init(now.date())
+    live_target = _shift_month(expected, 3)
+    live_init = _shift_month(expected, live_init_offset)
+    lead = 4 - live_init_offset  # target = init + (lead - 1)
+
+    root = tmp_path / "climate_root"
+    ticks_root = tmp_path / "ibkr_ticks"
+    model_path = tmp_path / "gtm_emos.json"
+    _model_leads(1, 2, lead).to_json(model_path)
+    _write_fresh_sweep(ticks_root, now - timedelta(minutes=5))
+    frame = _mixed_history_frame(live_target, live_init, lead)
+    monkeypatch.setattr(run_gtm_paper_mod, "build_training_frame", lambda root: frame)
+    monkeypatch.setattr(paper_mod, "latest_gtm_quotes",
+                        lambda ticks_root, universe_json=None: _quotes_for(live_target))
+
+    rc = run_gtm_paper_mod.main([
+        "--root", str(root),
+        "--model", str(model_path),
+        "--ticks-root", str(ticks_root),
+        "--universe-json", str(tmp_path / "no_universe.json"),
+        "--hindcast-gate-only",
+    ])
+    return rc, root, live_target, expected
+
+
+def test_run_gtm_paper_writes_signals_for_a_frame_with_resolved_history(
+    tmp_path, monkeypatch, capsys
+):
+    """The reviewer's repro: before the fix this refused with
+    'target 2006-01: SEAS5 init 2006-01 is not the expected latest ...'."""
+    rc, root, live_target, expected = _run_gtm_paper_on_mixed_frame(
+        tmp_path, monkeypatch, live_init_offset=0,
+    )
+    err = capsys.readouterr().err
+    assert "2006-01" not in err
+    assert rc == 0
+    written = json.loads((root / "paper" / "gtm_signals.json").read_text(encoding="utf-8"))
+    assert written["inits"] == {live_target: expected}
+
+
+def test_run_gtm_paper_still_refuses_a_stale_live_init_on_a_mixed_frame(
+    tmp_path, monkeypatch, capsys
+):
+    rc, root, live_target, expected = _run_gtm_paper_on_mixed_frame(
+        tmp_path, monkeypatch, live_init_offset=-1,
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert not (root / "paper" / "gtm_signals.json").exists()
+    assert f"target {live_target}" in err and expected in err
+    assert "2006-01" not in err  # history is not what refused it
+
+
+class _GatePassed(Exception):
+    """Raised by the fake adapter: reaching IBKRAdapter() means every
+    staleness check passed (the gate runs BEFORE the adapter is built)."""
+
+
+def _run_ibkr_paper_with_inits(tmp_path, monkeypatch, inits: dict) -> int:
+    import scripts.run_ibkr_paper as run_ibkr_paper_mod
+
+    class _FakeSettings:
+        trading_mode = "paper"
+
+    class _SentinelAdapter:
+        def __init__(self, *args, **kwargs):
+            raise _GatePassed
+
+    # Fake settings: no IBKR_* env and no .env read needed.
+    monkeypatch.setattr(run_ibkr_paper_mod, "IBKRSettings", _FakeSettings)
+    monkeypatch.setattr(run_ibkr_paper_mod, "IBKRAdapter", _SentinelAdapter)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signals_path = tmp_path / "gtm_signals.json"
+    signals_path.write_text(json.dumps({
+        "ts_utc": now_str, "sweep_ts_utc": now_str, "inits": inits,
+        "n_quotes": 0, "n_ladder": 0, "n_tradeable": 0, "predictive_targets": {},
+        "go_live": {"passed": False, "reasons": [], "metrics": {}}, "signals": [],
+    }), encoding="utf-8")
+    return run_ibkr_paper_mod.main(["--signals", str(signals_path), "--simulate"])
+
+
+def test_run_ibkr_paper_accepts_a_past_target_on_its_own_init_month(tmp_path, monkeypatch):
+    expected = expected_latest_init(datetime.now(timezone.utc).date())
+    past = _shift_month(expected, -1)
+    with pytest.raises(_GatePassed):
+        _run_ibkr_paper_with_inits(tmp_path, monkeypatch, {past: past})
+
+
+def test_run_ibkr_paper_refuses_a_past_target_with_a_stale_init(tmp_path, monkeypatch, capsys):
+    expected = expected_latest_init(datetime.now(timezone.utc).date())
+    past = _shift_month(expected, -1)
+    rc = _run_ibkr_paper_with_inits(tmp_path, monkeypatch, {past: _shift_month(past, -1)})
+    assert rc == 1
+    assert f"target {past}" in capsys.readouterr().err

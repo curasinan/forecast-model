@@ -25,6 +25,7 @@ is a huge relative move there, and the audit flagged strike-ladder extremes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any, Mapping
@@ -314,6 +315,29 @@ def expected_latest_init(today: date) -> str:
     return f"{year:04d}-{month:02d}"
 
 
+_TARGET_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def required_init_for_target(target: str, expected: str) -> str:
+    """The SEAS5 init a priced ``target`` month must have been priced off.
+
+    ``min(expected, target)`` (final-review finding C-1): SEAS5
+    ``leadtime_month=1`` IS the init month (``climate/dataset.py``), so a
+    target month T only ever has inits <= T. For a target at or after the
+    expected latest init month the requirement is unchanged (the expected
+    init itself); for a current/past target -- e.g. target 2026-08 checked
+    on 2026-09-10 -- the freshest init that can physically exist is T
+    itself, so demanding ``expected`` there would be unsatisfiable. This
+    stays maximally strict: nothing staler than the freshest possible init
+    passes, and neither does an init later than its own target (impossible,
+    so a data bug). A target that is not a clean ``'YYYY-MM'`` string gets
+    no relaxation at all (fail closed: ``expected`` is required).
+    """
+    if _TARGET_MONTH_RE.match(str(target)):
+        return min(expected, str(target))
+    return expected
+
+
 def check_staleness(
     *,
     sweep_ts: datetime | None,
@@ -332,6 +356,13 @@ def check_staleness(
     Both paper entrypoints (``scripts/run_gtm_paper.py``,
     ``scripts/run_ibkr_paper.py``) always have every input they call this
     with, so they never take that skip path in practice.
+
+    ``inits_by_target`` must cover the targets actually PRICED -- the
+    ladder's target months (``climate.paper.run_paper`` builds it that way
+    via ``inits_for_priced_targets``), not every target in the training
+    frame: resolved history can never carry this month's init. Each target
+    T must carry exactly :func:`required_init_for_target` --
+    ``min(expected_latest_init(today), T)``.
     """
     gates = gates or StalenessGates()
     reasons: list[str] = []
@@ -353,10 +384,19 @@ def check_staleness(
         expected = expected_latest_init(now.date())
         for target in sorted(inits_by_target):
             init = inits_by_target[target]
-            if init != expected:
+            required = required_init_for_target(target, expected)
+            if init == required:
+                continue
+            if required == expected:
                 reasons.append(
                     f"target {target}: SEAS5 init {init} is not the expected latest "
                     f"{expected} (fetch this month's SEAS5 init)"
+                )
+            else:
+                reasons.append(
+                    f"target {target}: SEAS5 init {init} is not {required}, the freshest "
+                    f"init that can exist for a target month before the expected latest "
+                    f"{expected} (fetch the {required} SEAS5 init)"
                 )
     return reasons
 
@@ -376,5 +416,6 @@ __all__ = [
     "apply_edge_gate",
     "StalenessGates",
     "expected_latest_init",
+    "required_init_for_target",
     "check_staleness",
 ]
