@@ -27,6 +27,7 @@ from climate.fit import MODEL_REL  # noqa: E402
 from climate.ladder import latest_sweep_path  # noqa: E402
 from climate.paper import parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
+from climate.paper_progress import compute_paper_progress  # noqa: E402
 from climate.paths import data_root, warn_if_onedrive  # noqa: E402
 
 log = logging.getLogger("run_gtm_paper")
@@ -55,8 +56,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=None, help="path to gtm_emos.json")
     parser.add_argument("--ticks-root", default=None, help="IBKR recorder data root")
     parser.add_argument("--universe-json", default=None, help="Stage-0 universe snapshot")
-    parser.add_argument("--paper-days", type=int, default=0)
-    parser.add_argument("--resolved-months", type=int, default=0)
+    parser.add_argument(
+        "--paper-days", type=int, default=None,
+        help="manual override; requires --allow-manual-gate-inputs (default: computed "
+             "from ibkr_paper_runs.jsonl -- audit finding M2b)",
+    )
+    parser.add_argument(
+        "--resolved-months", type=int, default=None,
+        help="manual override; requires --allow-manual-gate-inputs (default: computed "
+             "from the run/label ledgers -- audit finding M2b)",
+    )
+    parser.add_argument(
+        "--allow-manual-gate-inputs",
+        action="store_true",
+        help="permit --paper-days/--resolved-months to override the computed values "
+             "(audit finding M2b: without this flag, a manually-typed value is refused "
+             "so nobody can accidentally inflate paper-trading progress)",
+    )
     parser.add_argument(
         "--hindcast-gate-only",
         action="store_true",
@@ -65,6 +81,23 @@ def main(argv: list[str] | None = None) -> int:
              "a real paper record exists)",
     )
     args = parser.parse_args(argv)
+
+    manual_paper_days = args.paper_days is not None
+    manual_resolved_months = args.resolved_months is not None
+    if (manual_paper_days or manual_resolved_months) and not args.allow_manual_gate_inputs:
+        # print (not just log.error) to match the other CLI refusals in this
+        # file below: logging.basicConfig only configures the root logger
+        # once per process, so a stream captured by an EARLIER test's
+        # capsys can go stale across repeated main() calls in the same
+        # pytest run -- stderr always gets it.
+        reason = (
+            "refusing: --paper-days/--resolved-months must be computed from the "
+            "run/label ledgers (audit finding M2b); pass --allow-manual-gate-inputs "
+            "to override with an explicit operator-typed value"
+        )
+        print(reason, file=sys.stderr)
+        log.error(reason)
+        return 1
 
     root = data_root(args.root)
     warn = warn_if_onedrive(root)
@@ -76,6 +109,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     ticks_root = Path(args.ticks_root) if args.ticks_root else _default_ticks_root()
     universe = args.universe_json or str(REPO_ROOT / "data" / "ibkr_universe_live.json")
+
+    # Audit finding M2b: paper_days/resolved_months are DERIVED from the
+    # run/label ledgers, not trusted from the CLI, so nobody can
+    # (accidentally or otherwise) inflate paper-trading progress. A manual
+    # value is only used when the operator explicitly opted in above via
+    # --allow-manual-gate-inputs; per-field, so e.g. a manual --paper-days
+    # can be combined with a computed --resolved-months.
+    paper_days = args.paper_days
+    resolved_months = args.resolved_months
+    if paper_days is None or resolved_months is None:
+        progress = compute_paper_progress(
+            runs_jsonl=root / "paper" / "ibkr_paper_runs.jsonl",
+            labels_root=root,
+            now=datetime.now(timezone.utc),
+        )
+        if paper_days is None:
+            paper_days = progress.paper_days
+        if resolved_months is None:
+            resolved_months = progress.resolved_months
+        log.info(
+            "gate inputs from ledgers: paper_days=%d resolved_months=%d first_order_ts=%s",
+            paper_days, resolved_months, progress.first_order_ts,
+        )
 
     log.info("loading frame from %s, model from %s", root, model_path)
     frame = build_training_frame(root)
@@ -96,8 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         summary=summary,
         ticks_root=ticks_root,
         universe_json=universe if Path(universe).exists() else None,
-        paper_days=args.paper_days,
-        resolved_months=args.resolved_months,
+        paper_days=paper_days,
+        resolved_months=resolved_months,
         require_live_paper=not args.hindcast_gate_only,
     )
 

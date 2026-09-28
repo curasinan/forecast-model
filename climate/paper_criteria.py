@@ -51,7 +51,7 @@ class ClimateGoLiveCriteria:
     """Anti-optional-stopping bar for the climate lane (GTM first)."""
 
     min_skill_vs_trend: float = 0.0
-    min_leads_beating_trend: int = 3  # leads 1..3 must clear the skill floor
+    min_leads_beating_trend: int = 3  # any 3 leads must clear the skill floor
     min_cover50: float = 0.35
     max_cover50: float = 0.65
     min_cover90: float = 0.75
@@ -116,12 +116,19 @@ def evaluate_hindcast_go_live(
             )
         else:
             beating += 1
-        if np.isfinite(c50) and not (criteria.min_cover50 <= c50 <= criteria.max_cover50):
+        if not np.isfinite(c50):
+            # M2b/L4: a NaN coverage row used to sail through silently
+            # (neither branch of the old isfinite-guarded check fired for
+            # it) -- strengthen to an explicit refusal reason instead.
+            reasons.append(f"lead {lead}: cover50 is NaN (coverage could not be computed)")
+        elif not (criteria.min_cover50 <= c50 <= criteria.max_cover50):
             reasons.append(
                 f"lead {lead}: cover50 {c50:.3f} outside "
                 f"[{criteria.min_cover50}, {criteria.max_cover50}]"
             )
-        if np.isfinite(c90) and not (criteria.min_cover90 <= c90 <= criteria.max_cover90):
+        if not np.isfinite(c90):
+            reasons.append(f"lead {lead}: cover90 is NaN (coverage could not be computed)")
+        elif not (criteria.min_cover90 <= c90 <= criteria.max_cover90):
             reasons.append(
                 f"lead {lead}: cover90 {c90:.3f} outside "
                 f"[{criteria.min_cover90}, {criteria.max_cover90}]"
