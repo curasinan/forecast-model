@@ -55,3 +55,13 @@ context-hub/
 
 # Credential files must never live in the repo
 .cdsapirc
+
+# Operator scratch/junk kept outside version control (untracked as of the
+# 2026-09-28 docs rewrite; adding these patterns does not remove anything
+# already committed)
+logs/
+.agents/
+*.zip
+bist_brief/preopen_*
+bist_brief/news_*
+bist_brief/inject_news*

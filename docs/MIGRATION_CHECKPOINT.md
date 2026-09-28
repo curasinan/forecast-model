@@ -332,7 +332,8 @@ python scripts/run_ibkr_paper.py --mode approve --top 3
 python scripts/collect_climate_labels.py [--backfill]
 # Climate forecasts (needs CDS licences accepted)
 python scripts/fetch_climate_forecasts.py --pilot | --hindcast 2000-2025
-# GTM EMOS fit + diagnostics (writes under %LOCALAPPDATA%\climate_data)
+# GTM EMOS fit + diagnostics (writes under ~/quant_data/climate_data by
+# default; override with CLIMATE_DATA_ROOT -- never %LOCALAPPDATA%, see section 3)
 python scripts/fit_gtm_emos.py [--trend]
 # GTM paper signals vs latest IBKR recorder sweep (no orders)
 python scripts/run_gtm_paper.py

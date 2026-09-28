@@ -9,26 +9,47 @@ Quick facts:
 
 | Item | Value |
 | --- | --- |
-| Account | `U0000000` (live, U-prefix), API read-only |
+| Account | **Paper session** (paper-trading since 2026-08-25). Gateway login uses the live username with the **Paper Trading** toggle selected -- a separate paper username is not needed. Connected account is `DU0000000` (DU-prefix; mode is inferred from the account prefix at connect, `src/venues/ibkr/adapter.py:119`). The live account `U0000000` (U-prefix) exists but is never the session the recorder/paper-trading scripts connect to. |
+| Read-Only API | **Cleared** in Gateway -> Configure -> Settings -> API -> Settings on 2026-08-25 so paper orders can transmit (`docs/venue_semantics.md:248-253`, `docs/MIGRATION_CHECKPOINT.md:187-188`). Note `readonly=True` on the ib_async connect call does NOT by itself gate order transmission -- the real gates are `BaseVenue.place_order`'s `read_only` check (`src/venues/base.py:87-92`) and the adapter's paper-account check (`src/venues/ibkr/adapter.py:278-283`); see `src/venues/ibkr/clients.py` module docstring for why. |
 | Gateway | IB Gateway on `127.0.0.1:4002` (port does NOT imply mode) |
 | Recorder client id | 2 (`data_collector` -- the only sanctioned tick writer) |
 | Sweep cadence | every 20 min; one sweep takes ~13 min over ~2,900 contracts |
 | Data root | `~/quant_data/ibkr_ticks` (outside OneDrive AND outside AppData -- see MIGRATION_CHECKPOINT section 3) |
 | Heartbeat | `~/quant_data/ibkr_ticks/state/recorder_state.json` |
 | Recorder log | `logs\ibkr_recorder.log` (structured), `logs\ibkr_recorder_task.log` (task launcher capture) |
-| Scheduled tasks | `\IBKR\IBKR Recorder`, `\IBKR\IBKR Recorder Health` |
+| Scheduled tasks | `\IBKR\IBKR Recorder` (logon + 5-min keep-alive, clientId 2), `\IBKR\IBKR Recorder Health` (hourly via `run_ibkr_health.ps1`), `\IBKR\IBKR Paper Sync` (daily 17:30 via `run_ibkr_sync.ps1`, clientId 4) -- all three registered by `register_ibkr_tasks.ps1` (section 1). Elsewhere on this machine, outside `\IBKR\` and outside this runbook's scope: `\Climate\Climate Labels` (daily 16:30) and `\Polymarket\backup_db` (daily 21:00, kept deliberately even though the Polymarket runtime itself is gated off). |
 
 ## 1. What runs where
 
-- `scripts\scheduling\register_ibkr_tasks.ps1` registers two Task Scheduler
-  jobs under `\IBKR\` (run it elevated; registration only, nothing starts
-  immediately). `unregister_ibkr_tasks.ps1` removes them.
+- `scripts\scheduling\register_ibkr_tasks.ps1` registers three Task
+  Scheduler jobs under `\IBKR\` (run it elevated; registration only, nothing
+  starts immediately, replaces any existing registration by the same name).
+  `unregister_ibkr_tasks.ps1` removes them.
 - `\IBKR\IBKR Recorder` runs `scripts\scheduling\run_ibkr_recorder.ps1`,
-  which sets `IBKR_PORT=4002` / `IBKR_TRADING_MODE=live` (only if unset;
+  which sets `IBKR_PORT=4002` / `IBKR_TRADING_MODE=paper` (only if unset;
   scheduled tasks have no .env-loading shell) and launches
-  `python -u scripts\record_ibkr_ticks.py --interval-minutes 20`.
-- `\IBKR\IBKR Recorder Health` runs `scripts\check_ibkr_recorder.py` hourly
-  (5-minute execution cap); it alerts via Telegram, stdout is discarded.
+  `python -u scripts\record_ibkr_ticks.py --interval-minutes 20`
+  (`scripts\scheduling\run_ibkr_recorder.ps1:21-22,50`). Paper shares the
+  live account's market-data subscriptions, so the quotes are the same feed
+  either way.
+- `\IBKR\IBKR Recorder Health` runs `scripts\scheduling\run_ibkr_health.ps1`
+  hourly (5-minute execution cap on the task; the launcher itself has no
+  IBKR_PORT/IBKR_TRADING_MODE to set because the probe is Gateway-free --
+  filesystem only). Re-registered onto this launcher 2026-09-28 (previously
+  a bare `python.exe` action with no log-rotation/launch-marker wrapper).
+  The launcher tees `python -u
+  scripts\check_ibkr_recorder.py` to `logs\ibkr_health_task.log`; the probe
+  alerts via Telegram and appends its own durable line to
+  `logs\ibkr_health.log` (section 7, section 10.3).
+- `\IBKR\IBKR Paper Sync` runs `scripts\scheduling\run_ibkr_sync.ps1` daily
+  at 17:30, sets `IBKR_PORT=4002` / `IBKR_TRADING_MODE=paper` (only if
+  unset) and launches `python -u scripts\sync_ibkr_paper.py`, connecting as
+  role `paper_sync` / clientId 4, read-only. It asks the venue what
+  happened to every resting GTC order and reconciles the outcome into
+  `ibkr_paper.db` -- nothing that places an order stays alive long enough to
+  see a late fill land, so this daily job is what closes that gap
+  (`scripts\sync_ibkr_paper.py` module docstring). Output goes to
+  `logs\ibkr_sync_task.log`.
 - Parquet layout: `quotes\date=YYYY-MM-DD\quotes-HHMMSSZ.parquet`, one file
   per sweep, UTC date partition, `con_id` as an ordinary column
   (`src/venues/ibkr/recorder.py` module docstring explains the deviation
@@ -42,12 +63,13 @@ Quick facts:
 
   | Role | clientId | Notes |
   | --- | --- | --- |
-  | `live_trading` | 1 | reserved; never connected by this codebase |
+  | `live_trading` | 1 | order-submission role. `scripts\run_ibkr_paper.py` connects as this (any run NOT using `--simulate`), `read_only=False`, then refuses to proceed unless the connected account is paper (`scripts/run_ibkr_paper.py:156-163`). Despite the name, this is the role that has placed every real order so far -- all of them paper. |
   | `data_collector` | 2 | the recorder; the ONLY sanctioned writer of ticks |
-  | `research` | 3 | ad-hoc notebooks/probes; read-only |
+  | `research` | 3 | ad-hoc notebooks/probes; read-only. Also `scripts/verify_ibkr_entitlements.py`'s `--client-id` default (`scripts/verify_ibkr_entitlements.py:594`). |
+  | `paper_sync` | 4 | `\IBKR\IBKR Paper Sync` (`scripts\sync_ibkr_paper.py`), read-only; daily reconciliation of resting GTC orders (section 1). |
 
 - Evidence: `src/venues/ibkr/clients.py` (`CLIENT_IDS`, `connect_ib`).
-- Date verified: 2026-08-16 (code review; collision path unit-tested with fakes).
+- Date verified: 2026-08-16 (code review; collision path unit-tested with fakes); `paper_sync` role added since (Task 1.6/2.2).
 - Invalidation: adding a new process role; changing the map.
 
 Rules of thumb:
@@ -60,66 +82,116 @@ Rules of thumb:
 
 ## 3. Durability: how the recorder survives reboots and process death
 
-- `AtStartup` trigger covers reboots; `StartWhenAvailable` covers missed
-  triggers (machine asleep at boot-tick time).
+- Claim: the registered principal is **Interactive** (`-LogonType
+  Interactive -RunLevel Limited`, running as the operator's own Windows
+  account), not S4U ("run whether user is logged on or not"). S4U was tried
+  first and empirically never executed the action on this machine: instant
+  `0x0` "runs" with zero side effects and a stuck `Queued` state, while the
+  same launcher ran fine outside the scheduler -- isolating the failure to
+  the S4U task context. This is not a durability loss in practice: IB
+  Gateway is itself a GUI application that only exists inside a logged-on
+  session, so a recorder that could run without a login would still have
+  nothing to connect to.
+- Evidence: `scripts\scheduling\register_ibkr_tasks.ps1:33-43` (the
+  `$principal` definition) and its preceding comment block, which records
+  the S4U failure and the 2026-08-17 verification date.
+- Date verified: 2026-08-17 (S4U dead end found and replaced).
+- Invalidation: switching back to S4U; adopting IBC's own process model
+  (section 8), which would change this tradeoff.
+
+- `AtLogOn` starts the recorder when the operator's session logs on;
+  a 5-minute repeating trigger (seeded at registration time) is the
+  keep-alive, with `StartWhenAvailable` covering a tick missed while the
+  machine was asleep (`register_ibkr_tasks.ps1:78-85`). There is no
+  `AtStartup` trigger -- a reboot alone does not start the recorder, only
+  the next interactive logon does, which follows directly from the
+  Interactive principal above.
 - The every-5-minutes repeating trigger plus `MultipleInstances IgnoreNew`
   is the keep-alive: while the recorder runs, each tick is a no-op; when it
   dies, the next tick restarts it within 5 minutes.
-- `ExecutionTimeLimit` is 0 (PT0S = unlimited) -- Task Scheduler never kills
-  the loop. `RestartCount 3` / `RestartInterval 1 min` retries hard launch
-  failures.
-- The task principal is S4U ("run whether user is logged on or not",
-  no stored password), so the python process does not depend on an
-  interactive session. Caveat: password-less or Microsoft-account sign-ins
-  sometimes refuse S4U at run time (task `LastTaskResult` `0x80070569` or
-  `0x41303`). Fallback: open Task Scheduler, task properties, select
-  "Run whether user is logged on or not", supply the Windows password when
-  prompted (stored by Windows, not by this repo).
-- Limit of the design: IB Gateway itself is a GUI application. The recorder
-  process survives headless, but it only collects data while a Gateway that
-  someone logged into interactively is up. Gateway durability is section 4;
-  full headless is section 8.
+- `ExecutionTimeLimit` is set to 3650 days, not `[TimeSpan]::Zero` /
+  `PT0S`: `PT0S` was observed on this machine to mean "stop immediately"
+  (instant `0x0` runs, 2026-08-17), not "unlimited"
+  (`register_ibkr_tasks.ps1:87-98`). `RestartCount 3` / `RestartInterval
+  1 min` retries hard launch failures.
+- Limit of the design: because the principal is Interactive, both the
+  recorder task and the Gateway it depends on require an interactive logon
+  session to exist at all -- there is no reboot-survives-without-login
+  story here by design, and that is an accepted tradeoff, not a bug.
+  Gateway durability across its own restarts/re-logins is section 4; full
+  headless (which would revisit the Interactive-vs-S4U choice) is
+  section 8.
 
 ## 4. Weekly Gateway re-login procedure
 
 - Claim: with Gateway set to "Auto restart", the session survives the
   nightly restart without re-entering credentials, but IBKR still requires
   a full re-authentication roughly weekly (the restart nearest the weekly
-  boundary, typically Sunday, comes up at the login screen and waits for a
-  human).
+  boundary comes up at the login screen and waits for a human).
 - Evidence: IBKR Gateway documented behavior (Configure > Lock and Exit >
-  Auto restart). NOT yet observed in our logs -- auto-restart was enabled
-  2026-08-16 after the stall incident; confirm against the first full week
-  and update this entry.
-- Date verified: -- (vendor-documented only)
+  Auto restart), plus one real occurrence: exercised end-to-end on
+  2026-09-28, ending a Gateway outage that had run since the previous
+  manual login -- materially longer than "roughly weekly," most likely
+  because nothing paged for it until Telegram alerting was configured that
+  same day (section 10.3). The step-by-step procedure below (username,
+  Paper toggle, disclaimer popup, the error-10197 false alarm) reflects
+  what that 2026-09-28 re-login actually involved, not just the vendor
+  description.
+- Date verified: 2026-09-28 (first real re-login exercised end to end; the
+  vendor's "roughly weekly" cadence is still otherwise unconfirmed against
+  our own logs -- one data point is not a cadence).
 - Invalidation: IBKR changes session/authentication policy; switching to
   IBC (section 8).
 
-Procedure (do this Sundays, before US market hours, or when the health
-check pages you and the Gateway shows a login screen):
+Procedure (when the health check pages you, or the Gateway shows a login
+screen):
 
 1. At the machine (or via remote desktop), bring up the IB Gateway window.
-2. If it shows the login screen: log in (live account), complete the IBKR
+2. Log in with the **live username**, with the **Paper Trading** toggle on
+   the login screen selected -- there is no separate paper username to
+   remember (`docs/MIGRATION_CHECKPOINT.md:177-181`). Complete the IBKR
    Mobile 2FA prompt on the phone.
-3. Confirm the API is back: `Test-NetConnection 127.0.0.1 -Port 4002`
+3. **Accept the paper-trading disclaimer popup before any API client
+   connects.** If the recorder's keep-alive tick, the health check, or an
+   ad-hoc probe tries to connect while that popup is still open, the
+   attempt is rejected as a half-open handshake that briefly looks like a
+   competing session. The observable symptom (2026-09-28) is a burst of
+   API error 10197 right after login -- this is a documented IBKR false
+   positive that self-heals once the disclaimer is dismissed and the
+   session settles. Do not go hunting for a phantom competing session over
+   a brief 10197 burst; only treat it as a real problem if it persists well
+   past login (then go to section 7 triage).
+4. Confirm the API is back: `Test-NetConnection 127.0.0.1 -Port 4002`
    reports `TcpTestSucceeded : True`.
-4. Confirm collection resumed: heartbeat `ts` refreshes within one sweep
+5. Confirm collection resumed: heartbeat `ts` refreshes within one sweep
    cycle, i.e. within ~35 minutes (section 6 one-liners). Do not restart
-   the recorder task for this -- it retries on its own with backoff.
+   the recorder task for this -- it reconnects on its own with backoff
+   (`GatewaySession`, section 5).
 
 ## 5. The nightly restart window (expected disconnects)
 
 - Claim: with auto-restart enabled, the Gateway drops the API for a short
-  window around midnight US time each night. During that window the
-  recorder logs a burst of retries and then resumes on its own; this is
-  expected and needs no action.
+  window around midnight US-Eastern time each night, which on this
+  machine's local clock is configured as `23:30-00:15`
+  (`IBKR_RESTART_WINDOW_LOCAL` in `.env`). During that window the recorder
+  logs a burst of retries and then resumes on its own; this is expected and
+  needs no action.
 - Evidence: recorder reconnect design is verified in code and unit tests
-  (`src/venues/ibkr/recorder.py`: `_connect_with_backoff` retries with 1s
-  doubling to a 60s cap; a failed sweep triggers `_reconnect`). The nightly
-  window itself is vendor-documented; measure the first week's logs for the
-  actual local-time window and duration, then update this entry.
-- Date verified: -- (design verified 2026-08-16; window timing unmeasured)
-- Invalidation: Gateway restart time reconfigured; IBC adoption.
+  (`src/venues/ibkr/gateway.py`: `GatewaySession._reconnect_loop` retries
+  with 1s doubling to a 60s cap plus jitter; `ensure_connected` drives the
+  retry from an active `reqCurrentTime()` heartbeat, not bare socket
+  liveness). The window itself comes from `IBKR_RESTART_WINDOW_LOCAL`
+  (`src/venues/ibkr/settings.py:43-49`, parsed by
+  `parse_restart_window`/`in_restart_window` in the same `gateway.py`
+  module) -- events inside it are tagged `expected=True`
+  (`ConnectionEvent.expected`) so monitoring can separate planned restarts
+  from real outages; `.env` currently sets it to `23:30-00:15` local
+  (`docs/MIGRATION_CHECKPOINT.md:287-288`), a measured value, not the
+  settings default.
+- Date verified: 2026-08-16 (reconnect design); `IBKR_RESTART_WINDOW_LOCAL`
+  measured and set 2026-08-25 per MIGRATION_CHECKPOINT.
+- Invalidation: Gateway restart time reconfigured (update
+  `IBKR_RESTART_WINDOW_LOCAL`); IBC adoption.
 
 What it looks like in `logs\ibkr_recorder.log`:
 
@@ -128,15 +200,16 @@ What it looks like in `logs\ibkr_recorder.log`:
 ... WARNING ... connect failed (ConnectionRefusedError ...); retrying in 1s
 ... WARNING ... connect failed (...); retrying in 2s
 ...                                              ... retrying in 60s
-... WARNING ... ibkr session: account=U0000000 mode=live role=data_collector read_only=True
+... WARNING ... ibkr session: account=DU0000000 mode=paper role=data_collector read_only=True
 ... INFO    ... sweep done: rows=...
 ```
 
 Reading the burst:
 
-- A few minutes of `retrying in Ns` around midnight US time, then a clean
-  reconnect: expected=true. The health check should not page for this
-  (hourly cadence plus heartbeat threshold rides over a short window).
+- A few minutes of `retrying in Ns` inside the `23:30-00:15` local window,
+  then a clean reconnect: expected=true. The health check should not page
+  for this (hourly cadence plus heartbeat threshold rides over a short
+  window).
 - The same lines repeating every ~60s for HOURS: not a restart window.
   That is the failure mode of 2026-08-16 (below) or a stuck login screen.
   Go to section 7 triage.
@@ -375,6 +448,14 @@ e.g. `Refresh the IBKR universe snapshot (monthly ritual)`.
 
 ### 10.3 Alert-channel test
 
+Status: `ALERT_METHOD` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` have been
+set in HKCU on this machine since 2026-09-28, and this test reached the
+phone that day. That is a dated fact about this one machine, not a standing
+guarantee -- the unset/log-only path described below still applies verbatim
+on any other machine, or here again if these vars are ever cleared (account
+migration, OS reinstall, HKCU wiped). Re-run the check below any time you
+need to confirm the CURRENT state rather than trusting this note.
+
 How:
 
 ```powershell
@@ -387,14 +468,13 @@ non-`OK` status triggers both alert channels: the durable log sink
 (`_append_health_log`, appends to `logs\ibkr_health.log` by default --
 `scripts/check_ibkr_recorder.py:79,397-416`) and `send_alert`
 (`monitoring/heartbeat.py:79-113`, imported at
-`scripts/check_ibkr_recorder.py:74`). If Telegram alerting has not yet been
-configured (see `MIGRATION_CHECKPOINT.md` open action #4), `ALERT_METHOD`
-is unset and `send_alert` silently degrades to `log_only`
-(`monitoring/heartbeat.py:83,112-113`) -- only the `logs\ibkr_health.log`
-line will appear on this first pass, which is expected, not a failure; set
-the three HKCU vars below first, then re-run the test and expect both.
-Otherwise expect **both**: a new line in `logs\ibkr_health.log`, and a
-Telegram message.
+`scripts/check_ibkr_recorder.py:74`). If `ALERT_METHOD` is unset (a fresh
+machine, or these vars cleared), `send_alert` silently degrades to
+`log_only` (`monitoring/heartbeat.py:83,112-113`) -- only the
+`logs\ibkr_health.log` line appears, which is expected in that state, not a
+failure; set the three HKCU vars below first, then re-run the test and
+expect both. When the vars are set, expect **both**: a new line in
+`logs\ibkr_health.log`, and a Telegram message.
 
 If neither arrives, re-check the user-level environment variables
 `ALERT_METHOD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` -- set with

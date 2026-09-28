@@ -1,8 +1,19 @@
 # tech-event-predictor
 
-Quantitative prediction system for Polymarket — evidence collection, probability
-estimation, calibration, edge detection, and position sizing, with a separate
-weather-markets track built on post-processed numerical weather forecasts.
+Quantitative prediction system. The live venue is **IBKR ForecastEx**
+(climate lane): NOAA-label ingestion, SEAS5/ERA5-driven EMOS post-processing,
+a strike ladder, and paper-trading execution against ForecastEx climate
+contracts (`docs/ibkr_runbook.md` for operations, `docs/venue_semantics.md`
+for verified venue facts). Paper-trading since 2026-08-25; live trading
+stays a manual act by the account holder, never enabled by a commit here.
+
+The original **Polymarket** track (evidence collection, probability
+estimation, calibration, edge detection, position sizing) is research-only
+now: its runtime entrypoints are gated off (`POLYMARKET_RUNTIME=1` required
+to run them at all) and its live order/wallet code is retired to
+`legacy/polymarket_onchain/`, but the research code, data, and findings are
+preserved on purpose -- see `docs/MIGRATION_CHECKPOINT.md` for why the venue
+changed and what was kept.
 
 Research software. Nothing here is financial advice, and the trading layer
 defaults to dry-run.
@@ -60,4 +71,9 @@ Settings load from `.env` via pydantic-settings (`src/config.py`). Secrets never
 belong in the repo — `.env` is gitignored; `.env.example` documents the keys.
 
 Weather data (SQLite + Parquet) is deliberately stored outside the repo and off
-OneDrive, defaulting to `%LOCALAPPDATA%\polymarket_weather` on Windows.
+OneDrive, defaulting to `~/quant_data/polymarket_weather` (override with
+`WEATHER_DATA_ROOT`). Never `%LOCALAPPDATA%`: that was the pre-2026-08-25
+default, moved off it after a documented packaged-app incident where the
+same path silently resolved to two different stores depending on whether
+the writer ran inside the app or from Task Scheduler -- see the historical
+account in `docs/MIGRATION_CHECKPOINT.md` section 3.

@@ -28,8 +28,6 @@ class Settings(BaseSettings):
     database_path: str = "data/predictions.db"
 
     # Trading
-    polymarket_private_key: str = ""  # Polygon wallet private key for live trading
-    polymarket_funder_address: str = ""  # Optional: funder address for gas
     trading_dry_run: bool = True  # Default to dry-run (no real trades)
     trading_bankroll: float = 1000.0  # Starting simulated bankroll ($)
     trading_max_position_usd: float = 50.0  # Max $ per single trade
