@@ -219,6 +219,28 @@ def test_backfill_never_overwrites_a_perm_id_already_on_file(tmp_path):
     assert venue.all_open_calls == 0  # nothing missing -> no venue read at all
 
 
+def test_a_failing_backfill_read_does_not_crash_sync(tmp_path, caplog):
+    """The backfill is best-effort: run_ibkr_paper calls sync() AFTER
+    placing, so an exception here would crash the run and lose its
+    run-ledger line. The row just stays empty -- and the next reconcile
+    flags it loudly (skipped_missing_perm_id -> ok:false)."""
+    import logging
+
+    class _FlakyReadVenue(FakeVenueLatePermId):
+        def get_all_open_orders(self):
+            self.all_open_calls += 1
+            raise RuntimeError("gateway hiccup")
+
+    venue = _FlakyReadVenue(ack_perm_id=None)
+    ex, order, db = _place_one(tmp_path, venue)
+    with caplog.at_level(logging.ERROR, logger="src.trading.order_manager"):
+        ex.sync()  # must not raise
+    assert venue.all_open_calls == 1
+    assert order.perm_id == ""
+    assert _db_perm_id(db, order.order_id) == ""
+    assert any("RuntimeError" in r.getMessage() for r in caplog.records)
+
+
 def test_simulated_executor_sync_makes_no_backfill_venue_call(tmp_path):
     venue = FakeVenueLatePermId(ack_perm_id=None)
     ex = TradingExecutor(venue=venue, bankroll=100.0, db_path=str(tmp_path / "s.db"),

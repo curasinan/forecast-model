@@ -394,6 +394,8 @@ class OrderManager:
         Returns the orders whose ``perm_id`` was filled in, for the caller
         to persist. No-op (and no venue call) when simulating, when nothing
         is missing, or when the venue has no cross-client open-order read.
+        Best-effort: a re-read that raises is logged (class name only) and
+        backfills nothing rather than crashing the post-placement sync.
         """
         if self._simulate:
             return []
@@ -408,7 +410,19 @@ class OrderManager:
                 self._venue.name, len(missing),
             )
             return []
-        venue_orders = fetch()
+        try:
+            venue_orders = fetch()
+        except Exception as exc:  # noqa: BLE001 - best-effort; see below
+            # Callers run this AFTER placing (run_ibkr_paper -> executor.sync),
+            # so raising would crash the run and lose its run-ledger line.
+            # The gap is not hidden: the next reconcile counts the empty
+            # permId (skipped_missing_perm_id) and reports the run ok:false.
+            logger.error(
+                "[%s] permId backfill re-read failed (%s); %d order(s) keep an empty "
+                "perm_id -- the next reconcile will flag them",
+                self._venue.name, type(exc).__name__, len(missing),
+            )
+            return []
         filled: list[TradeOrder] = []
         for order in missing:
             candidates = {
