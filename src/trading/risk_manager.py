@@ -23,7 +23,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RiskLimits:
-    """Configurable risk parameters."""
+    """Configurable risk parameters.
+
+    Known limitation (H5 correlated-group concentration cap, Task 3.6;
+    operator-approved 2026-08-25): `max_group_usd` caps committed notional
+    per correlated PRINT, where the group key is `question_id` minus its
+    trailing ':<strike>' segment (e.g. "gtm:2026-12:1.3" -> "gtm:2026-12"
+    -- `src.trading.reconcile._group_key` is the single source of truth
+    for that expression; any caller deriving a group key must match it
+    exactly). That key is per (symbol-lane, target month) -- CROSS-SYMBOL
+    correlation is NOT grouped. GT (annual), GTM (monthly), and GTTA/GTTM
+    (pre-industrial-threshold) all settle off the same underlying NOAA
+    print for a given month/year -- the same real-world outcome -- yet
+    each would get its own group today, because the group key includes
+    the symbol-lane prefix. A book trading more than one of these lanes
+    on the same underlying print is more correlated than this cap can
+    see. Revisit the grouping key before opening a second symbol lane.
+    """
 
     # Edge requirements
     min_edge_pct: float = 0.05  # 5% minimum edge to trade
@@ -33,6 +49,7 @@ class RiskLimits:
     # Position sizing
     max_position_usd: float = 50.0  # Max $ per single market
     max_total_exposure_usd: float = 200.0  # Max total across all positions
+    max_group_usd: float = 15.0  # Max $ committed per correlated print (H5, Task 3.6)
     kelly_cap: float = 0.25  # Never bet more than 25% of bankroll
     max_kelly_fraction: float = 0.50  # Cap raw Kelly at 50%
 
@@ -72,6 +89,7 @@ class RiskManager:
         self._daily_pnl = 0.0
         self._daily_reset_date = datetime.now().date()
         self._total_exposure = 0.0
+        self._group_exposure: dict[str, float] = {}
         self._peak_bankroll = bankroll
 
     @property
@@ -89,6 +107,7 @@ class RiskManager:
         proposed_size_usd: float,
         market_liquidity: float = 0.0,
         days_to_deadline: int = 30,
+        group_key: str = "",
     ) -> RiskCheckResult:
         """Run all risk checks on a proposed trade.
 
@@ -97,6 +116,29 @@ class RiskManager:
             proposed_size_usd: How much we want to trade ($)
             market_liquidity: Current market liquidity ($)
             days_to_deadline: Days until market resolution
+            group_key: The correlated-print group this trade belongs to
+                (H5 concentration cap, Task 3.6), e.g. "gtm:2026-12".
+                Derive it with the exact same expression as
+                `src.trading.reconcile._group_key` -- that function is the
+                single source of truth this method's group ledger must
+                agree with. "" (the default, and what every non-`gtm:*`
+                question_id gets) means "no group": the group-cap check
+                below is skipped ENTIRELY, so every existing check and the
+                adjusted size stay byte-identical to before this cap
+                existed (regress note, Task 3.6 brief).
+
+                Ordering semantics (order-dependent-cap-scaling lesson):
+                this method has no notion of "arrival order" of its own --
+                it just reads/clips against whatever `self._group_exposure`
+                holds right now. The order in which headroom is actually
+                consumed is entirely up to the CALLER's evaluation order.
+                `TradingExecutor.execute_intents` evaluates intents
+                strictly in the order it is given them (it does not sort
+                by edge or anything else); see its docstring for how that
+                order is (and is not) controlled upstream. A cap evaluated
+                in arrival order can let a low-edge intent claim headroom
+                a higher-edge intent evaluated later would have wanted --
+                that tradeoff is accepted here, not silently hidden.
 
         Returns:
             RiskCheckResult with approval status and adjusted size.
@@ -153,6 +195,36 @@ class RiskManager:
         else:
             size = min(size, remaining_capacity)
             passed.append(f"exposure headroom: ${remaining_capacity:.0f}")
+
+        # 7a. Group concentration cap (H5, Task 3.6). Skipped ENTIRELY when
+        # group_key is "" -- that is the regress note: every pre-existing
+        # caller (group_key defaults to "") sees identical checks_passed/
+        # checks_failed and adjusted_size_usd to before this cap existed.
+        #
+        # `self._group_exposure[group_key]` is the group's ledger: it
+        # already combines whatever `seed_group_exposure` restored from the
+        # DB's open book (resting/committed orders, possibly from a prior
+        # process) with whatever THIS process has itself added via
+        # `add_exposure(..., group_key=...)` for intents already accepted
+        # earlier in this same run. Counting both together -- not just
+        # this run's own adds -- is the missing-position-dedup fix applied
+        # to a group cap: a ledger that only counted this run's adds would
+        # let a second run's intent ride a group a PRIOR run already
+        # filled up to $29.64 on.
+        if group_key:
+            group_committed = self._group_exposure.get(group_key, 0.0)
+            group_headroom = self.limits.max_group_usd - group_committed
+            if group_headroom <= 0:
+                failed.append(
+                    f"group {group_key} committed ${group_committed:.2f} >= "
+                    f"${self.limits.max_group_usd:.2f} correlated-print cap"
+                )
+            else:
+                size = min(size, group_headroom)
+                passed.append(
+                    f"group {group_key} headroom: ${group_headroom:.2f} of "
+                    f"${self.limits.max_group_usd:.2f}"
+                )
 
         # 8. Daily loss limit
         if self._daily_pnl <= -self.limits.max_daily_loss_usd:
@@ -227,9 +299,40 @@ class RiskManager:
         """
         self._total_exposure = max(self._total_exposure, total_usd)
 
-    def add_exposure(self, amount: float) -> None:
-        """Track that we've opened a new position."""
+    def seed_group_exposure(self, by_group: dict[str, float]) -> None:
+        """Restore per-group commitments this process did not itself accumulate.
+
+        The group-cap analogue of `seed_exposure` (H5, Task 3.6): call it
+        once at startup with `load_open_commitments(db_path)["by_group"]`
+        so a fresh process inherits what the DB's open book already has
+        riding on each correlated print, not just the total. `max` per
+        group, for the identical idempotence reason as `seed_exposure`: a
+        re-seed must never claw back group exposure this process has
+        already added via `add_exposure(..., group_key=...)` for trades
+        placed since the last seed.
+        """
+        for group_key, amount in by_group.items():
+            self._group_exposure[group_key] = max(
+                self._group_exposure.get(group_key, 0.0), amount
+            )
+
+    def add_exposure(self, amount: float, group_key: str = "") -> None:
+        """Track that we've opened a new position.
+
+        `group_key` (H5, Task 3.6) additionally attributes `amount` to a
+        correlated-group ledger, e.g. "gtm:2026-12" -- so THIS RUN's
+        accepted intents count against `max_group_usd` together with
+        whatever `seed_group_exposure` restored from the DB's open book
+        (the missing-position-dedup lesson: a cap must count the resting
+        book plus this run's own adds, not either one alone). "" (the
+        default) means "no group": total exposure still moves, but no
+        group bucket does -- matching `check_trade`'s "" semantics.
+        """
         self._total_exposure += amount
+        if group_key:
+            self._group_exposure[group_key] = (
+                self._group_exposure.get(group_key, 0.0) + amount
+            )
 
     def remove_exposure(self, amount: float) -> None:
         """Track that a position has been closed."""

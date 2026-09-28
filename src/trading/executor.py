@@ -39,6 +39,29 @@ from src.venues.base import VenueAdapter
 logger = logging.getLogger(__name__)
 
 
+def _group_key(question_id: str) -> str:
+    """The correlated-print group for a question_id (H5 cap, Task 3.6).
+
+    SINGLE-SOURCE-OF-TRUTH: this expression, `question_id.rsplit(":",
+    1)[0]`, is IDENTICAL to `src.trading.reconcile._group_key` -- an
+    executor-side group and a DB-seeded group (`load_open_commitments`'s
+    `by_group` keys) must name the same print, or `seed_group_exposure`
+    and `RiskManager.add_exposure(..., group_key=...)` would silently
+    talk past each other. Do not change this expression here without
+    changing it there too.
+
+    Scoped to `gtm:*` ids only, per the Task 3.6 brief's Q5 decision
+    (only the GTM strike ladder is grouped today): any other question_id
+    -- a legacy Polymarket id, or a future non-GTM lane -- gets
+    group_key="", which `RiskManager.check_trade`/`add_exposure` both
+    treat as "no group" (uncapped by group, byte-identical to before this
+    cap existed).
+    """
+    if not question_id.startswith("gtm:"):
+        return ""
+    return question_id.rsplit(":", 1)[0]
+
+
 @dataclass
 class TradeIntent:
     """One candidate trade, venue-neutral: an edge on a market."""
@@ -103,7 +126,35 @@ class ExecutionReport:
                     f"    [{status}] {d.question_title[:42]:<42} {d.direction:<16} "
                     f"edge={d.edge_pct:+.1%} {d.reason[:60]}"
                 )
+        groups = self._group_totals()
+        if groups:
+            lines.append("")
+            lines.append("  Correlated groups (committed notional per print, this run):")
+            for key in sorted(groups):
+                total, count = groups[key]
+                lines.append(f"    {key} = ${total:.2f} ({count} orders, 1 correlated bet)")
         return "\n".join(lines)
+
+    def _group_totals(self) -> dict[str, tuple[float, int]]:
+        """Committed notional + order count per correlated group (H5,
+        Task 3.6), from THIS run's executed decisions only -- a prior
+        run's already-resting orders (e.g. the three GTM strikes seeded
+        via `seed_group_exposure`) never appear in `self.decisions` at
+        all (dedup drops them before they reach the executor), so they
+        are not double-counted here; they show up in whichever run's
+        report first placed them. Ungrouped decisions (`group_key == ""`)
+        are omitted -- there is nothing "correlated" to report for them.
+        """
+        groups: dict[str, tuple[float, int]] = {}
+        for d in self.decisions:
+            if not d.executed or d.order is None:
+                continue
+            key = _group_key(d.question_id)
+            if not key:
+                continue
+            total, count = groups.get(key, (0.0, 0))
+            groups[key] = (total + d.order.cost_usd, count + 1)
+        return groups
 
 
 def _days_until(ts: datetime | None) -> int | None:
@@ -202,6 +253,24 @@ class TradingExecutor:
         return self.execute_intents(intents, mode=mode)
 
     def execute_intents(self, intents: Iterable[TradeIntent], mode: str = "approve") -> ExecutionReport:
+        """Evaluate, and (mode-permitting) place, one intent at a time.
+
+        Ordering semantics (H5 group cap, Task 3.6; order-dependent-cap-
+        scaling lesson): intents are evaluated STRICTLY in the order
+        `intents` yields them -- this method does not sort by edge, EV, or
+        anything else. That matters because `RiskManager`'s per-group cap
+        (`check_trade(group_key=...)`) consumes group headroom greedily as
+        each intent is accepted, so within one correlated group, headroom
+        goes to whichever intent is evaluated FIRST, not whichever has the
+        best edge. This executor does not sort intents itself and does not
+        add sorting here (scope discipline for Task 3.6 -- a change to
+        evaluation order is a separate, reviewed decision). In production,
+        `scripts/run_ibkr_paper.py::load_intents` already sorts its rows
+        by descending `abs(edge)` before building `TradeIntent`s, so
+        headroom is in practice consumed highest-edge-first there; a
+        caller that hands intents in a different order (e.g. most tests)
+        gets first-come, first-served instead.
+        """
         report = ExecutionReport(venue=self._venue.name, simulated=self.is_simulated)
         for intent in intents:
             report.total_analyzed += 1
@@ -284,6 +353,7 @@ class TradingExecutor:
             proposed_size_usd=proposed_size,
             market_liquidity=intent.liquidity_usd,
             days_to_deadline=int(days),
+            group_key=_group_key(edge.question_id),
         )
         decision = TradeDecision(
             question_id=edge.question_id, question_title=title,
@@ -335,7 +405,7 @@ class TradingExecutor:
         ok = self._order_manager.place_order(order)
         if ok:
             self._position_tracker.record_trade(order)
-            self._risk_manager.add_exposure(order.cost_usd)
+            self._risk_manager.add_exposure(order.cost_usd, group_key=_group_key(decision.question_id))
             logger.info(
                 "trade %s: %s %s @ %.4f x %g = $%.2f (%s)",
                 order.status.value, order.outcome, decision.question_title[:30],

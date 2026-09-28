@@ -211,6 +211,13 @@ def main(argv: list[str] | None = None) -> int:
             n_before_dedup = len(intents)
             intents = drop_already_committed(intents, resting, commitments)
             executor.risk_manager.seed_exposure(commitments["total_usd"])
+            # H5 correlated-group cap (Task 3.6): the group analogue of the
+            # total-exposure seed just above -- inherits what the DB's open
+            # book already has riding on each correlated print (e.g. the
+            # three resting gtm:2026-12 strikes) so RiskManager.check_trade's
+            # group cap sees that committed money even in a brand-new
+            # process, not just what THIS run itself places.
+            executor.risk_manager.seed_group_exposure(commitments["by_group"])
             print(f"{n_before_dedup - len(intents)} intent(s) dropped as already committed; "
                   f"seeded exposure=${commitments['total_usd']:.2f}")
 
