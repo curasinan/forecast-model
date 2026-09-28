@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from climate.emos import EmosModel
+from climate.fit import model_fingerprint
 from climate.ladder import (
     ladder_table,
     latest_gtm_quotes,
@@ -160,7 +161,11 @@ def run_paper(
     (:func:`freshest_init_by_target`, called with ``fitted_leads=
     model.params.keys()`` so a lead the model skipped can never be
     reported as the init behind a price -- see that function's docstring
-    for why the unfiltered form is unsafe here).
+    for why the unfiltered form is unsafe here). It also carries
+    ``model_fingerprint`` (audit finding M2a) -- the short sha256 of
+    ``model``'s canonical JSON (:func:`climate.fit.model_fingerprint`) --
+    so every order ``scripts/run_ibkr_paper.py`` places from this payload
+    can be traced back to the exact fit that priced it.
     """
     fee_model = fee_model or FlatCommissionFeeModel(0.01)
     predictive = predictive_by_target_month(frame, model)
@@ -192,6 +197,7 @@ def run_paper(
     return {
         "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sweep_ts_utc": sweep_ts_utc,
+        "model_fingerprint": model_fingerprint(model),
         "inits": freshest_init_by_target(frame, fitted_leads=model.params.keys()),
         "n_quotes": int(len(quotes_df)),
         "n_ladder": int(len(gated)),

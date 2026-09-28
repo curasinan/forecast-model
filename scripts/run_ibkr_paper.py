@@ -232,6 +232,13 @@ def main(argv: list[str] | None = None) -> int:
     with runs.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
             "ts_utc": datetime.now(timezone.utc).isoformat(),
+            # Audit finding M2a: echo the signals payload's model
+            # fingerprint (climate.paper.run_paper) so every run-ledger
+            # record traces back to the exact fitted model that priced
+            # it. .get() rather than [] -- an older/foreign payload
+            # written before this field existed must not crash the run;
+            # it just gets an honest None here instead.
+            "model_fingerprint": payload.get("model_fingerprint"),
             "account": adapter.account, "simulated": executor.is_simulated,
             "mode": args.mode, "intents": len(intents),
             "executed": report.trades_executed, "rejected": report.trades_rejected,

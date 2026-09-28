@@ -6,6 +6,7 @@ the script and the paper loop share: it never talks to IBKR or Polymarket.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,6 +35,24 @@ REPORT_MD_REL = ("reports", "gtm_emos_diagnostics.md")
 REPORT_JSON_REL = ("reports", "gtm_emos_diagnostics.json")
 
 
+def model_fingerprint(model: EmosModel) -> str:
+    """Short, stable identity of a fitted model (audit finding M2a).
+
+    A paper-trading measurement is only interpretable if every order
+    record can be traced to the exact fitted model that produced it, so
+    this is threaded through ``GtmFitResult.to_dict`` and the model
+    artifact here, then ``climate.paper.run_paper``'s signals payload,
+    then the run-ledger records ``scripts/run_ibkr_paper.py`` appends.
+
+    Computed over ``model.to_json(indent=0)`` -- the model's own
+    canonical serialisation, which never includes a ``fingerprint`` key
+    -- so the field is always excluded from the hashed payload, and this
+    is stable across repeated to_json()/from_json() round-trips of the
+    same fit and changes whenever any ``LeadParams`` coefficient does.
+    """
+    return hashlib.sha256(model.to_json(indent=0).encode()).hexdigest()[:16]
+
+
 @dataclass
 class GtmFitResult:
     """In-memory product of one GTM fit + expanding-window evaluation."""
@@ -58,6 +77,7 @@ class GtmFitResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "fitted_at_utc": self.fitted_at_utc,
+            "fingerprint": model_fingerprint(self.model),
             "trend": self.trend,
             "n_rows": self.n_rows,
             "n_labelled": self.n_labelled,
@@ -255,7 +275,16 @@ def write_artifacts(
     }
     for p in paths.values():
         p.parent.mkdir(parents=True, exist_ok=True)
-    result.model.to_json(paths["model"])
+    # Injected after the fact, not via model.to_json(path) directly:
+    # EmosModel's own serialisation never carries a fingerprint (that
+    # field is this module's concern, and must stay out of the hashed
+    # payload -- see model_fingerprint's docstring), so the model JSON
+    # written to disk here has the field merged in alongside it.
+    model_payload = result.model.to_dict()
+    model_payload["fingerprint"] = model_fingerprint(result.model)
+    paths["model"].write_text(
+        json.dumps(model_payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
     paths["report_md"].write_text(render_markdown(result), encoding="utf-8")
     payload = result.to_dict()
     payload["artifact_paths"] = {k: str(v) for k, v in paths.items()}
