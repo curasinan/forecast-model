@@ -217,6 +217,25 @@ def test_send_alert_raising_does_not_mask_exit_code(tmp_path, monkeypatch):
     assert rc == 1  # unhealthy exit preserved, no exception escapes
 
 
+def test_send_alert_failure_note_never_echoes_the_exception_text(tmp_path, monkeypatch, capsys):
+    """Final-review C-2 belt: without --quiet this note goes to stderr, which
+    run_ibkr_health.ps1 appends to logs/ibkr_health_task.log. An exception
+    from the Telegram path can quote the request URL -- bot token included --
+    so only the exception's class name may be printed."""
+    fake_token = "123456789:FAKE-test-token-NOT-A-REAL-SECRET"
+
+    def boom(message, method=None):
+        raise RuntimeError(f"Max retries exceeded with url: /bot{fake_token}/sendMessage")
+
+    monkeypatch.setattr(probe, "send_alert", boom)
+    state = _write_state(tmp_path, age_minutes=120)
+    rc = probe.main(_argv(state, tmp_path / "ibkr_events.jsonl"))  # NOT quiet
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "send_alert failed (RuntimeError)" in err
+    assert fake_token not in err
+
+
 def test_quiet_suppresses_stdout(tmp_path, alerts, capsys):
     state = _write_state(tmp_path, age_minutes=120)
     rc = probe.main(_argv(state, tmp_path / "ibkr_events.jsonl", ["--quiet"]))

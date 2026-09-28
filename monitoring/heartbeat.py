@@ -76,10 +76,40 @@ def setup_logging() -> None:
 # --------------------------------------------------------------------------- #
 
 
+_REDACTED = "<redacted>"
+
+
+def _scrub(text: str, secret: str) -> str:
+    """``text`` with every occurrence of ``secret`` replaced -- and of the
+    secret half of a ``<bot-id>:<secret>`` Telegram token too, so a partial
+    echo cannot leak the part that matters. Belt only: the structure of
+    :func:`send_alert` already keeps the token away from every log call."""
+    if not secret:
+        return text
+    text = text.replace(secret, _REDACTED)
+    _, _, tail = secret.partition(":")
+    if tail:
+        text = text.replace(tail, _REDACTED)
+    return text
+
+
 def send_alert(message: str, method: str | None = None) -> None:
     """Dispatch an alert. ``method`` defaults to the ALERT_METHOD env var, then
     ``log_only``. Telegram failures fall back to a CRITICAL log line so an
-    alert is never silently lost."""
+    alert is never silently lost.
+
+    SECRET HYGIENE (final-review finding C-2): Telegram's API puts the bot
+    token in the URL PATH (``/bot<TOKEN>/sendMessage``), and requests'
+    connection-error text quotes that path verbatim ("Max retries exceeded
+    with url: /bot<TOKEN>/sendMessage"). The health probe's stderr is
+    appended to ``logs/ibkr_health_task.log`` (a durable, OneDrive-synced
+    file) -- hourly during exactly the outages that make this path fire. So
+    the exception object is NEVER formatted into a log line here: only its
+    class name is, and every line on the Telegram path is additionally
+    passed through :func:`_scrub`. Any exception at all is contained (not
+    just ``RequestException``): one escaping would reach the probe's own
+    ``print(... exc ...)`` fallback on the same stderr channel.
+    """
     method = (method or os.environ.get("ALERT_METHOD") or "log_only").lower()
 
     if method == "telegram":
@@ -91,22 +121,26 @@ def send_alert(message: str, method: str | None = None) -> None:
                 message,
             )
             return
+        safe_message = _scrub(message, token)
+        failure: str | None = None
         try:
             resp = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": message},
                 timeout=15,
             )
-            if resp.status_code == 200:
-                log.info("alert sent via telegram")
-            else:
-                # Never log the token; just the status.
-                log.critical(
-                    "ALERT (telegram send failed, HTTP %s): %s",
-                    resp.status_code, message,
-                )
-        except requests.RequestException as exc:
-            log.critical("ALERT (telegram send error: %s): %s", exc, message)
+            if resp.status_code != 200:
+                failure = f"telegram send failed, HTTP {int(resp.status_code)}"
+        except Exception as exc:  # noqa: BLE001 - contain ANY failure; see docstring
+            # type(exc).__name__ only -- never str(exc)/repr(exc)/exc_info:
+            # the exception text embeds the request URL, token included.
+            failure = f"telegram send error: {type(exc).__name__}"
+        if failure is None:
+            log.info("alert sent via telegram")
+        else:
+            # Formatted OUTSIDE the except block, from a string that never
+            # saw the exception text; scrubbed once more as the belt.
+            log.critical("%s", _scrub(f"ALERT ({failure}): {safe_message}", token))
         return
 
     # log_only (default)

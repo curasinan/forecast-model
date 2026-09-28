@@ -479,7 +479,11 @@ def main(argv: list[str] | None = None) -> int:
         send_alert(message)
     except Exception as exc:  # noqa: BLE001 - exit code must survive any alert failure
         if not args.quiet:
-            print(f"send_alert failed ({exc}); alert may be lost", file=sys.stderr)
+            # Class name only (final-review C-2): this stderr is appended to
+            # logs/ibkr_health_task.log, and an exception from the Telegram
+            # path can quote the request URL -- bot token included.
+            print(f"send_alert failed ({type(exc).__name__}); alert may be lost",
+                  file=sys.stderr)
     return 1
 
 
