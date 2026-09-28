@@ -25,7 +25,7 @@ from climate.dataset import build_training_frame  # noqa: E402
 from climate.emos import EmosModel  # noqa: E402
 from climate.fit import MODEL_REL  # noqa: E402
 from climate.ladder import latest_sweep_path  # noqa: E402
-from climate.paper import parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
+from climate.paper import append_paper_history, parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paper_progress import compute_paper_progress  # noqa: E402
 from climate.paths import data_root, warn_if_onedrive  # noqa: E402
@@ -196,6 +196,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     out = write_paper_payload(payload, root=root)
+    # L8 (Task 3.8): AFTER the latest-file write, so a run that refused
+    # above (staleness gate) never appends a history line for a signals
+    # file it never produced -- write_paper_payload overwrites gtm_signals
+    # .json every run, this is the run-by-run series alongside it.
+    append_paper_history(payload, root=root)
     log.info(
         "ladder=%s tradeable=%s go_live=%s -> %s",
         payload["n_ladder"],

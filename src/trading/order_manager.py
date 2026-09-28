@@ -35,6 +35,7 @@ from decimal import ROUND_FLOOR, Decimal
 from enum import Enum
 
 from src.domain.fees import FeeModel
+from src.domain.ids import IBKR
 from src.domain.models import Market, OrderRequest
 from src.models.prediction import EdgeSignal
 from src.venues.base import VenueAdapter, VenueError
@@ -139,9 +140,17 @@ def edge_to_order(
         outcome = "NO"
         if market is not None and market.no_id is not None:
             leg_id = str(market.no_id)
-        elif market is not None:
+        elif market is not None and market.market_id.venue != IBKR:
             leg_id = str(market.market_id)  # single-contract venues (Polymarket)
         else:
+            # M8 (Task 3.8): IBKR publishes YES/NO as separate conIds, so a
+            # market missing its no_id has no resolvable NO contract at
+            # all -- falling back to market_id here would silently BUY THE
+            # YES LEG at the NO price. Empty leg_id makes
+            # _place_venue_order's "no market id for the leg" rejection
+            # fire instead. Belt-and-buckle with run_ibkr_paper.py's dedup,
+            # which already drops no_id=None NO intents before evaluation
+            # (Task 1.7) -- this is the primary fence, not just backup.
             leg_id = ""
         reason = (
             f"Model={edge.model_prob:.0%} < Market={yes_price:.0%}, "

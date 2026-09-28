@@ -1,4 +1,21 @@
-"""Verification tests for ``features.correlation_features``."""
+"""Verification tests for ``features.correlation_features``.
+
+M11 (Task 3.8, test hygiene): these used to read the real (gitignored)
+``data/polymarket.db`` and the hand-curated ``config/market_clusters.json``,
+asserting on specific real-world markets and cluster sizes ("iran" has
+exactly 15 members, market "559677" is Hillary Clinton 2028, ...). That
+tied the suite to whatever those two files happen to contain today and
+skipped cleanly (silently) when either was absent. Everything below is now
+a synthetic, session-scoped sqlite DB plus a synthetic cluster config, both
+built once per test session: a 3-member cluster ("alpha"), a 2-member
+cluster ("beta"), a 1-member cluster ("gamma"), and one unclustered market.
+Each clustered market has a distinct, deterministic price trajectory (see
+``_TRAJECTORIES``) so dispersion / lead-signal / peer-only-average all have
+unambiguous, non-random answers. The ``snapshots`` schema is copied
+verbatim from the real writer's DDL (``collectors/collect_snapshots.py::
+init_db``) -- this team's documented failure mode is a hand-drawn fixture
+shape the real code never exercises.
+"""
 
 from __future__ import annotations
 
@@ -18,9 +35,27 @@ from features import (
 )
 from features.correlation_features import CORRELATION_FEATURE_KEYS
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = REPO_ROOT / "data" / "polymarket.db"
-CONFIG_PATH = REPO_ROOT / "config" / "market_clusters.json"
+T_LATEST = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
+HOURS_OF_HISTORY = 48
+FIRST_TS = T_LATEST - timedelta(hours=HOURS_OF_HISTORY)
+LATEST_SNAPSHOT_T = T_LATEST - timedelta(hours=2)  # step back so the 1h lookback resolves
+
+ALPHA_MEMBERS = ("alpha-1", "alpha-2", "alpha-3")
+BETA_MEMBERS = ("beta-a", "beta-b")
+GAMMA_MEMBERS = ("gamma-solo",)
+UNCLUSTERED_MARKET = "unclustered-1"
+
+# market_id -> (base_price, hourly_slope). Distinct slopes so
+# cluster_lead_signal has one unambiguous leader (alpha-3, |slope|=0.004,
+# clearly larger than any peer's) rather than a tie that would make the
+# test's outcome depend on pandas' idxmax tie-breaking.
+_TRAJECTORIES: dict[str, tuple[float, float]] = {
+    "alpha-1": (0.30, 0.002),
+    "alpha-2": (0.50, 0.001),
+    "alpha-3": (0.70, -0.004),
+    "beta-a": (0.40, 0.003),
+    "beta-b": (0.60, 0.0015),
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -28,38 +63,96 @@ CONFIG_PATH = REPO_ROOT / "config" / "market_clusters.json"
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(scope="module")
-def db():
-    if not DB_PATH.exists():
-        pytest.skip(f"DB not found at {DB_PATH}")
-    return DB_PATH
+@pytest.fixture(scope="session")
+def db(tmp_path_factory) -> Path:
+    """Synthetic sqlite DB: ``snapshots`` schema copied from
+    ``collectors/collect_snapshots.py::init_db``; ``markets`` minimal
+    (id, end_date) since that's all ``features.market_features`` reads.
+    Only the clustered markets in ``_TRAJECTORIES`` carry snapshot history
+    -- the unclustered market and the singleton-cluster edge case (see
+    ``test_single_member_cluster_yields_nulls_for_peer_aggregates``) don't
+    need any: ``_build_correlation_row`` returns before ever touching
+    features for a market with no cluster, or the sole member of one.
+    """
+    path = tmp_path_factory.mktemp("correlation_features_db") / "synthetic.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE snapshots (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id   TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                best_bid    REAL,
+                best_ask    REAL,
+                bid_depth   REAL,
+                ask_depth   REAL,
+                midpoint    REAL,
+                spread      REAL,
+                last_price  REAL,
+                volume_24h  REAL,
+                UNIQUE (market_id, timestamp)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX idx_snapshots_market_id ON snapshots (market_id)")
+        conn.execute("CREATE TABLE markets (id TEXT PRIMARY KEY, end_date TEXT)")
+
+        all_ids = (*ALPHA_MEMBERS, *BETA_MEMBERS, *GAMMA_MEMBERS, UNCLUSTERED_MARKET)
+        end_date = (T_LATEST + timedelta(days=30)).isoformat()
+        conn.executemany(
+            "INSERT INTO markets (id, end_date) VALUES (?, ?)",
+            [(mid, end_date) for mid in all_ids],
+        )
+
+        rows = []
+        for mid, (base, slope) in _TRAJECTORIES.items():
+            for h in range(HOURS_OF_HISTORY + 1):
+                ts = FIRST_TS + timedelta(hours=h)
+                price = base + slope * h
+                rows.append((
+                    mid, ts.isoformat(),
+                    price - 0.01, price + 0.01, 100.0, 90.0,
+                    price, 0.02, price, 1000.0,
+                ))
+        conn.executemany(
+            "INSERT INTO snapshots (market_id, timestamp, best_bid, best_ask, "
+            "bid_depth, ask_depth, midpoint, spread, last_price, volume_24h) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
 
 
-@pytest.fixture(scope="module")
-def cfg():
-    if not CONFIG_PATH.exists():
-        pytest.skip(f"Cluster config not found at {CONFIG_PATH}")
-    return CONFIG_PATH
+@pytest.fixture(scope="session")
+def cfg(tmp_path_factory) -> Path:
+    """Synthetic cluster config, in load_clusters' own flat
+    cluster_name -> [market_id, ...] schema -- standing in for the
+    hand-curated config/market_clusters.json."""
+    path = tmp_path_factory.mktemp("correlation_cfg") / "clusters.json"
+    path.write_text(
+        json.dumps({
+            "alpha": list(ALPHA_MEMBERS),
+            "beta": list(BETA_MEMBERS),
+            "gamma": list(GAMMA_MEMBERS),
+        }),
+        encoding="utf-8",
+    )
+    return path
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def clusters(cfg):
     return load_clusters(cfg)
 
 
-@pytest.fixture(scope="module")
-def latest_snapshot_T(db) -> datetime:
-    """Use a T inside the snapshot window so momentum is meaningful."""
-    conn = sqlite3.connect(db)
-    try:
-        ts = conn.execute("SELECT MAX(timestamp) FROM snapshots").fetchone()[0]
-    finally:
-        conn.close()
-    if ts is None:
-        pytest.skip("No snapshots in DB")
-    parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    # Step back a couple of hours so the 1h lookback finds a different snapshot.
-    return parsed - timedelta(hours=2)
+@pytest.fixture(scope="session")
+def latest_snapshot_T() -> datetime:
+    """Inside the synthetic snapshot window, so momentum is meaningful."""
+    return LATEST_SNAPSHOT_T
 
 
 # --------------------------------------------------------------------------- #
@@ -69,9 +162,9 @@ def latest_snapshot_T(db) -> datetime:
 
 def test_load_clusters_returns_dict_of_string_lists(clusters):
     assert isinstance(clusters, dict)
-    assert "iran" in clusters
-    assert "russia_ukraine" in clusters
-    assert "trump_presidency" in clusters
+    assert "alpha" in clusters
+    assert "beta" in clusters
+    assert "gamma" in clusters
     for name, members in clusters.items():
         assert isinstance(name, str)
         assert isinstance(members, list)
@@ -94,11 +187,11 @@ def test_load_clusters_no_duplicate_market_across_clusters(clusters):
 # --------------------------------------------------------------------------- #
 
 
-def test_smoke_iran_market_has_full_feature_dict(db, cfg, latest_snapshot_T):
-    feats = compute_correlation_features("1919425", latest_snapshot_T, db, cfg)
+def test_smoke_clustered_market_has_full_feature_dict(db, cfg, latest_snapshot_T):
+    feats = compute_correlation_features("alpha-1", latest_snapshot_T, db, cfg)
     assert set(feats.keys()) == set(CORRELATION_FEATURE_KEYS)
-    assert feats["cluster_id"] == "iran"
-    assert feats["cluster_size"] == 15
+    assert feats["cluster_id"] == "alpha"
+    assert feats["cluster_size"] == 3
     # cluster average price should be a real float in [0,1]
     assert feats["cluster_avg_price"] is not None
     assert 0.0 <= feats["cluster_avg_price"] <= 1.0
@@ -119,18 +212,14 @@ def test_peer_only_average_in_two_member_cluster(db, cfg, latest_snapshot_T, clu
     """In a 2-member cluster, each market's cluster_avg_price must equal the
     OTHER market's price_now (not its own). That's the definition of peer-only.
     """
-    pair = clusters.get("russia_ukraine")
-    if not pair or len(pair) != 2:
-        pytest.skip("russia_ukraine cluster is not size-2 in the loaded config")
-    a, b = pair
+    a, b = clusters["beta"]  # guaranteed size-2 by the synthetic config
 
     # Pull each market's current price via the market_features path.
     from features import compute_features_batch
     feats_df = compute_features_batch([a, b], latest_snapshot_T, db).set_index("market_id")
     price_a = feats_df.at[a, "price_now"]
     price_b = feats_df.at[b, "price_now"]
-    if pd.isna(price_a) or pd.isna(price_b):
-        pytest.skip("price_now missing for one of the russia_ukraine markets")
+    assert pd.notna(price_a) and pd.notna(price_b)  # guaranteed by the fixture's data
 
     a_corr = compute_correlation_features(a, latest_snapshot_T, db, cfg)
     b_corr = compute_correlation_features(b, latest_snapshot_T, db, cfg)
@@ -139,12 +228,9 @@ def test_peer_only_average_in_two_member_cluster(db, cfg, latest_snapshot_T, clu
 
 
 def test_two_member_cluster_dispersion_is_zero(db, cfg, latest_snapshot_T, clusters):
-    pair = clusters.get("russia_ukraine")
-    if not pair or len(pair) != 2:
-        pytest.skip("russia_ukraine cluster is not size-2")
-    a_corr = compute_correlation_features(pair[0], latest_snapshot_T, db, cfg)
-    if a_corr["cluster_avg_price"] is None:
-        pytest.skip("peer price missing")
+    a, _b = clusters["beta"]  # guaranteed size-2 by the synthetic config
+    a_corr = compute_correlation_features(a, latest_snapshot_T, db, cfg)
+    assert a_corr["cluster_avg_price"] is not None  # guaranteed by the fixture's data
     # Single peer -> dispersion is 0 by construction
     assert a_corr["cluster_price_dispersion"] == pytest.approx(0.0)
 
@@ -155,9 +241,8 @@ def test_two_member_cluster_dispersion_is_zero(db, cfg, latest_snapshot_T, clust
 
 
 def test_market_not_in_any_cluster_returns_nulls(db, cfg, latest_snapshot_T):
-    # Hillary Clinton 2028 nomination — present in DB but not in any cluster.
-    feats = compute_correlation_features("559677", latest_snapshot_T, db, cfg)
-    assert feats["market_id"] == "559677"
+    feats = compute_correlation_features(UNCLUSTERED_MARKET, latest_snapshot_T, db, cfg)
+    assert feats["market_id"] == UNCLUSTERED_MARKET
     assert feats["cluster_id"] is None
     assert feats["cluster_size"] is None
     for k in (
@@ -176,10 +261,12 @@ def test_unknown_market_does_not_crash(db, cfg, latest_snapshot_T):
 
 
 def test_single_member_cluster_yields_nulls_for_peer_aggregates(tmp_path, db, latest_snapshot_T):
-    # Build a temporary config with a singleton cluster.
+    # Build a temporary config with a singleton cluster. The market need
+    # not have any snapshot history: a singleton has no peers, so
+    # _build_correlation_row returns before ever touching features.
     cfg = tmp_path / "single.json"
-    cfg.write_text(json.dumps({"loner": ["666861"]}), encoding="utf-8")
-    feats = compute_correlation_features("666861", latest_snapshot_T, db, cfg)
+    cfg.write_text(json.dumps({"loner": ["solo-market-x"]}), encoding="utf-8")
+    feats = compute_correlation_features("solo-market-x", latest_snapshot_T, db, cfg)
     assert feats["cluster_id"] == "loner"
     assert feats["cluster_size"] == 1
     # Peer-only aggregates have no peers to aggregate over -> all None.
@@ -198,25 +285,28 @@ def test_single_member_cluster_yields_nulls_for_peer_aggregates(tmp_path, db, la
 
 def test_lead_signal_excludes_self(db, cfg, latest_snapshot_T, clusters):
     """cluster_lead_signal must be computed over peers only, not self."""
-    iran = clusters["iran"]
+    alpha = clusters["alpha"]
     # Pick the market with the largest |momentum_1h| in the cluster.
+    # alpha-3's slope (-0.004) is unambiguously the steepest of the three
+    # (see _TRAJECTORIES), so this always resolves the same market -- no
+    # skip needed, unlike when this depended on whatever the live DB had.
     from features import compute_features_batch
-    feats_df = compute_features_batch(iran, latest_snapshot_T, db).set_index("market_id")
+    feats_df = compute_features_batch(alpha, latest_snapshot_T, db).set_index("market_id")
     abs_mom = feats_df["momentum_1h"].abs()
-    if abs_mom.notna().sum() < 2:
-        pytest.skip("Need at least 2 markets with momentum_1h to verify exclusion")
+    assert abs_mom.notna().sum() == 3
 
     leader = abs_mom.idxmax()
+    assert leader == "alpha-3"
     leader_abs = float(abs_mom.loc[leader])
 
     leader_corr = compute_correlation_features(leader, latest_snapshot_T, db, cfg)
     # The leader's own |momentum| must NOT be its lead signal — the lead signal
     # is the max over its peers, which by definition excludes itself.
-    if leader_corr["cluster_lead_signal"] is not None:
-        # Peers' max abs momentum is some other (smaller-or-equal) value.
-        assert leader_corr["cluster_lead_signal"] <= leader_abs + 1e-12
-        # And it shouldn't equal the leader's own value (unless tied with a peer).
-        # Loosely: peer max <= self max. Strictly check upper bound only.
+    assert leader_corr["cluster_lead_signal"] is not None
+    # Peers' max abs momentum (alpha-1's 0.002, alpha-2's 0.001) is strictly
+    # smaller than the leader's own 0.004 -- the exclusion is observable,
+    # not just "not disproven" as it was when peer data could be missing.
+    assert leader_corr["cluster_lead_signal"] < leader_abs
 
 
 # --------------------------------------------------------------------------- #
@@ -225,8 +315,8 @@ def test_lead_signal_excludes_self(db, cfg, latest_snapshot_T, clusters):
 
 
 def test_batch_matches_singles(db, cfg, latest_snapshot_T, clusters):
-    iran = clusters["iran"]
-    sample = iran[:5]
+    alpha = clusters["alpha"]
+    sample = alpha[:5]
     batch = compute_correlation_features_batch(sample, latest_snapshot_T, db, cfg)
     assert list(batch["market_id"]) == sample
     for mid in sample:

@@ -151,6 +151,26 @@ class TestEdgeToOrder:
         o = edge_to_order(_edge(market_prob=0.33, edge_pct=0.2), size_usd=10.0, market=m)
         assert o.size == pytest.approx(30.303, abs=1e-3)
 
+    def test_no_leg_on_ibkr_market_missing_no_id_yields_empty_leg_id(self):
+        # M8 (Task 3.8): an IBKR market published without its NO contract's
+        # conId must never fall back to the YES market_id -- that would buy
+        # the WRONG leg at the NO price. Empty leg_id is the primary fence;
+        # _place_venue_order's "no market id for the leg" rejection is what
+        # actually stops the order (see TestOrderManager below).
+        m = Market(market_id=MarketId.ibkr(712856754))  # no no_id
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=m, no_price=0.52)
+        assert o.outcome == "NO" and o.market_id == ""
+
+    def test_no_leg_on_polymarket_still_falls_back_to_market_id(self):
+        # The M8 guard is IBKR-specific: Polymarket's single-contract venue
+        # never publishes a separate no_id by design, so the market_id
+        # fallback must survive the guard unchanged.
+        m = Market(market_id=MarketId.polymarket("0xabc"))  # no no_id
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=m, no_price=0.52)
+        assert o.outcome == "NO" and o.market_id == "polymarket:0xabc"
+
 
 # ---------------------------------------------------------------- OrderManager
 class TestOrderManager:
@@ -207,6 +227,21 @@ class TestOrderManager:
                            limit_price=0.5, tif="GTC")
         with pytest.raises(VenueReadOnlyError):
             venue.place_order(req)
+
+    def test_no_leg_without_no_id_is_rejected_and_venue_receives_nothing(self):
+        # M8 (Task 3.8): the primary fence against buying the wrong leg. The
+        # dedup drop in run_ibkr_paper.py (Task 1.7) is the belt; this is
+        # the buckle -- even if a no_id=None intent slipped past dedup, the
+        # order must be REJECTED here and the venue must never see a request.
+        m = Market(market_id=MarketId.ibkr(712856754))  # no no_id
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=m, no_price=0.52)
+        venue = FakeVenue(read_only=False)
+        om = OrderManager(venue, simulate=False)
+        assert om.place_order(o) is False
+        assert o.status == OrderStatus.REJECTED
+        assert "no market id for the leg" in o.reason
+        assert venue.requests == []
 
 
 # ---------------------------------------------------------------- Executor
@@ -276,6 +311,33 @@ class TestExecutor:
         o = rep.decisions[0].order
         assert o is not None and o.outcome == "NO" and o.market_id == "ibkr:712856759"
         assert o.price == pytest.approx(0.52)
+
+    def test_min_edge_pct_gate_is_read_from_risk_limits_not_hardcoded(self, tmp_path):
+        # L1 (Task 3.8): _evaluate's initial "no edge" skip used to hardcode
+        # EdgeSignal.has_edge's 0.05 threshold, ignoring whatever
+        # RiskLimits.min_edge_pct the caller configured -- check_trade's own
+        # edge-threshold check (a few lines further down the pipeline) was
+        # already re-sourced, so a caller who lowered min_edge_pct still got
+        # silently blocked at this EARLIER gate. edge_pct=0.04 sits below
+        # the has_edge/default-limits 0.05 floor but above a 0.03 override.
+        weak = _edge(edge_pct=0.04, model_prob=0.54)
+
+        ex_default = TradingExecutor(venue=FakeVenue(), bankroll=1000.0,
+                                     db_path=str(tmp_path / "default.db"))
+        rep_default = ex_default.execute_intents(
+            [TradeIntent(edge=weak, market=_ibkr_market())], mode="auto")
+        # Parity: default min_edge_pct (0.05) still blocks it, same as before L1.
+        assert rep_default.trades_rejected == 1
+        assert rep_default.decisions[0].reason == "No edge detected"
+
+        ex_lower = TradingExecutor(venue=FakeVenue(), bankroll=1000.0,
+                                   db_path=str(tmp_path / "lower.db"),
+                                   risk_limits=RiskLimits(min_edge_pct=0.03))
+        rep_lower = ex_lower.execute_intents(
+            [TradeIntent(edge=weak, market=_ibkr_market())], mode="auto")
+        # A configured 0.03 floor now lets it through to risk checks.
+        assert rep_lower.trades_proposed == 1
+        assert rep_lower.decisions[0].reason != "No edge detected"
 
 
 class TestSnapToTick:

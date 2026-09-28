@@ -34,6 +34,10 @@ from climate.paths import data_root
 from src.domain.fees import FeeModel, FlatCommissionFeeModel
 
 PAPER_REL = ("paper", "gtm_signals.json")
+#: Run-by-run series (L8, Task 3.8): PAPER_REL is overwritten every run, so
+#: this append-only sibling is the only place to recover model_fingerprint
+#: drift (audit finding M2a) or past gate inputs after the fact.
+HISTORY_REL = ("paper", "gtm_signals_history.jsonl")
 
 #: Shared string form for every UTC timestamp in the paper-signals payload
 #: (ts_utc, sweep_ts_utc): human-readable and unambiguous to re-parse.
@@ -212,4 +216,31 @@ def write_paper_payload(payload: Mapping[str, Any], *, root: str | Path | None =
     path = data_root(root).joinpath(*PAPER_REL)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+def append_paper_history(payload: Mapping[str, Any], *, root: str | Path | None = None) -> Path:
+    """Append ``payload`` as one JSON line to ``paper/gtm_signals_history.jsonl``.
+
+    L8 (Task 3.8, test hygiene + minor findings bundle). ``gtm_signals.json``
+    (:func:`write_paper_payload`) is overwritten every run, so it can only
+    ever answer "what does the model say right now" -- this file is the
+    run-by-run series, one full payload per call in call order, letting an
+    operator reconstruct model_fingerprint drift (audit finding M2a) or past
+    gate inputs without a separate ledger.
+
+    Callers must call this AFTER ``write_paper_payload`` has written the
+    latest-snapshot file for the same run (``scripts/run_gtm_paper.py``
+    does), so a run that refuses before ever producing a signals file (e.g.
+    the staleness gate) never appends a history line for a run that wrote
+    nothing. Each line is independently valid JSON (``json.dumps`` with no
+    embedded newlines), so a reader can process the file streaming without
+    ever loading the whole thing, and a crash between two appends leaves
+    every previously-written line intact.
+    """
+    path = data_root(root).joinpath(*HISTORY_REL)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, default=str))
+        f.write("\n")
     return path

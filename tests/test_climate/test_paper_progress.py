@@ -860,6 +860,52 @@ def test_run_gtm_paper_allows_manual_gate_inputs_with_the_flag(tmp_path, monkeyp
 
 
 # --------------------------------------------------------------------------- #
+# L8 (Task 3.8): every successful run also appends to gtm_signals_history.jsonl
+# --------------------------------------------------------------------------- #
+
+
+def test_run_gtm_paper_appends_history_and_keeps_the_latest_file_valid(tmp_path, monkeypatch):
+    import scripts.run_gtm_paper as run_gtm_paper_mod
+    from climate.paper import HISTORY_REL, PAPER_REL, format_ts_utc
+
+    root = tmp_path / "climate_root"
+    model_path = tmp_path / "gtm_emos.json"
+    model = EmosModel(trend=False)
+    model.params[1] = LeadParams(lead_month=1, a=0.0, b=1.0, c=0.01, d=0.0, n_train=10, train_crps=0.1)
+    model.to_json(model_path)
+
+    now = datetime.now(timezone.utc)
+    run_n = {"n": 0}
+
+    def _fake_run_paper(frame, model_, **kwargs):
+        run_n["n"] += 1
+        # Fresh sweep_ts_utc + no inits to check -- a happy path that clears
+        # the staleness gate and actually reaches write_paper_payload (most
+        # of this module's other run_gtm_paper tests stop at the refusal
+        # paths, which never write a signals file to begin with).
+        return _minimal_payload(sweep_ts_utc=format_ts_utc(now), inits={}, run=run_n["n"])
+
+    monkeypatch.setattr(run_gtm_paper_mod, "run_paper", _fake_run_paper)
+    monkeypatch.setattr(run_gtm_paper_mod, "build_training_frame", lambda r: pd.DataFrame())
+
+    args = [
+        "--root", str(root),
+        "--model", str(model_path),
+        "--ticks-root", str(tmp_path / "ticks"),
+        "--universe-json", str(tmp_path / "no_universe.json"),
+    ]
+    assert run_gtm_paper_mod.main(args) == 0
+    assert run_gtm_paper_mod.main(args) == 0
+
+    history_lines = root.joinpath(*HISTORY_REL).read_text(encoding="utf-8").splitlines()
+    assert len(history_lines) == 2
+    assert [json.loads(line)["run"] for line in history_lines] == [1, 2]
+
+    latest = json.loads(root.joinpath(*PAPER_REL).read_text(encoding="utf-8"))
+    assert latest["run"] == 2  # gtm_signals.json is overwritten -- always the LATEST run
+
+
+# --------------------------------------------------------------------------- #
 # NaN coverage strengthening (L4): fails the gate with a reason instead of
 # passing silently.
 # --------------------------------------------------------------------------- #

@@ -44,8 +44,14 @@ def test_open_meteo_allows_customer_key(monkeypatch):
     assert_open_meteo_allowed_for_trading()  # no raise
 
 
-def test_weather_data_root_not_none():
-    root = resolve_weather_data_root()
+def test_weather_data_root_not_none(tmp_path):
+    # M11 (Task 3.8): this used to call resolve_weather_data_root() with no
+    # override, which resolves to the REAL ~/quant_data/polymarket_weather
+    # default and mkdir's it on whatever machine runs the suite -- exactly
+    # the "never touch ~/quant_data" trap. `override` is priority 1 (see
+    # weather/paths.py::resolve_weather_data_root), so tmp_path keeps this
+    # test's only filesystem touch inside pytest's own tmp dir.
+    root = resolve_weather_data_root(str(tmp_path))
     assert root.exists()
     # warn helper on fake onedrive path
     from pathlib import Path

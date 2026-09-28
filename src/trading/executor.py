@@ -363,7 +363,17 @@ class TradingExecutor:
         edge = intent.edge
         title = intent.title or intent.market.title or edge.question_id
 
-        if not edge.has_edge:
+        # L1 (Task 3.8): re-source this initial gate from the configured
+        # RiskLimits.min_edge_pct instead of EdgeSignal.has_edge's hardcoded
+        # 0.05 -- `has_edge` itself stays (research-pipeline callers such as
+        # `execute()`/agent/researcher.py still use it), but the executor's
+        # OWN gate must agree with whatever threshold `check_trade` below is
+        # configured with, or a caller-supplied min_edge_pct is silently
+        # overridden by this earlier check. Default min_edge_pct is 0.05, so
+        # default-limits behavior is unchanged (`>=`, matching check_trade's
+        # own edge-threshold check, vs has_edge's strict `>`).
+        min_edge_pct = self._risk_manager.limits.min_edge_pct
+        if not (abs(edge.edge_pct) >= min_edge_pct and edge.expected_value > 0):
             return TradeDecision(
                 question_id=edge.question_id, question_title=title,
                 edge_pct=edge.edge_pct, direction=edge.direction,

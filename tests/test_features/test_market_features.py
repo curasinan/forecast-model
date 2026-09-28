@@ -1,12 +1,23 @@
-"""Verification tests for ``features.market_features`` against the live DB.
+"""Verification tests for ``features.market_features``.
 
 Per the plan in ``build-a-feature-engineering-zippy-kettle.md``, this exercises
-all seven verification steps. The DB is read-only here; tests skip cleanly if
-``data/polymarket.db`` is empty.
+all seven verification steps.
 
-Exception: the performance check (section 6) runs against a synthetic DB of
-fixed size built in tmp_path, so its workload — and therefore its time
-budget — does not drift as the live DB accumulates snapshots.
+M11 (Task 3.8, test hygiene): these used to read ``data/polymarket.db`` --
+the real (584MB, gitignored) research DB -- and skip cleanly when a
+developer's checkout didn't have it. That made the suite non-deterministic
+across machines and coupled these assertions to whatever the live DB
+happened to contain. Every fixture below is now a synthetic, session-scoped
+sqlite DB built once per test session (never touching any real DB file),
+with a ``snapshots`` schema copied verbatim from the real writer's DDL
+(``collectors/collect_snapshots.py::init_db``) -- this team's documented
+failure mode is a hand-drawn fixture shape the real code never exercises,
+so the schema is derived from that code, not redrawn by hand.
+
+Exception: the performance check (section 6) already ran against its own
+synthetic DB of fixed size (unchanged here), so its workload -- and
+therefore its time budget -- does not drift as a live DB would accumulate
+snapshots.
 """
 
 from __future__ import annotations
@@ -16,14 +27,20 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from features import compute_features, compute_features_batch
 from features.market_features import FEATURE_KEYS
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = REPO_ROOT / "data" / "polymarket.db"
+# Five markets (not one) so test_batch_matches_singles below can always
+# exercise a real >=5-market batch instead of conditionally skipping when
+# the (previously real, now synthetic) pool happened to be too small.
+MARKET_IDS: tuple[str, ...] = tuple(f"synthetic-market-{i}" for i in range(5))
+N_SNAPSHOTS = 30  # >= 20, the original "populated market" bar
+SNAPSHOT_INTERVAL_HOURS = 4
+FIRST_TS = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+LAST_TS = FIRST_TS + timedelta(hours=SNAPSHOT_INTERVAL_HOURS * (N_SNAPSHOTS - 1))
+EVAL_T = LAST_TS + timedelta(hours=2)  # a bit past the last snapshot
 
 
 # --------------------------------------------------------------------------- #
@@ -31,44 +48,77 @@ DB_PATH = REPO_ROOT / "data" / "polymarket.db"
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(scope="module")
-def db():
-    if not DB_PATH.exists():
-        pytest.skip(f"DB not found at {DB_PATH}")
-    return DB_PATH
-
-
-@pytest.fixture(scope="module")
-def populated_market(db) -> tuple[str, datetime, datetime]:
-    """A market with >= 20 snapshots, plus its first/last timestamp."""
-    conn = sqlite3.connect(db)
+@pytest.fixture(scope="session")
+def db(tmp_path_factory) -> Path:
+    """Synthetic sqlite DB: schema from collectors/collect_snapshots.py's
+    ``snapshots`` table (verbatim) plus a minimal ``markets`` table (only
+    the ``id``/``end_date`` columns ``features.market_features`` reads).
+    Five markets, each with ``N_SNAPSHOTS`` deterministic, steadily-rising
+    snapshots -- so momentum, spread averages, and causal lookbacks all
+    resolve to known, non-random values.
+    """
+    path = tmp_path_factory.mktemp("market_features_db") / "synthetic.db"
+    conn = sqlite3.connect(path)
     try:
-        row = conn.execute(
+        conn.execute(
             """
-            SELECT market_id, MIN(timestamp), MAX(timestamp), COUNT(*)
-              FROM snapshots
-             GROUP BY market_id
-            HAVING COUNT(*) >= 20
-             ORDER BY COUNT(*) DESC
-             LIMIT 1
+            CREATE TABLE snapshots (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id   TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                best_bid    REAL,
+                best_ask    REAL,
+                bid_depth   REAL,
+                ask_depth   REAL,
+                midpoint    REAL,
+                spread      REAL,
+                last_price  REAL,
+                volume_24h  REAL,
+                UNIQUE (market_id, timestamp)
+            )
             """
-        ).fetchone()
+        )
+        conn.execute("CREATE INDEX idx_snapshots_market_id ON snapshots (market_id)")
+        conn.execute("CREATE TABLE markets (id TEXT PRIMARY KEY, end_date TEXT)")
+
+        end_date = (LAST_TS + timedelta(days=30)).isoformat()
+        conn.executemany(
+            "INSERT INTO markets (id, end_date) VALUES (?, ?)",
+            [(mid, end_date) for mid in MARKET_IDS],
+        )
+
+        rows = []
+        for m_idx, mid in enumerate(MARKET_IDS):
+            base = 0.20 + 0.10 * m_idx  # distinct price level per market
+            for i in range(N_SNAPSHOTS):
+                ts = FIRST_TS + timedelta(hours=SNAPSHOT_INTERVAL_HOURS * i)
+                price = base + 0.003 * i  # steadily rising -> non-zero, non-random momentum
+                rows.append((
+                    mid, ts.isoformat(),
+                    price - 0.01, price + 0.01, 100.0 + i, 90.0 + i,
+                    price, 0.02, price, 1000.0 + 10 * i,
+                ))
+        conn.executemany(
+            "INSERT INTO snapshots (market_id, timestamp, best_bid, best_ask, "
+            "bid_depth, ask_depth, midpoint, spread, last_price, volume_24h) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
     finally:
         conn.close()
-    if row is None:
-        pytest.skip("No market has >= 20 snapshots")
-    mid, first_ts, last_ts, _ = row
-    return (
-        str(mid),
-        datetime.fromisoformat(first_ts.replace("Z", "+00:00")),
-        datetime.fromisoformat(last_ts.replace("Z", "+00:00")),
-    )
+    return path
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
+def populated_market(db) -> tuple[str, datetime, datetime]:
+    """The first synthetic market (>= 20 snapshots), plus its first/last ts."""
+    return (MARKET_IDS[0], FIRST_TS, LAST_TS)
+
+
+@pytest.fixture(scope="session")
 def evaluation_T() -> datetime:
-    """Evaluation timestamp aligned with the demo run in the plan."""
-    return datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+    return EVAL_T
 
 
 # --------------------------------------------------------------------------- #
@@ -151,16 +201,11 @@ def test_unknown_market_does_not_crash(db, evaluation_T):
 
 
 def test_batch_matches_singles(db, evaluation_T):
-    conn = sqlite3.connect(db)
-    try:
-        ids = [str(r[0]) for r in conn.execute(
-            "SELECT market_id FROM snapshots GROUP BY market_id "
-            "HAVING COUNT(*) >= 20 ORDER BY COUNT(*) DESC LIMIT 5"
-        ).fetchall()]
-    finally:
-        conn.close()
-    if len(ids) < 5:
-        pytest.skip("Need at least 5 markets with >= 20 snapshots")
+    # M11: MARKET_IDS is fixed at 5 synthetic markets, each with >= 20
+    # snapshots by construction (see the `db` fixture) -- no more
+    # conditional skip when the (previously real) pool happened to be
+    # smaller than 5.
+    ids = list(MARKET_IDS)
 
     batch = compute_features_batch(ids, evaluation_T, db)
     assert len(batch) == 5

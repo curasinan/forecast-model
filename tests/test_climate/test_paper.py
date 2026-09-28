@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 
 from climate.emos import EmosModel, LeadParams
 from climate.ladder import SOURCE_LABEL
-from climate.paper import predictive_by_target_month, run_paper, write_paper_payload
+from climate.paper import (
+    HISTORY_REL,
+    append_paper_history,
+    predictive_by_target_month,
+    run_paper,
+    write_paper_payload,
+)
 
 
 def _frame() -> pd.DataFrame:
@@ -62,3 +70,27 @@ def test_run_paper_flags_tradeable_and_writes(tmp_path):
     assert bool(payload["signals"][0]["tradeable"]) is True
     path = write_paper_payload(payload, root=tmp_path)
     assert path.exists() and "gtm_signals" in path.name
+
+
+# --------------------------------------------------------------------------- #
+# L8 (Task 3.8): run-by-run history alongside the overwritten latest file
+# --------------------------------------------------------------------------- #
+
+
+def test_append_paper_history_writes_one_json_line_per_call(tmp_path):
+    p1 = append_paper_history({"ts_utc": "2026-01-01T00:00:00Z", "run": 1}, root=tmp_path)
+    p2 = append_paper_history({"ts_utc": "2026-01-01T01:00:00Z", "run": 2}, root=tmp_path)
+
+    assert p1 == p2 == tmp_path.joinpath(*HISTORY_REL)
+    lines = p1.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0]) == {"ts_utc": "2026-01-01T00:00:00Z", "run": 1}
+    assert json.loads(lines[1]) == {"ts_utc": "2026-01-01T01:00:00Z", "run": 2}
+
+
+def test_append_paper_history_creates_the_paper_dir(tmp_path):
+    # No prior write_paper_payload call in this test -- the history append
+    # must create paper/ itself rather than assume it already exists.
+    path = append_paper_history({"ts_utc": "2026-01-01T00:00:00Z"}, root=tmp_path)
+    assert path.exists()
+    assert path.parent.name == "paper"
