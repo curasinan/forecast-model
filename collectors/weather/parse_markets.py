@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any, Iterable
 import httpx
 
 from weather.stations import StationRegistry, load_station_registry
-from weather.storage import init_weather_db, utc_now_iso, weather_db_path
+from weather.storage import init_weather_db, utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -498,8 +499,16 @@ def run_parser_smoke(fixtures: list[dict[str, Any]] | None = None) -> list[dict[
     return [p.as_dict() for p in parsed]
 
 
-if __name__ == "__main__":
+def main() -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors/weather/parse_markets.py")
     logging.basicConfig(level=logging.INFO)
     rows = run_parser_smoke()
     print(json.dumps(rows[:25], indent=2))
     print(f"parsed={len(rows)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

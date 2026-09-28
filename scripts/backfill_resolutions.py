@@ -157,6 +157,9 @@ def run_backfill(
 
 
 def main() -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("scripts/backfill_resolutions.py")
     setup_logging()
     parser = argparse.ArgumentParser(
         description="Backfill markets.resolution from Gamma outcomePrices.",

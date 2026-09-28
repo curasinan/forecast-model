@@ -673,6 +673,9 @@ def run_pilot_edge_check(db_path: Path | str = DB_PATH) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.retired_polymarket import refuse_polymarket_runtime
+
+    refuse_polymarket_runtime("collectors.collect_llm_scores")
     setup_logging()
     load_dotenv(REPO_ROOT / ".env")
     if not os.environ.get("ANTHROPIC_API_KEY", "").strip():

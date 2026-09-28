@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from src.retired_polymarket import (
@@ -55,3 +58,33 @@ def test_mcp_collection_tools_retired():
     assert live["ok"] is False and live["error"] == RETIRED_CODE
     disc = markets.wx_discover_markets(skip_gamma=False)
     assert disc["ok"] is False and disc["error"] == RETIRED_CODE
+
+
+def test_backfill_resolutions_is_gated(monkeypatch: pytest.MonkeyPatch):
+    """subprocess: backfill_resolutions.py exits 2 without POLYMARKET_RUNTIME."""
+    monkeypatch.delenv("POLYMARKET_RUNTIME", raising=False)
+    proc = subprocess.run(
+        [sys.executable, "scripts/backfill_resolutions.py", "--help"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == RETIRED_EXIT
+
+
+def test_collect_llm_scores_is_gated(monkeypatch: pytest.MonkeyPatch):
+    """subprocess: collect_llm_scores exits 2 without POLYMARKET_RUNTIME."""
+    monkeypatch.delenv("POLYMARKET_RUNTIME", raising=False)
+    proc = subprocess.run(
+        [sys.executable, "-m", "collectors.collect_llm_scores", "--help"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == RETIRED_EXIT
+
+
+def test_parse_markets_is_gated(monkeypatch: pytest.MonkeyPatch):
+    """subprocess: parse_markets.py exits 2 without POLYMARKET_RUNTIME."""
+    monkeypatch.delenv("POLYMARKET_RUNTIME", raising=False)
+    proc = subprocess.run(
+        [sys.executable, "collectors/weather/parse_markets.py"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == RETIRED_EXIT
