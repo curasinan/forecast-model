@@ -906,6 +906,97 @@ def test_run_gtm_paper_appends_history_and_keeps_the_latest_file_valid(tmp_path,
 
 
 # --------------------------------------------------------------------------- #
+# Final-review bundle B-1: provenance of the go-live gate inputs. A manual
+# override is legitimate (behind --allow-manual-gate-inputs) but must never
+# be indistinguishable, after the fact, from a ledger-derived value.
+# --------------------------------------------------------------------------- #
+
+
+def _run_gtm_paper_writing(tmp_path, monkeypatch, extra_args: list[str]) -> tuple[int, dict, dict]:
+    """Drive main() to a real write (fresh sweep_ts_utc, no inits to gate)
+    and return (rc, latest gtm_signals.json, last history line)."""
+    import scripts.run_gtm_paper as run_gtm_paper_mod
+    from climate.paper import HISTORY_REL, PAPER_REL, format_ts_utc
+
+    root = tmp_path / "climate_root"
+    model_path = tmp_path / "gtm_emos.json"
+    model = EmosModel(trend=False)
+    model.params[1] = LeadParams(lead_month=1, a=0.0, b=1.0, c=0.01, d=0.0, n_train=10, train_crps=0.1)
+    model.to_json(model_path)
+    now = datetime.now(timezone.utc)
+
+    def _fake_run_paper(frame, model_, **kwargs):
+        return _minimal_payload(sweep_ts_utc=format_ts_utc(now), inits={})
+
+    monkeypatch.setattr(run_gtm_paper_mod, "run_paper", _fake_run_paper)
+    monkeypatch.setattr(run_gtm_paper_mod, "build_training_frame", lambda r: pd.DataFrame())
+
+    rc = run_gtm_paper_mod.main([
+        "--root", str(root),
+        "--model", str(model_path),
+        "--ticks-root", str(tmp_path / "ticks"),
+        "--universe-json", str(tmp_path / "no_universe.json"),
+        *extra_args,
+    ])
+    latest = json.loads(root.joinpath(*PAPER_REL).read_text(encoding="utf-8"))
+    history = root.joinpath(*HISTORY_REL).read_text(encoding="utf-8").splitlines()
+    return rc, latest, json.loads(history[-1])
+
+
+def _manual_warnings(caplog) -> list[str]:
+    import logging
+
+    # Match the warning's own phrase, not just "manual": pytest's tmp_path
+    # for these tests contains "manual" too (e.g. the diagnostics warning).
+    return [r.getMessage() for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "run_gtm_paper"
+            and "gate inputs set manually" in r.getMessage().lower()]
+
+
+def test_manual_paper_days_is_warned_and_recorded_as_manual(tmp_path, monkeypatch, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="run_gtm_paper"):
+        rc, latest, history_line = _run_gtm_paper_writing(
+            tmp_path, monkeypatch, ["--paper-days", "999", "--allow-manual-gate-inputs"])
+
+    assert rc == 0
+    warnings = _manual_warnings(caplog)
+    assert len(warnings) == 1
+    assert "paper_days=999" in warnings[0]
+    assert "resolved_months" not in warnings[0]  # computed, not manual
+    assert latest["go_live"]["gate_inputs_source"] == "manual:paper_days"
+    assert history_line["go_live"]["gate_inputs_source"] == "manual:paper_days"
+
+
+def test_both_manual_gate_inputs_are_named(tmp_path, monkeypatch, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="run_gtm_paper"):
+        rc, latest, _ = _run_gtm_paper_writing(
+            tmp_path, monkeypatch,
+            ["--paper-days", "999", "--resolved-months", "5", "--allow-manual-gate-inputs"])
+
+    assert rc == 0
+    warnings = _manual_warnings(caplog)
+    assert len(warnings) == 1
+    assert "paper_days=999" in warnings[0] and "resolved_months=5" in warnings[0]
+    assert latest["go_live"]["gate_inputs_source"] == "manual:paper_days,resolved_months"
+
+
+def test_ledger_derived_gate_inputs_are_recorded_as_ledgers(tmp_path, monkeypatch, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="run_gtm_paper"):
+        rc, latest, history_line = _run_gtm_paper_writing(tmp_path, monkeypatch, [])
+
+    assert rc == 0
+    assert _manual_warnings(caplog) == []
+    assert latest["go_live"]["gate_inputs_source"] == "ledgers"
+    assert history_line["go_live"]["gate_inputs_source"] == "ledgers"
+
+
+# --------------------------------------------------------------------------- #
 # NaN coverage strengthening (L4): fails the gate with a reason instead of
 # passing silently.
 # --------------------------------------------------------------------------- #

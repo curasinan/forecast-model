@@ -660,6 +660,40 @@ def test_run_ibkr_paper_seeds_group_exposure_next_to_total_exposure_inside_the_l
     assert seed_total_pos > lock_pos
     assert seed_group_pos > lock_pos
     assert "commitments[\"by_group\"]" in source or "commitments['by_group']" in source
+    # Final-review bundle B-3: the seed must also land BEFORE the executor
+    # runs -- a seed after execute_intents( would leave check_trade's group
+    # cap blind to the DB-committed book for the very run that places.
+    _assert_seeds_before_execute(source)
+
+
+def _assert_seeds_before_execute(source: str) -> None:
+    execute_pos = source.index("execute_intents(")
+    assert source.index("seed_exposure(") < execute_pos, (
+        "seed_exposure( must precede execute_intents( in run_ibkr_paper.main()"
+    )
+    assert source.index("seed_group_exposure(") < execute_pos, (
+        "seed_group_exposure( must precede execute_intents( in run_ibkr_paper.main() -- "
+        "otherwise the group cap cannot see the DB-committed book during placement"
+    )
+
+
+def test_seed_before_execute_pin_catches_a_swapped_order():
+    """Guard catches known-bad: the structural pin above must actually fail
+    on source where the group seed comes after the executor call, or it is
+    a dead guard."""
+    good = (
+        "executor.risk_manager.seed_exposure(total)\n"
+        "executor.risk_manager.seed_group_exposure(groups)\n"
+        "report = executor.execute_intents(intents)\n"
+    )
+    _assert_seeds_before_execute(good)
+    swapped = (
+        "executor.risk_manager.seed_exposure(total)\n"
+        "report = executor.execute_intents(intents)\n"
+        "executor.risk_manager.seed_group_exposure(groups)\n"
+    )
+    with pytest.raises(AssertionError, match="seed_group_exposure"):
+        _assert_seeds_before_execute(swapped)
 
 
 def test_run_ibkr_paper_renders_the_committed_book_from_the_ledger_not_the_report_alone():

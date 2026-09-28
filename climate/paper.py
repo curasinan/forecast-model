@@ -276,12 +276,21 @@ def append_paper_history(payload: Mapping[str, Any], *, root: str | Path | None 
     the staleness gate) never appends a history line for a run that wrote
     nothing. Each line is independently valid JSON (``json.dumps`` with no
     embedded newlines), so a reader can process the file streaming without
-    ever loading the whole thing, and a crash between two appends leaves
-    every previously-written line intact.
+    ever loading the whole thing.
+
+    Durability, stated honestly (final-review bundle B-4): the full line,
+    newline included, is built first and handed to ONE ``write()`` call, so
+    a run can no longer die between the JSON and its newline and leave the
+    NEXT run's line glued onto it (the old two-call version could corrupt
+    two records that way). That is all it guarantees: the append is not
+    fsynced and not atomic at the OS level, so a crash or power loss DURING
+    the write can still leave a torn final line. A reader should skip an
+    unparseable LAST line rather than trust it; earlier lines are not
+    rewritten by this function.
     """
     path = data_root(root).joinpath(*HISTORY_REL)
     path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(payload, default=str) + "\n"
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, default=str))
-        f.write("\n")
+        f.write(line)
     return path

@@ -172,6 +172,22 @@ class TestEdgeToOrder:
                           market=m, no_price=0.52)
         assert o.outcome == "NO" and o.market_id == "polymarket:0xabc"
 
+    def test_no_leg_on_an_unknown_venue_missing_no_id_yields_empty_leg_id(self):
+        # Final-review bundle B-2: the market_id fallback is an explicit
+        # Polymarket-only ALLOWLIST (fails closed), not "any venue except
+        # IBKR" (which failed OPEN for every venue added later -- a new
+        # two-contract venue would silently buy its YES leg at the NO price).
+        m = Market(market_id=MarketId(venue="futurevenue", native_id="XYZ-1"))  # no no_id
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=m, no_price=0.52)
+        assert o.outcome == "NO" and o.market_id == ""
+        # ...and the empty leg is then rejected before any venue call.
+        venue = FakeVenue(read_only=False)
+        om = OrderManager(venue, simulate=False)
+        assert om.place_order(o) is False
+        assert "no market id for the leg" in o.reason
+        assert venue.requests == []
+
 
 # ---------------------------------------------------------------- OrderManager
 class TestOrderManager:

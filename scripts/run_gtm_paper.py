@@ -118,6 +118,26 @@ def main(argv: list[str] | None = None) -> int:
     # can be combined with a computed --resolved-months.
     paper_days = args.paper_days
     resolved_months = args.resolved_months
+    # Final-review bundle B-1: provenance. A manual value is legitimate
+    # (the operator opted in above) but must never be indistinguishable,
+    # after the fact, from a ledger-derived one -- so it is WARNED here and
+    # recorded as go_live.gate_inputs_source in the payload (and therefore
+    # in the gtm_signals_history.jsonl line) below.
+    manual_fields = [
+        f"{name}={value}"
+        for name, value in (("paper_days", paper_days), ("resolved_months", resolved_months))
+        if value is not None
+    ]
+    gate_inputs_source = (
+        "manual:" + ",".join(field.split("=", 1)[0] for field in manual_fields)
+        if manual_fields else "ledgers"
+    )
+    if manual_fields:
+        log.warning(
+            "go-live gate inputs set MANUALLY (--allow-manual-gate-inputs): %s -- NOT "
+            "derived from the run/label ledgers; recorded as gate_inputs_source=%s",
+            ", ".join(manual_fields), gate_inputs_source,
+        )
     if paper_days is None or resolved_months is None:
         progress = compute_paper_progress(
             runs_jsonl=root / "paper" / "ibkr_paper_runs.jsonl",
@@ -156,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         resolved_months=resolved_months,
         require_live_paper=not args.hindcast_gate_only,
     )
+    payload["go_live"]["gate_inputs_source"] = gate_inputs_source  # B-1 provenance
 
     # Staleness gate (H2): refuse to write a signals file priced off a
     # stale sweep or a stale SEAS5 init. This must run BEFORE

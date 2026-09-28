@@ -88,6 +88,43 @@ def test_append_paper_history_writes_one_json_line_per_call(tmp_path):
     assert json.loads(lines[1]) == {"ts_utc": "2026-01-01T01:00:00Z", "run": 2}
 
 
+def test_append_paper_history_writes_each_line_in_one_write_call(tmp_path, monkeypatch):
+    """Final-review bundle B-4: the line and its newline used to go out in
+    TWO write() calls, so a crash between them left a line with no newline
+    that the NEXT run's line would be glued onto (two records corrupted).
+    One write() of the full "json + newline" string closes that window."""
+    import builtins
+
+    import climate.paper as paper_mod
+
+    writes: list[str] = []
+    real_open = builtins.open
+
+    class _RecordingFile:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, text):
+            writes.append(text)
+            return self._fh.write(text)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._fh.__exit__(*exc)
+
+    monkeypatch.setattr(paper_mod, "open",
+                        lambda *a, **k: _RecordingFile(real_open(*a, **k)), raising=False)
+
+    path = append_paper_history({"ts_utc": "2026-01-01T00:00:00Z", "run": 1}, root=tmp_path)
+
+    assert len(writes) == 1
+    assert writes[0].endswith("\n") and writes[0].count("\n") == 1
+    assert json.loads(writes[0]) == {"ts_utc": "2026-01-01T00:00:00Z", "run": 1}
+    assert path.read_text(encoding="utf-8") == writes[0]
+
+
 def test_append_paper_history_creates_the_paper_dir(tmp_path):
     # No prior write_paper_payload call in this test -- the history append
     # must create paper/ itself rather than assume it already exists.

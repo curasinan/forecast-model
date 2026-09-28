@@ -35,12 +35,19 @@ from decimal import ROUND_FLOOR, Decimal
 from enum import Enum
 
 from src.domain.fees import FeeModel
-from src.domain.ids import IBKR
+from src.domain.ids import POLYMARKET
 from src.domain.models import Market, OrderRequest
 from src.models.prediction import EdgeSignal
 from src.venues.base import VenueAdapter, VenueError
 
 logger = logging.getLogger(__name__)
+
+#: Venues whose market is ONE contract with both outcomes on it, so a NO
+#: order legitimately targets ``market.market_id`` when ``no_id`` is unset.
+#: An explicit ALLOWLIST (final-review bundle B-2), so an unknown or future
+#: venue fails CLOSED (empty leg -> rejected) instead of buying its YES leg
+#: at the NO price. Add a venue here only after verifying its contract model.
+_NO_LEG_IS_MARKET_ID_VENUES = frozenset({POLYMARKET})
 
 
 class OrderSide(str, Enum):
@@ -140,13 +147,16 @@ def edge_to_order(
         outcome = "NO"
         if market is not None and market.no_id is not None:
             leg_id = str(market.no_id)
-        elif market is not None and market.market_id.venue != IBKR:
+        elif market is not None and market.market_id.venue in _NO_LEG_IS_MARKET_ID_VENUES:
             leg_id = str(market.market_id)  # single-contract venues (Polymarket)
         else:
             # M8 (Task 3.8): IBKR publishes YES/NO as separate conIds, so a
             # market missing its no_id has no resolvable NO contract at
             # all -- falling back to market_id here would silently BUY THE
-            # YES LEG at the NO price. Empty leg_id makes place_order's
+            # YES LEG at the NO price. The same holds for ANY venue not on
+            # the explicit single-contract allowlist above (final-review
+            # bundle B-2: this used to be `venue != IBKR`, which failed
+            # OPEN for every venue added later). Empty leg_id makes place_order's
             # "no market id for the leg" rejection fire instead (I-1, fix
             # round 1: checked before BOTH the simulate and venue paths, so
             # this fires whether or not the run is simulated). Belt-and-
