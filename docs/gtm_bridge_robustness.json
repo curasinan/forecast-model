@@ -1,7 +1,7 @@
 {
   "command": "python scripts/study_bridge_window.py --out docs/gtm_bridge_robustness.md --json-out docs/gtm_bridge_robustness.json",
   "data_root": "~/quant_data/climate_data",
-  "generated_at_utc": "2026-09-28T15:14:58Z",
+  "generated_at_utc": "2026-09-28T15:25:53Z",
   "headline_variant": "trend",
   "honest_gate_passed": true,
   "inputs": {
@@ -4197,7 +4197,7 @@
         "reasons": []
       },
       "min_train_targets": 24,
-      "runtime_s": 3.0290980999998283,
+      "runtime_s": 2.9385022000060417,
       "trend": false,
       "variant": "notrend",
       "window_bridges": [
@@ -9078,7 +9078,7 @@
         "reasons": []
       },
       "min_train_targets": 24,
-      "runtime_s": 4.991373199998634,
+      "runtime_s": 4.9233011000033,
       "trend": true,
       "variant": "trend",
       "window_bridges": [

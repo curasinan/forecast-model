@@ -554,10 +554,18 @@ def render_markdown(meta: dict[str, Any], studies: dict[str, BridgeWindowStudy])
         "- Labels, rows, test years and both climatology baselines are identical on the two "
         "sides (the baselines never see the bridge), so each delta is paired and is due to "
         "the bridge alone. `skill = 1 − CRPS_EMOS / CRPS_trend-clim`.",
-        "- Timing caveats (both small, opposite signs): the window bridge is frozen for the "
-        "whole test year, whereas a real-time refit could also use the year's earlier months "
-        "(conservative); like the EMOS window (`climate/emos.py`), it ignores NOAA's "
-        "~2-week publication lag at the year boundary (slightly optimistic).",
+        "- Timing caveat (residual lookahead, not measured here): the target-year (< Y) "
+        "window convention is shared by the EMOS fit, both baselines and both sides of this "
+        "comparison, so the honest − leaky DELTA isolates the bridge leak correctly. It does, "
+        "however, leave residual optimism in the ABSOLUTE skill numbers on both sides: a test "
+        "row at lead L whose target is Jan..(L−1) of year Y was initialised in year Y−1, so "
+        "its window bridge (like its EMOS and baseline windows) uses ERA5/NOAA labels for up "
+        "to L−1 months from the init month onward (up to 5 at lead 6), none of which exist "
+        "at the init date; on top of that the windows ignore ERA5/NOAA publication lag. The "
+        "window bridge is also held fixed for the whole test year rather than refit as "
+        "months arrive. The size of these effects is not measured in this report; an "
+        "init-date-bounded sensitivity study is a candidate follow-up (out of scope here — "
+        "controller Ruling R15).",
         "- The gate (`climate/paper_criteria.py`) and `climate/fit.py` are untouched; this "
         "study is additive. JSON sidecar carries the per-year scores and every window's "
         "bridge parameters.",

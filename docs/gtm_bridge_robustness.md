@@ -1,6 +1,6 @@
 # GTM hindcast skill with the ERA5→NOAA bridge fit inside each window (audit H4)
 
-Generated (UTC): 2026-09-28T15:14:58Z  
+Generated (UTC): 2026-09-28T15:25:53Z  
 Command: `python scripts/study_bridge_window.py --out docs/gtm_bridge_robustness.md --json-out docs/gtm_bridge_robustness.json`  
 Data root (read-only): `~/quant_data/climate_data`
 
@@ -24,7 +24,7 @@ Honest-bridge hindcast gate (trend variant): **PASS** — `evaluate_hindcast_go_
 
 ## Variant `notrend`
 
-- Test years 2001–2026, leads [1, 2, 3, 4, 5, 6], min_train_targets 24, runtime 3.0s.
+- Test years 2001–2026, leads [1, 2, 3, 4, 5, 6], min_train_targets 24, runtime 2.9s.
 - Honest-bridge gate: **PASS**; leaky (production) gate: **PASS**.
 
 | lead | n leaky | n honest | CRPS EMOS leaky | CRPS EMOS honest | CRPS trend-clim | skill vs trend (leaky) | skill vs trend (honest) | delta (honest − leaky) | cover50 honest | cover90 honest |
@@ -38,7 +38,7 @@ Honest-bridge hindcast gate (trend variant): **PASS** — `evaluate_hindcast_go_
 
 ## Variant `trend` (operational)
 
-- Test years 2001–2026, leads [1, 2, 3, 4, 5, 6], min_train_targets 24, runtime 5.0s.
+- Test years 2001–2026, leads [1, 2, 3, 4, 5, 6], min_train_targets 24, runtime 4.9s.
 - Honest-bridge gate: **PASS**; leaky (production) gate: **PASS**.
 
 | lead | n leaky | n honest | CRPS EMOS leaky | CRPS EMOS honest | CRPS trend-clim | skill vs trend (leaky) | skill vs trend (honest) | delta (honest − leaky) | cover50 honest | cover90 honest |
@@ -90,5 +90,5 @@ The leak's size is the shift of `fc_mean_C` (window bridge − full bridge, degC
 - **Leaky** (production): one bridge fit on the full ERA5/NOAA overlap, then `expanding_window_scores` over the test years — exactly what `climate.fit.fit_gtm` computes.
 - **Honest**: for each test year Y, `Bridge.fit(start=None, end=f"{Y-1}-12")`, the frame rebuilt with `build_frame_from_inputs(..., bridge=window_bridge)` (train and test rows of that window), and `expanding_window_scores(frame, Y, Y, ...)` for that single year; the per-year rows are aggregated with `summarise_scores`.
 - Labels, rows, test years and both climatology baselines are identical on the two sides (the baselines never see the bridge), so each delta is paired and is due to the bridge alone. `skill = 1 − CRPS_EMOS / CRPS_trend-clim`.
-- Timing caveats (both small, opposite signs): the window bridge is frozen for the whole test year, whereas a real-time refit could also use the year's earlier months (conservative); like the EMOS window (`climate/emos.py`), it ignores NOAA's ~2-week publication lag at the year boundary (slightly optimistic).
+- Timing caveat (residual lookahead, not measured here): the target-year (< Y) window convention is shared by the EMOS fit, both baselines and both sides of this comparison, so the honest − leaky DELTA isolates the bridge leak correctly. It does, however, leave residual optimism in the ABSOLUTE skill numbers on both sides: a test row at lead L whose target is Jan..(L−1) of year Y was initialised in year Y−1, so its window bridge (like its EMOS and baseline windows) uses ERA5/NOAA labels for up to L−1 months from the init month onward (up to 5 at lead 6), none of which exist at the init date; on top of that the windows ignore ERA5/NOAA publication lag. The window bridge is also held fixed for the whole test year rather than refit as months arrive. The size of these effects is not measured in this report; an init-date-bounded sensitivity study is a candidate follow-up (out of scope here — controller Ruling R15).
 - The gate (`climate/paper_criteria.py`) and `climate/fit.py` are untouched; this study is additive. JSON sidecar carries the per-year scores and every window's bridge parameters.
