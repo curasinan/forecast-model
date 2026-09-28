@@ -155,8 +155,9 @@ class TestEdgeToOrder:
         # M8 (Task 3.8): an IBKR market published without its NO contract's
         # conId must never fall back to the YES market_id -- that would buy
         # the WRONG leg at the NO price. Empty leg_id is the primary fence;
-        # _place_venue_order's "no market id for the leg" rejection is what
-        # actually stops the order (see TestOrderManager below).
+        # OrderManager.place_order's "no market id for the leg" rejection
+        # (checked before BOTH the simulate and venue paths, I-1 fix round
+        # 1) is what actually stops the order (see TestOrderManager below).
         m = Market(market_id=MarketId.ibkr(712856754))  # no no_id
         o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
                           market=m, no_price=0.52)
@@ -243,6 +244,24 @@ class TestOrderManager:
         assert "no market id for the leg" in o.reason
         assert venue.requests == []
 
+    def test_no_leg_without_no_id_is_rejected_in_simulate_mode_too(self):
+        # I-1 (Task 3.8 fix round 1): the empty-leg guard used to live only
+        # in _place_venue_order, so simulate=True (or any read-only venue,
+        # which always simulates -- see test_read_only_venue_always_simulates
+        # above) routed straight to _simulate_order, which never inspects
+        # market_id -- fabricating a SIMULATED fill on a leg that doesn't
+        # exist. place_order must reject BEFORE routing to either path.
+        m = Market(market_id=MarketId.ibkr(712856754))  # no no_id
+        o = edge_to_order(_edge(edge_pct=-0.15, model_prob=0.35), size_usd=10.0,
+                          market=m, no_price=0.52)
+        om = OrderManager(FakeVenue(read_only=True), simulate=True)
+        assert om.is_simulated is True
+        assert om.place_order(o) is False
+        assert o.status == OrderStatus.REJECTED
+        assert "no market id for the leg" in o.reason
+        assert o.filled_size == 0.0  # no fabricated fill
+        assert om.simulated_balance == pytest.approx(1000.0)  # no debit either
+
 
 # ---------------------------------------------------------------- Executor
 class TestExecutor:
@@ -312,6 +331,29 @@ class TestExecutor:
         assert o is not None and o.outcome == "NO" and o.market_id == "ibkr:712856759"
         assert o.price == pytest.approx(0.52)
 
+    def test_no_leg_without_no_id_is_rejected_end_to_end(self, tmp_path):
+        # I-1 (Task 3.8 fix round 1): same fabricated-fill scenario as
+        # TestOrderManager.test_no_leg_without_no_id_is_rejected_in_simulate_mode_too,
+        # driven through the full executor pipeline. FakeVenue() defaults
+        # read_only=True -> always simulated, exactly the path I-1 found
+        # unguarded. Confirms no position, exposure, or group bookkeeping
+        # happens for the rejected order.
+        ex = self._executor(FakeVenue(), tmp_path)
+        m = Market(
+            market_id=MarketId.ibkr(712856754),  # no no_id -- NO leg unresolved
+            symbol="GTM", title="GTM Dec-2026 > 1.2", strike=1.2, size_increment=1.0,
+            tick_size=0.01,
+            scheduled_resolution_time=datetime.now(timezone.utc) + timedelta(days=120),
+        )
+        e = _edge(edge_pct=-0.15, model_prob=0.35)
+        rep = ex.execute_intents([TradeIntent(edge=e, market=m, no_price=0.52)], mode="auto")
+        d = rep.decisions[0]
+        assert rep.trades_executed == 0 and rep.trades_rejected == 1
+        assert d.order is not None and d.order.status == OrderStatus.REJECTED
+        assert "no market id for the leg" in d.order.reason
+        assert ex.risk_manager._total_exposure == 0.0
+        assert ex.position_tracker.get_portfolio_summary()["open_positions"] == 0
+
     def test_min_edge_pct_gate_is_read_from_risk_limits_not_hardcoded(self, tmp_path):
         # L1 (Task 3.8): _evaluate's initial "no edge" skip used to hardcode
         # EdgeSignal.has_edge's 0.05 threshold, ignoring whatever
@@ -338,6 +380,27 @@ class TestExecutor:
         # A configured 0.03 floor now lets it through to risk checks.
         assert rep_lower.trades_proposed == 1
         assert rep_lower.decisions[0].reason != "No edge detected"
+
+    def test_min_edge_pct_gate_uses_strict_greater_than_at_the_boundary(self, tmp_path):
+        # C-1 (Task 3.8 fix round 1, controller ruling R18): the brief's
+        # literal ">=" loosened this gate relative to the has_edge property
+        # it replaced (strict ">"), so an edge_pct landing EXACTLY on the
+        # default 0.05 floor -- reachable in practice, e.g.
+        # 0.10 - 0.05 == 0.05 in IEEE-754 -- was rejected before L1 and
+        # would have been proposed after it. Ruling: parity wins, so
+        # _evaluate must use strict ">" (matching has_edge), NOT ">="
+        # (check_trade's own pre-existing edge check a few lines further
+        # down the pipeline stays ">=" -- untouched, not this gate).
+        edge_pct = 0.10 - 0.05
+        assert edge_pct == 0.05  # exact in IEEE-754, not an approximation
+        boundary = _edge(edge_pct=edge_pct, model_prob=0.55)
+
+        ex = TradingExecutor(venue=FakeVenue(), bankroll=1000.0,
+                             db_path=str(tmp_path / "boundary.db"))
+        rep = ex.execute_intents(
+            [TradeIntent(edge=boundary, market=_ibkr_market())], mode="auto")
+        assert rep.trades_rejected == 1
+        assert rep.decisions[0].reason == "No edge detected"
 
 
 class TestSnapToTick:

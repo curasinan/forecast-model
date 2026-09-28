@@ -369,11 +369,18 @@ class TradingExecutor:
         # `execute()`/agent/researcher.py still use it), but the executor's
         # OWN gate must agree with whatever threshold `check_trade` below is
         # configured with, or a caller-supplied min_edge_pct is silently
-        # overridden by this earlier check. Default min_edge_pct is 0.05, so
-        # default-limits behavior is unchanged (`>=`, matching check_trade's
-        # own edge-threshold check, vs has_edge's strict `>`).
+        # overridden by this earlier check.
+        #
+        # Strict `>`, NOT `>=` (fix round 1, finding C-1 / controller ruling
+        # R18): the brief's literal ">=" conflicted with its own "keeps
+        # behavior identical" clause -- has_edge used strict `>`, so an
+        # edge_pct landing EXACTLY on the default 0.05 floor (reachable,
+        # e.g. 0.10 - 0.05 == 0.05 in IEEE-754) was rejected before this
+        # gate existed and must stay rejected now. Do NOT change this to
+        # match check_trade's own edge-threshold check a few lines below,
+        # which is intentionally still `>=` and untouched by this gate.
         min_edge_pct = self._risk_manager.limits.min_edge_pct
-        if not (abs(edge.edge_pct) >= min_edge_pct and edge.expected_value > 0):
+        if not (abs(edge.edge_pct) > min_edge_pct and edge.expected_value > 0):
             return TradeDecision(
                 question_id=edge.question_id, question_title=title,
                 edge_pct=edge.edge_pct, direction=edge.direction,

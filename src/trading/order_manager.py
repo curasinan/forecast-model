@@ -146,11 +146,13 @@ def edge_to_order(
             # M8 (Task 3.8): IBKR publishes YES/NO as separate conIds, so a
             # market missing its no_id has no resolvable NO contract at
             # all -- falling back to market_id here would silently BUY THE
-            # YES LEG at the NO price. Empty leg_id makes
-            # _place_venue_order's "no market id for the leg" rejection
-            # fire instead. Belt-and-buckle with run_ibkr_paper.py's dedup,
-            # which already drops no_id=None NO intents before evaluation
-            # (Task 1.7) -- this is the primary fence, not just backup.
+            # YES LEG at the NO price. Empty leg_id makes place_order's
+            # "no market id for the leg" rejection fire instead (I-1, fix
+            # round 1: checked before BOTH the simulate and venue paths, so
+            # this fires whether or not the run is simulated). Belt-and-
+            # buckle with run_ibkr_paper.py's dedup, which already drops
+            # no_id=None NO intents before evaluation (Task 1.7) -- this is
+            # the primary fence, not just backup.
             leg_id = ""
         reason = (
             f"Model={edge.model_prob:.0%} < Market={yes_price:.0%}, "
@@ -240,6 +242,19 @@ class OrderManager:
     # -- placement ---------------------------------------------------------
     def place_order(self, order: TradeOrder) -> bool:
         """Place (or simulate) an order. Returns True if accepted/simulated."""
+        # I-1 (Task 3.8 fix round 1): checked BEFORE the simulate/venue
+        # branch so both paths reject an unresolved leg identically. This
+        # used to live only in _place_venue_order, so simulate=True (or any
+        # read-only venue, which always simulates) routed an IBKR NO intent
+        # with no_id=None straight to _simulate_order -- which never
+        # inspects market_id -- and recorded a fabricated SIMULATED fill on
+        # a leg (market_id="") that doesn't exist (M8's edge_to_order guard
+        # is the fence; this is what must actually stop the order).
+        if not order.market_id:
+            order.status = OrderStatus.REJECTED
+            order.reason += " | no market id for the leg"
+            self._orders.append(order)
+            return False
         if order.size <= 0 or order.price <= 0:
             order.status = OrderStatus.REJECTED
             order.reason += " | zero size after rounding"
@@ -267,11 +282,8 @@ class OrderManager:
         return False
 
     def _place_venue_order(self, order: TradeOrder) -> bool:
-        if not order.market_id:
-            order.status = OrderStatus.REJECTED
-            order.reason += " | no market id for the leg"
-            self._orders.append(order)
-            return False
+        # market_id is guaranteed non-empty here -- place_order rejects an
+        # empty leg before routing to either this or _simulate_order (I-1).
         from src.domain.ids import MarketId  # local import keeps module header light
 
         request = OrderRequest(
