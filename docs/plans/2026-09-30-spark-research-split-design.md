@@ -341,3 +341,67 @@ independently on each machine and asserted equal).
 - A4. The `src.llm` boundary test is wanted (encodes the role decision).
 - A5. Pilot methodology is a separate spec; this work stops at the smoke check.
 - A6. Spark-side steps are run by Claude over `ssh spark` when possible.
+
+## 11. Amendments after plan review (2026-10-01)
+
+The plan critic assembled the plan's code into a scratch overlay, ran its
+tests and mutations, rehearsed the push script and measured the parity
+noise on a copy of the real snapshot. What that changed in this design:
+
+- **R1. The 5.3 premise was wrong.** `build_training_frame` refits the
+  ERA5->NOAA bridge with `np.linalg.lstsq` on each machine
+  (`climate/bridge.py:142`), so agreement is at LAPACK's kernel-noise
+  level, not last-ulp: identical runs agree exactly, but x86 kernel
+  variants (Haswell vs Sandybridge/Nehalem) differ by max rel 3.3e-10 and
+  a different solver by 1.0e-9, against the spec's rtol 1e-9. The gate is
+  now a REGISTERED tolerance, measured on the Zenbook by a kernel-variation
+  experiment before the cross-machine run (plan Task 6 Step 0; expected
+  `--rtol 1e-8 --atol 1e-10`, about 30x above the measured noise and six
+  orders below the smallest price step that matters), and the payload
+  carries the bridge coefficients so a failure can be localised. The
+  module defaults (1e-9 / 1e-12) stay for unit tests; the gate passes the
+  registered values explicitly.
+- **R2. Refit compare.** Fresh artifacts from `climate.fit.write_artifacts`
+  carry a `fingerprint` key that changes with any last bit, so the
+  report-only refit compares ignore `fingerprint` too (5.4).
+- **R3. The probe cannot pose as a verdict.** `score_snapshot` keeps
+  `require_live_paper=True` (so `go_live.passed` is False by construction
+  on both machines) and adds a top-level `probe: "spark_parity"` marker;
+  5.2's "require_live_paper=False" is withdrawn.
+- **R4. Identity is stronger and tested.** Besides the newest-sweep and
+  ledger hashes, the compared block carries a sha256 for every scoring
+  input (SEAS5, ERA5, labels, model, diagnostics, contracts cache) and the
+  git SHA the code ran at; tests assert the hashes against `hashlib`,
+  that a byte flip changes them, and that the newest of several sweeps
+  and hourly files is the one checked. `verify_mirror` requires the SEAS5
+  and ERA5 products.
+- **R5. The live root is proven untouched, not assumed.** A manifest
+  (sha256, size, mtime) of the paper book, ledgers, signals, model and
+  diagnostics is taken before and after every push and the parity run and
+  diffed. The freeze skips the recorder's `state/`, `*.tmp` and SQLite
+  journals, retries once on rsync's "vanished file" exit, and never
+  deletes the evidence directory inside the snapshot.
+- **R6. Evidence location.** Parity payloads from the Spark are copied to
+  `~/quant_data_snapshot/parity/` (never into `~/quant_data`) and the two
+  compared payloads are committed next to the report. Section 1's "only
+  git flows back" is read as: no DATA ever flows back; evidence files do,
+  into the snapshot's evidence directory and then into git.
+- **R7. Lint gate.** The repo's ruff baseline is not clean (112 findings in
+  legacy code as of 2026-10-01); "ruff clean" in 5.5 becomes: zero findings
+  in files the branch touches, and the same total on both machines.
+- **R8. Tooling facts.** Git Bash rewrites bare `/mnt/...` arguments before
+  `wsl.exe` sees them (the `//mnt` form is used); WSL's default user is
+  root; shell state does not survive between the assistant's Bash calls,
+  so every block sources `scripts/spark/env.sh`; `.gitattributes` is
+  created first (Task 0) so no shell file is ever checked out CRLF; the
+  suite writes under `~/quant_data/polymarket_weather`, so Spark suite runs
+  use an isolated HOME.
+- **R9. CLI shape deviations from 5.2/5.3, deliberate:** `parity_score.py`
+  takes one `--root` (the quant-data root) plus `--out`, not three paths;
+  `compare_json.py` prints aggregate max diffs plus every mismatch rather
+  than every leaf, and refuses to pass when fewer than `--min-numeric`
+  leaves were compared; `verify_mirror.py` always prints the identity on
+  success (no `--identity` flag).
+- **R10. Empty LLM env values** (`LLM_TEMPERATURE=`) are treated as unset
+  (`env_ignore_empty`), matching `.env.example`; the LLM tests clear
+  `LLM_*` from the process environment.
