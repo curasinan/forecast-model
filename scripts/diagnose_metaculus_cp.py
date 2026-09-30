@@ -98,14 +98,14 @@ def probe(label: str, method: str, url: str, params: dict[str, Any] | None,
     hits = find_non_null_cp(target)
     non_null_hits = [(p, v) for p, v in hits if v not in (None, [], {})]
     if non_null_hits:
-        print(f"    FOUND CP-like fields with non-null values:")
+        print("    FOUND CP-like fields with non-null values:")
         for path, val in non_null_hits[:8]:
             preview = repr(val)
             if len(preview) > 160:
                 preview = preview[:157] + "..."
             print(f"      {path}: {preview}")
     else:
-        print(f"    no non-null CP-like fields detected")
+        print("    no non-null CP-like fields detected")
         # Show the shape of recency_weighted if it exists, even if null
         def find_rw(o: Any) -> Any:
             if isinstance(o, dict):

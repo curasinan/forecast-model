@@ -41,33 +41,33 @@ def _safe(text: str) -> str:
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.collectors.github_activity import GitHubActivityCollector
-from src.collectors.news_api import NewsAPICollector
-from src.collectors.polymarket import PolymarketCollector
-from src.collectors.registry import CollectorRegistry
-from src.collectors.rss_feed import RSSFeedCollector
-from src.config import settings
-from src.edge.edge_finder import find_edge
-from src.edge.vpin import assess_vpin, estimate_vpin_from_price_movement
-from src.evaluation.tracker import EvaluationTracker
-from src.features.credibility import CredibilityExtractor
-from src.features.frequency import FrequencyExtractor
-from src.features.market_features import MarketFeatureExtractor
-from src.features.pipeline import FeaturePipeline
-from src.features.sentiment import SentimentExtractor
-from src.features.temporal import TemporalExtractor
-from src.edge.market_selector import scan_markets, filter_actionable
-from src.evaluation.metrics import evaluate_predictor, compare_predictors
-from src.math.entropy import binary_entropy
-from src.math.monte_carlo import simulate_edge, simulate_probability
-from src.models.prediction import PredictionRecord
-from src.models.question import MarketData, Question
-from src.predictors.base import BasePredictor
-from src.predictors.bayesian_predictor import BayesianPredictor
-from src.predictors.classical_ml import ClassicalMLPredictor
-from src.predictors.ensemble import EnsemblePredictor, compute_ensemble_weights
-from src.predictors.llm_predictor import LLMPredictor
-from src.storage.database import Database
+from src.collectors.github_activity import GitHubActivityCollector  # noqa: E402
+from src.collectors.news_api import NewsAPICollector  # noqa: E402
+from src.collectors.polymarket import PolymarketCollector  # noqa: E402
+from src.collectors.registry import CollectorRegistry  # noqa: E402
+from src.collectors.rss_feed import RSSFeedCollector  # noqa: E402
+from src.config import settings  # noqa: E402
+from src.edge.edge_finder import find_edge  # noqa: E402
+from src.edge.vpin import assess_vpin, estimate_vpin_from_price_movement  # noqa: E402
+from src.evaluation.tracker import EvaluationTracker  # noqa: E402
+from src.features.credibility import CredibilityExtractor  # noqa: E402
+from src.features.frequency import FrequencyExtractor  # noqa: E402
+from src.features.market_features import MarketFeatureExtractor  # noqa: E402
+from src.features.pipeline import FeaturePipeline  # noqa: E402
+from src.features.sentiment import SentimentExtractor  # noqa: E402
+from src.features.temporal import TemporalExtractor  # noqa: E402
+from src.edge.market_selector import scan_markets, filter_actionable  # noqa: E402
+from src.evaluation.metrics import compare_predictors  # noqa: E402
+from src.math.entropy import binary_entropy  # noqa: E402
+from src.math.monte_carlo import simulate_edge, simulate_probability  # noqa: E402
+from src.models.prediction import PredictionRecord  # noqa: E402
+from src.models.question import MarketData, Question  # noqa: E402
+from src.predictors.base import BasePredictor  # noqa: E402
+from src.predictors.bayesian_predictor import BayesianPredictor  # noqa: E402
+from src.predictors.classical_ml import ClassicalMLPredictor  # noqa: E402
+from src.predictors.ensemble import EnsemblePredictor, compute_ensemble_weights  # noqa: E402
+from src.predictors.llm_predictor import LLMPredictor  # noqa: E402
+from src.storage.database import Database  # noqa: E402
 
 console = Console()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -207,7 +207,7 @@ async def predict_question(question: Question, db: Database, tracker: Evaluation
     console.print(f"  VPIN: [{color}]{vpin_value:.3f} ({vpin_assessment['level']})[/{color}]")
     console.print(f"  {vpin_assessment['description']}")
     if vpin_flag:
-        console.print(f"  [red]WARNING: Market price may not reflect true probability.[/red]")
+        console.print("  [red]WARNING: Market price may not reflect true probability.[/red]")
         console.print(f"  Kelly multiplier: {vpin_assessment['kelly_multiplier']:.0%}")
     console.print()
 
@@ -446,7 +446,7 @@ async def run_market_scan():
         )
 
     console.print(scan_table)
-    console.print(f"\n[dim]Actionable = entropy > 0.5, price 10-90%, > 7 days to expiry[/dim]")
+    console.print("\n[dim]Actionable = entropy > 0.5, price 10-90%, > 7 days to expiry[/dim]")
 
 
 async def show_evaluation(tracker: EvaluationTracker):

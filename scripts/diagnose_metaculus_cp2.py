@@ -61,7 +61,7 @@ def probe(label: str, url: str, params: dict[str, Any] | None,
 
     print(f"    HTTP {r.status_code}  ({len(r.content)} bytes)")
     if r.status_code == 429:
-        print(f"    RATE LIMITED — Cloudflare 1015. Wait longer between probes.")
+        print("    RATE LIMITED — Cloudflare 1015. Wait longer between probes.")
         return False
     if r.status_code != 200:
         print(f"    body preview: {r.text[:240]!r}")

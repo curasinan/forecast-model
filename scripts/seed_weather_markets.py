@@ -10,14 +10,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from collectors.weather.parse_markets import (
+from collectors.weather.parse_markets import (  # noqa: E402
     ParsedWeatherMarket,
     parse_weather_market,
     upsert_parsed_markets,
 )
-from weather.paths import resolve_weather_data_root, warn_if_onedrive
-from weather.stations import load_station_registry
-from weather.storage import init_weather_db
+from weather.paths import resolve_weather_data_root, warn_if_onedrive  # noqa: E402
+from weather.stations import load_station_registry  # noqa: E402
+from weather.storage import init_weather_db  # noqa: E402
 
 
 def _live_demo_markets() -> list[ParsedWeatherMarket]:

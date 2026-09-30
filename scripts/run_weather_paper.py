@@ -21,22 +21,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from weather.buckets import Bucket, p_bucket_gaussian
-from weather.calibrate import evaluate_binary_probs
-from weather.edge import evaluate_weather_edge
-from weather.emos import predict_emos
-from weather.market_quotes import DEFAULT_POLYMARKET_DB, resolve_quote
-from weather.open_meteo import OpenMeteoClient, OpenMeteoLicenseError
-from weather.paper_criteria import GoLiveCriteria, evaluate_go_live
-from weather.paths import resolve_weather_data_root, warn_if_onedrive
-from weather.serve_features import (
+from weather.buckets import Bucket, p_bucket_gaussian  # noqa: E402
+from weather.calibrate import evaluate_binary_probs  # noqa: E402
+from weather.edge import evaluate_weather_edge  # noqa: E402
+from weather.emos import predict_emos  # noqa: E402
+from weather.market_quotes import DEFAULT_POLYMARKET_DB, resolve_quote  # noqa: E402
+from weather.open_meteo import OpenMeteoClient, OpenMeteoLicenseError  # noqa: E402
+from weather.paper_criteria import GoLiveCriteria, evaluate_go_live  # noqa: E402
+from weather.paths import resolve_weather_data_root, warn_if_onedrive  # noqa: E402
+from weather.serve_features import (  # noqa: E402
     XModelFeatures,
     build_xmodel_features,
     load_emos_for_feature_set,
 )
-from weather.stations import load_station_registry
-from weather.storage import FEATURE_SCHEMA_VERSION, init_weather_db, utc_now_iso
-from weather.training import FEATURE_SET, label_priority_rank_sql
+from weather.stations import load_station_registry  # noqa: E402
+from weather.storage import FEATURE_SCHEMA_VERSION, init_weather_db, utc_now_iso  # noqa: E402
+from weather.training import FEATURE_SET, label_priority_rank_sql  # noqa: E402
 
 log = logging.getLogger("run_weather_paper")
 
