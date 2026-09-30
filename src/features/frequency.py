@@ -1,7 +1,5 @@
 """Frequency feature extractor — mention counts, momentum, acceleration."""
 
-from datetime import datetime
-
 from src.features.base import BaseFeatureExtractor
 from src.models.evidence import EvidenceBundle
 

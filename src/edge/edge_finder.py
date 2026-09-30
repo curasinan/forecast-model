@@ -6,7 +6,7 @@ The entire game is estimating probability more accurately than the market.
 When we find a gap, we quantify it with EV and Kelly sizing.
 """
 
-from src.math.expected_value import best_trade, expected_value
+from src.math.expected_value import best_trade
 from src.math.kelly import half_kelly, kelly_for_no
 from src.models.prediction import EdgeSignal
 

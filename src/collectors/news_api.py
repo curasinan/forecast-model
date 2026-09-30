@@ -13,7 +13,7 @@ API docs: https://newsapi.org/docs/endpoints
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 

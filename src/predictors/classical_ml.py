@@ -22,8 +22,6 @@ Key ML concepts used:
 
 import logging
 
-import numpy as np
-
 from src.models.evidence import EvidenceBundle
 from src.models.prediction import Prediction
 from src.models.question import Question
@@ -144,7 +142,7 @@ class ClassicalMLPredictor(BasePredictor):
 
         reasoning_parts.append(f"Total adjustment: {total_adjustment:+.3f}")
         reasoning_parts.append(f"Final: {probability:.1%}")
-        reasoning_parts.append(f"[heuristic mode - no training data yet]")
+        reasoning_parts.append("[heuristic mode - no training data yet]")
 
         return probability, "\n".join(reasoning_parts)
 
@@ -153,11 +151,10 @@ class ClassicalMLPredictor(BasePredictor):
 
         This will be implemented in Phase 4 when we have training data.
         """
-        # Placeholder for Phase 4
-        feature_names = sorted(FEATURE_WEIGHTS.keys())
-        x = np.array([[features.get(f, 0.0) for f in feature_names]])
-
-        # Would be: probability = self._model.predict_proba(x)[0][1]
+        # Placeholder for Phase 4. Would be:
+        #   feature_names = sorted(FEATURE_WEIGHTS.keys())
+        #   x = np.array([[features.get(f, 0.0) for f in feature_names]])
+        #   probability = self._model.predict_proba(x)[0][1]
         raise NotImplementedError("Trained prediction requires Phase 4 training data")
 
     async def predict(

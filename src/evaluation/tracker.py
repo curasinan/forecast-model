@@ -12,7 +12,7 @@ This is the foundation for Phase 4's full evaluation pipeline.
 import json
 import logging
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
