@@ -56,7 +56,6 @@ def ensemble_daily_from_open_meteo(
     rows: list[dict[str, Any]] = []
 
     max_keys = [k for k in daily if k.startswith("temperature_2m_max")]
-    min_keys = [k for k in daily if k.startswith("temperature_2m_min")]
 
     if dates and max_keys:
         # Control / member suffixes: temperature_2m_max, temperature_2m_max_member01, ...
