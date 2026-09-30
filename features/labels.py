@@ -29,15 +29,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-import numpy as np
 import pandas as pd
 
 from features.correlation_features import (
-    CORRELATION_FEATURE_KEYS,
     compute_correlation_features_batch,
 )
 from features.market_features import (
-    FEATURE_KEYS as MARKET_FEATURE_KEYS,
     compute_features_batch,
 )
 
