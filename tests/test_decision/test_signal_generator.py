@@ -10,12 +10,10 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 import joblib
 import numpy as np
 import pandas as pd
-import pytest
 
 from decision.risk_manager import DEFAULT_RISK_CONFIG, init_db
 from decision.signal_generator import generate_signals
@@ -146,7 +144,7 @@ def test_end_to_end_returns_typed_dataframe(tmp_path):
     assert expected_cols.issubset(set(out.columns))
 
     # All predictions are 0 → direction None → no trades approved.
-    assert (out["tradeable"] == False).all()
+    assert not out["tradeable"].any()
     assert len(out) == len(market_ids)
 
 
@@ -179,4 +177,4 @@ def test_end_to_end_empty_cohort_returns_empty(tmp_path):
         metrics_path=metrics_path,
         timestamp=datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc),
     )
-    assert out.empty or (out["tradeable"] == False).all()
+    assert out.empty or not out["tradeable"].any()

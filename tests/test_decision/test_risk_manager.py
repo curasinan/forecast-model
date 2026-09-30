@@ -91,7 +91,7 @@ def test_rule1_drawdown_trips_at_20pct(tmp_path):
     sized = _sized_df([{"market_id": "a", "position_dollars": 40.0}])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
-    assert (out["tradeable"] == False).all()
+    assert not out["tradeable"].any()
     assert (out["rejected_reason"] == "drawdown").any()
 
 
@@ -103,7 +103,7 @@ def test_rule1_no_drawdown_when_realized_zero(tmp_path):
     sized = _sized_df([{"market_id": "a", "position_dollars": 40.0}])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
-    assert out.loc[0, "tradeable"] == True
+    assert out.loc[0, "tradeable"]
 
 
 # --- Rule 2: cluster cap -------------------------------------------------- #
@@ -200,9 +200,9 @@ def test_rule4_max_positions_keeps_highest_edge(tmp_path):
     ])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc).set_index("market_id")
-    assert out.at["high", "tradeable"] == True
-    assert out.at["mid", "tradeable"] == False
-    assert out.at["low", "tradeable"] == False
+    assert out.at["high", "tradeable"]
+    assert not out.at["mid", "tradeable"]
+    assert not out.at["low", "tradeable"]
     assert out.at["mid", "rejected_reason"] == "max_concurrent"
 
 
@@ -217,7 +217,7 @@ def test_rule4_all_slots_full_rejects_all(tmp_path):
     sized = _sized_df([{"market_id": "n1", "position_dollars": 20.0}])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
-    assert out.loc[0, "tradeable"] == False
+    assert not out.loc[0, "tradeable"]
     assert out.loc[0, "rejected_reason"] == "max_concurrent"
 
 
@@ -239,7 +239,7 @@ def test_drawdown_short_circuits_other_rules(tmp_path):
     ])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
-    assert (out["tradeable"] == False).all()
+    assert not out["tradeable"].any()
     assert (out["rejected_reason"] == "drawdown").all()
 
 

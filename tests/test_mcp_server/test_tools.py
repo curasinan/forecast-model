@@ -191,7 +191,7 @@ def test_server_registers_tools():
 
 def test_resources_json(poly_db: Path, weather_db: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WEATHER_DATA_ROOT", str(weather_db.parent))
-    from mcp_server.server import resource_polymarket_status, resource_weather_status
+    from mcp_server.server import resource_weather_status
 
     # Patch default DB paths by calling status helpers directly already covered;
     # resources use default paths — just ensure they return parseable JSON.

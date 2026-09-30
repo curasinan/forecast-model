@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.domain.ids import MarketId
 from src.venues.ibkr.adapter import IBKRAdapter
 from src.venues.ibkr.settings import IBKRSettings
 

@@ -1,7 +1,5 @@
 """Tests for the quantitative math foundations."""
 
-import math
-
 from src.math.bayesian import BayesianUpdater
 from src.math.entropy import binary_entropy, opportunity_score
 from src.math.expected_value import best_trade, expected_value, expected_value_no
