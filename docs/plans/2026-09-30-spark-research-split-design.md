@@ -81,8 +81,8 @@ Invariants, each with the mechanism that enforces it:
 
 ## 3. Spark environment
 
-- **Clone:** `~/work/algorithmic-trade`, `origin` =
-  `github.com/curasinan/algorithmic-trade`. During this work the Spark
+- **Clone:** `~/work/forecast-model`, `origin` =
+  `github.com/curasinan/forecast-model`. During this work the Spark
   clone tracks the feature branch (the parity scripts must exist on both
   machines at the same commit; the report records that SHA); after the
   merge it tracks `main`. Uses the GitHub credential the Spark already has
@@ -129,7 +129,7 @@ Steps, in order, each failing loudly:
    Transport: the Windows `ssh.exe` via `-e /mnt/c/Windows/System32/OpenSSH/ssh.exe`
    so the Windows agent and the `spark` alias are reused (Task 0 spike;
    fallback: a WSL-native key added to the Spark's `authorized_keys`).
-3. **Remote verify.** `ssh spark '~/work/algorithmic-trade/.venv/bin/python
+3. **Remote verify.** `ssh spark '~/work/forecast-model/.venv/bin/python
    scripts/spark/verify_mirror.py'` opens the newest sweep parquet's
    metadata, the labels ledger, the hourly-bars tree's newest file, and runs
    `PRAGMA quick_check` on `ibkr_ticks/paper/ibkr_paper.db`; exit 1 lists
@@ -335,7 +335,7 @@ independently on each machine and asserted equal).
 ## 10. Assumptions to confirm
 
 - A1. The Spark's existing GitHub credential may be used to clone
-  `algorithmic-trade`.
+  `forecast-model`.
 - A2. `uv` on the Spark only; the Zenbook's global Python stays as is.
 - A3. `~/quant_data` on the Spark; `/opt/data` dropped.
 - A4. The `src.llm` boundary test is wanted (encodes the role decision).
@@ -405,3 +405,28 @@ noise on a copy of the real snapshot. What that changed in this design:
 - **R10. Empty LLM env values** (`LLM_TEMPERATURE=`) are treated as unset
   (`env_ignore_empty`), matching `.env.example`; the LLM tests clear
   `LLM_*` from the process environment.
+- **R11. No tool attribution; repository renamed (2026-10-02).** By
+  account-holder decision commits carry no Co-Authored-By trailer or
+  generated-with footer, and the history was rewritten once to remove the
+  existing ones; the plan's commit commands follow suit. The GitHub
+  repository is now `curasinan/forecast-model` (private). The same rewrite
+  replaced the two real IBKR account identifiers with placeholders
+  (`U0000000` live, `DU0000000` paper); the real values live only in the
+  untracked `docs/local/` and would reach the Spark over ssh, never through
+  git. `docs/history_rewrite_2026-10-02_sha_map.txt` maps old hashes to new.
+- **R12. Spark status update (2026-10-02, supersedes the handover note).**
+  The served model name is `Qwen3.8-Flash-Next-NVFP4`; readiness is
+  `docker inspect -f '{{.State.Health.Status}}' qwenflash` = `healthy`;
+  `ple-warm.service` warms the sidecar before docker and every service has
+  `restart: always`, so nothing is warmed or started by hand and the cold
+  start is about 10 minutes. The compose images are pinned by digest: no
+  `docker compose pull`, no edits to the compose file without the operator;
+  NVIDIA driver packages are on `apt-mark hold`, so no `apt upgrade`. With
+  vLLM loaded about 24 GiB is available and about 15 GiB is the realistic
+  budget for forecast work (`free -h`, not `docker stats`). The Gateway's
+  API port is never opened to the LAN; any future Spark-side Gateway access
+  goes over Tailscale first, which replaces the LAN-opening steps this
+  design mentions. The Spark `.env` keeps its single `LLM_MODEL` line
+  (invariant 4) with mode 600; the status note's "copy .env by scp" is read
+  as that one-line file unless the account holder decides the keys should
+  travel too.

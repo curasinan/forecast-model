@@ -19,12 +19,13 @@
 - No new runtime dependency: the LLM client uses `httpx` (already a core dependency).
 - No `src.llm` import under `climate/`, `src/trading/`, `src/venues/`, `src/edge/`, `src/domain/`, `monitoring/`, nor in `scripts/run_ibkr_paper.py`, `scripts/sync_ibkr_paper.py`, `scripts/record_ibkr_ticks.py`, `scripts/run_gtm_paper.py`.
 - Never run on the Spark: `record_ibkr_ticks.py`, `sync_ibkr_paper.py`, `run_ibkr_paper.py`, `backfill_ibkr_hourly.py`, `verify_ibkr_entitlements.py`, `collect_climate_labels.py`, `fetch_climate_forecasts.py`.
+- The Spark's LLM stack is the operator's: never `docker compose pull`, never edit `~/stack/docker-compose.yml` (images are pinned by digest), never `apt upgrade` (the NVIDIA driver packages are on hold). If the stack needs a change, propose it. With vLLM loaded about 24 GiB is available and about 15 GiB is the realistic budget for forecast work; read it with `free -h`, not `docker stats`.
 - Lint gate: the repo's ruff baseline is NOT clean (112 findings in legacy scripts, `src/ui`, `src/storage`, `src/edge` as of 2026-10-01, measured with `ruff check . --statistics --no-cache`). The gate is therefore (a) zero findings in the files this branch touches: `git diff --name-only origin/main...HEAD -- '*.py' | xargs python -m ruff check`, and (b) the same total finding count on both machines with the pinned ruff. Never "fix" baseline findings in runtime code as part of this branch.
 - Test gate: the full suite green at every commit, with pytest's own exit code checked (`python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"` -> `pytest_exit=0`). Counts are copied from actual runs, never from memory; counts quoted for the new test files are scoped to those files.
-- Shell state does not survive between Bash tool calls. Every Windows-side block below starts with `source scripts/spark/env.sh` (created in Task 0), which defines `SSH`, `SCP`, `REPO_WSL`, `COAUTHOR` and `RUN_DATE`. Windows-side commands run in Git Bash from the worktree unless marked PowerShell or WSL.
+- Shell state does not survive between Bash tool calls. Every Windows-side block below starts with `source scripts/spark/env.sh` (created in Task 0), which defines `SSH`, `SCP`, `REPO_WSL` and `RUN_DATE`. Windows-side commands run in Git Bash from the worktree unless marked PowerShell or WSL.
 - Git Bash rewrites a standalone `/mnt/...` argument into a Windows path before `wsl.exe` sees it (MSYS path conversion), so `REPO_WSL` is defined with a double slash (`//mnt/c/...`, verified 2026-10-01 to arrive intact). Composite `bash -lc '...'` strings are unaffected. Never `export MSYS_NO_PATHCONV=1` globally: it would also stop `~/quant_data_snapshot` from reaching python.exe correctly.
 - Every Spark-side command below is prefixed `"$SSH" spark '...'`. If Task 0 finds the Bash tool cannot reach the Spark, hand those exact commands to the operator as copy-paste blocks and paste their output back; nothing else changes.
-- Commit messages end with the Co-Authored-By trailer this session's attribution reminder specifies. `env.sh` holds it as `COAUTHOR` (currently `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`); the executor re-checks it against the live reminder before the first commit, because the trailer goes into append-only history.
+- Commit messages carry no tool attribution: no Co-Authored-By trailer and no generated-with footer (account-holder decision 2026-10-02; the history was rewritten once to remove them).
 - Committed reports never contain remote URLs from `git remote -v` or hardware UUIDs.
 - Editing: the Bash tool mangles long heredocs (apostrophes, backslashes). Write new files with the Write tool, change existing ones with Edit, keep Bash for commands.
 - `<date>` in file names is the calendar date of the run that produces the file (`date +%F`).
@@ -45,7 +46,7 @@ Create:
 - `docs/spark_runbook.md`, `docs/spark_parity_<date>.md`.
 
 Modify:
-- `.env.example` (LLM block), `docs/ibkr_runbook.md` (role table gains a machine column), `docs/MIGRATION_CHECKPOINT.md` (new section 9), memory file `dgx-spark.md`.
+- `.env.example` (LLM block), `docs/ibkr_runbook.md` (role table gains a machine column), `docs/MIGRATION_CHECKPOINT.md` (new section 10), memory file `dgx-spark.md`.
 
 ---
 
@@ -77,10 +78,8 @@ SCP=/c/Windows/System32/OpenSSH/scp.exe
 # Double slash on purpose: Git Bash (MSYS) rewrites a standalone /mnt/... argument into
 # C:/Program Files/Git/mnt/... before wsl.exe sees it; //mnt/... arrives intact (verified).
 REPO_WSL=//mnt/c/Users/asus/OneDrive/Desktop/new_work/.claude/worktrees/spark-research-split
-# Verify against the session's live attribution reminder before the first commit.
-COAUTHOR="Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 RUN_DATE=$(date +%F)
-export SSH SCP REPO_WSL COAUTHOR RUN_DATE
+export SSH SCP REPO_WSL RUN_DATE
 ```
 Then run:
 ```bash
@@ -110,9 +109,9 @@ WSL's default user here is root (verified: `$HOME` = `/root`), so the key lands 
 
 Run:
 ```bash
-"$SSH" spark 'cd ~/stack && git remote -v | head -2; echo "--- ssh form"; git ls-remote --heads git@github.com:curasinan/algorithmic-trade.git 2>&1 | head -2; echo "--- https form"; git ls-remote --heads https://github.com/curasinan/algorithmic-trade.git 2>&1 | head -2'
+"$SSH" spark 'cd ~/stack && git remote -v | head -2; echo "--- ssh form"; git ls-remote --heads git@github.com:curasinan/forecast-model.git 2>&1 | head -2; echo "--- https form"; git ls-remote --heads https://github.com/curasinan/forecast-model.git 2>&1 | head -2'
 ```
-Expected: whichever form prints a `refs/heads/main` line is `CLONE_URL` for Task 1. If neither works, stop and ask the operator to add a read-only deploy key for `algorithmic-trade` on the Spark; do not create credentials yourself.
+Expected: whichever form prints a `refs/heads/main` line is `CLONE_URL` for Task 1. If neither works, stop and ask the operator to add a read-only deploy key for `forecast-model` on the Spark; do not create credentials yourself.
 
 - [ ] **Step 4: Write the report skeleton**
 
@@ -155,7 +154,7 @@ No commit yet: Task 1 commits this file together with the constraints file.
 
 **Interfaces:**
 - Consumes: `CLONE_URL` from Task 0.
-- Produces: a Spark clone at `~/work/algorithmic-trade` tracking `spark-research-split`, with `.venv/bin/python` (3.14) and the suite green; the constraints file every later install uses.
+- Produces: a Spark clone at `~/work/forecast-model` tracking `spark-research-split`, with `.venv/bin/python` (3.14) and the suite green; the constraints file every later install uses.
 
 - [ ] **Step 1: Record the Zenbook baseline from a fresh run**
 
@@ -184,7 +183,7 @@ Run:
 ```bash
 source scripts/spark/env.sh
 git add .gitattributes constraints/ docs/spark_parity_*.md docs/plans/2026-10-01-spark-research-split.md scripts/spark/env.sh
-git commit -m "Freeze the Zenbook environment and start the Spark parity report" -m "$COAUTHOR"
+git commit -m "Freeze the Zenbook environment and start the Spark parity report"
 git push -u origin spark-research-split
 ```
 
@@ -194,16 +193,16 @@ Hand this block to the operator to run in their own Spark session, then continue
 ```bash
 sudo apt-get install -y pipx && pipx install uv && pipx ensurepath && ~/.local/bin/uv --version
 ```
-Expected: `uv 0.x.y`. (Ubuntu 24.04 is PEP 668 "externally managed", so `pip install uv` into the system Python is refused; pipx is the packaged way.)
+Expected: `uv 0.x.y`. (Ubuntu 24.04 is PEP 668 "externally managed", so `pip install uv` into the system Python is refused; pipx is the packaged way.) Never run `apt upgrade` on the Spark: the NVIDIA driver packages are on `apt-mark hold` and the LLM stack depends on the pinned driver.
 
 - [ ] **Step 5: Clone, create the venv, install with the constraints**
 
 Run (replace `CLONE_URL` with the form Task 0 found; the constraints glob picks the file Step 2 wrote):
 ```bash
 source scripts/spark/env.sh
-"$SSH" spark 'mkdir -p ~/work && cd ~/work && git clone --branch spark-research-split CLONE_URL algorithmic-trade && cd algorithmic-trade && git log --oneline -1'
-"$SSH" spark 'cd ~/work/algorithmic-trade && ~/.local/bin/uv python install 3.14.2 && ~/.local/bin/uv venv .venv --python 3.14.2 && .venv/bin/python -V'
-"$SSH" spark 'cd ~/work/algorithmic-trade && ~/.local/bin/uv pip install --python .venv/bin/python -e ".[dev,ibkr,climate,mcp,web]" -c "$(ls constraints/zenbook-*.txt | tail -1)" 2>&1 | tail -15'
+"$SSH" spark 'mkdir -p ~/work && cd ~/work && git clone --branch spark-research-split CLONE_URL forecast-model && cd forecast-model && git log --oneline -1'
+"$SSH" spark 'cd ~/work/forecast-model && ~/.local/bin/uv python install 3.14.2 && ~/.local/bin/uv venv .venv --python 3.14.2 && .venv/bin/python -V'
+"$SSH" spark 'cd ~/work/forecast-model && ~/.local/bin/uv pip install --python .venv/bin/python -e ".[dev,ibkr,climate,mcp,web]" -c "$(ls constraints/zenbook-*.txt | tail -1)" 2>&1 | tail -15'
 ```
 Expected: the branch's latest commit, `Python 3.14.2`, and an `Installed N packages` line with no `No solution found`. If uv reports 3.14.2 unavailable, use `3.14` and record the exact version installed. If a single pin has no aarch64 wheel, edit that one line in the constraints file to the nearest version that resolves, commit it as "Relax <pkg> pin for aarch64 (no cp314 wheel at <ver>)", push, `git pull --ff-only` on the Spark, re-run the install, and record the deviation in the report.
 
@@ -214,17 +213,17 @@ Run:
 source scripts/spark/env.sh
 "$SSH" spark 'curl -s --max-time 10 http://127.0.0.1:8000/v1/models || echo VLLM_DOWN'
 ```
-Expected: JSON whose `data[0].id` is the served model name. `VLLM_DOWN` means the container is not up. Starting containers on the operator's box is the operator's call: ASK, and hand over `cd ~/stack && docker compose config --services` (confirms the service name; the handover note says `qwenflash`) followed by `cat /opt/models/Qwen3.8-Flash-Next-NVFP4/ple-sidecar/ples_nvfp4/* > /dev/null && docker compose up -d qwenflash`. The cold start is 11-14 min, longer than one Bash tool call should wait, so poll in separate calls (`"$SSH" spark 'curl -s --max-time 5 http://127.0.0.1:8000/v1/models | head -c 200 || echo NOT_YET'`) every few minutes until JSON appears. Then, with the id in hand:
+Expected: JSON whose `data[0].id` is `Qwen3.8-Flash-Next-NVFP4`, the served-model-name per the 2026-10-02 Spark status note. Readiness is `"$SSH" spark "docker inspect -f '{{.State.Health.Status}}' qwenflash"` printing `healthy`. `VLLM_DOWN` or any other status means the stack is still starting: `ple-warm.service` warms the sidecar before docker and every service has `restart: always`, so nothing is warmed or started by hand. The cold start is about 10 minutes, longer than one Bash tool call should wait, so poll the health status in separate calls every few minutes. Then, with the id in hand:
 ```bash
-"$SSH" spark "printf 'LLM_MODEL=%s\n' '<served id>' > ~/work/algorithmic-trade/.env && cat ~/work/algorithmic-trade/.env"
+"$SSH" spark "printf 'LLM_MODEL=%s\n' '<served id>' > ~/work/forecast-model/.env && chmod 600 ~/work/forecast-model/.env && cat ~/work/forecast-model/.env"
 ```
-Expected: exactly one line. Nothing else ever goes into this file.
+Expected: exactly one line, `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` unless the server lists a different id. Nothing else ever goes into this file, and its mode is 600.
 
 - [ ] **Step 7: Prove the Spark cannot reach the Gateway (design invariant 1)**
 
 Run:
 ```bash
-"$SSH" spark 'env | grep "^IBKR_" || echo NO_IBKR_ENV; grep -l "IBKR_" ~/.bashrc ~/.profile /etc/environment 2>/dev/null || echo NO_IBKR_IN_PROFILES; cd ~/work/algorithmic-trade && .venv/bin/python -c "from src.venues.ibkr.settings import IBKRSettings; IBKRSettings()" 2>&1 | tail -1'
+"$SSH" spark 'env | grep "^IBKR_" || echo NO_IBKR_ENV; grep -l "IBKR_" ~/.bashrc ~/.profile /etc/environment 2>/dev/null || echo NO_IBKR_IN_PROFILES; cd ~/work/forecast-model && .venv/bin/python -c "from src.venues.ibkr.settings import IBKRSettings; IBKRSettings()" 2>&1 | tail -1'
 ```
 Expected: `NO_IBKR_ENV`, `NO_IBKR_IN_PROFILES`, and a pydantic `ValidationError` line naming `port` and `trading_mode` (the loud-failure rule). Paste all three under `## 2. Spark environment (Task 1)`; the runbook cites this as the proof. `collect_climate_labels.py` needs neither a credential nor the Gateway, so for it the guard is documentation only; a forked ledger would surface in Task 6 as a `labels_sha256` mismatch in the identity compare.
 
@@ -232,7 +231,7 @@ Expected: `NO_IBKR_ENV`, `NO_IBKR_IN_PROFILES`, and a pydantic `ValidationError`
 
 Run (an isolated HOME keeps the suite's own `~/quant_data/polymarket_weather` writes out of the mirror):
 ```bash
-"$SSH" spark 'cd ~/work/algorithmic-trade && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
+"$SSH" spark 'cd ~/work/forecast-model && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
 ```
 Expected: the same `passed` count as Step 1, `pytest_exit=0`, the same `Found N errors.` total as the Zenbook baseline, and `TOUCHED_FILES_LINT_OK`. A test failure is a finding, not something to skip: a test that depends on the operator's `.env`, on Windows path separators, or on `Path.home()` contents gets fixed in the repo (tests only), committed, and re-run on both machines.
 
@@ -242,7 +241,7 @@ Paste `uname -m`, `.venv/bin/python -V`, `uv --version`, the install tail, the i
 ```bash
 source scripts/spark/env.sh
 git add docs/spark_parity_*.md constraints/
-git commit -m "Record the Spark environment and its first green suite run" -m "$COAUTHOR"
+git commit -m "Record the Spark environment and its first green suite run"
 git push
 ```
 
@@ -1110,7 +1109,7 @@ Expected: `20 passed` (17 + 3) for the two new files, ruff reporting no findings
 ```bash
 source scripts/spark/env.sh
 git add analysis/spark_parity.py scripts/spark/verify_mirror.py scripts/spark/live_manifest.py tests/test_analysis/
-git commit -m "Add mirror integrity checks, the snapshot identity and the live manifest for Spark parity" -m "$COAUTHOR"
+git commit -m "Add mirror integrity checks, the snapshot identity and the live manifest for Spark parity"
 ```
 
 ---
@@ -1168,7 +1167,7 @@ SRC="${QUANT_DATA_SRC:-/mnt/c/Users/asus/quant_data}"
 SNAP="${QUANT_DATA_SNAPSHOT:-/mnt/c/Users/asus/quant_data_snapshot}"
 DEST="${SPARK_DEST:-spark:quant_data}"
 SSH="${SPARK_SSH:-/mnt/c/Windows/System32/OpenSSH/ssh.exe}"
-REMOTE_REPO="${SPARK_REMOTE_REPO:-~/work/algorithmic-trade}"
+REMOTE_REPO="${SPARK_REMOTE_REPO:-~/work/forecast-model}"
 REMOTE_PY="${SPARK_REMOTE_PY:-.venv/bin/python}"
 
 INCLUDE_RAW=0
@@ -1242,9 +1241,9 @@ Expected: `SYNTAX_OK`; two `file` lines WITHOUT "with CRLF line terminators"; an
 ```bash
 source scripts/spark/env.sh
 git add scripts/spark/push_snapshot.sh
-git commit -m "Add the WSL rsync push that mirrors quant data to the Spark" -m "$COAUTHOR"
+git commit -m "Add the WSL rsync push that mirrors quant data to the Spark"
 git push
-"$SSH" spark 'cd ~/work/algorithmic-trade && git pull --ff-only && git log --oneline -1'
+"$SSH" spark 'cd ~/work/forecast-model && git pull --ff-only && git log --oneline -1'
 ```
 Expected: the Spark reports the commit just pushed.
 
@@ -1279,7 +1278,7 @@ Paste the whole run, the `LIVE_ROOT_UNTOUCHED` line and the hash pairs into the 
 ```bash
 source scripts/spark/env.sh
 git add docs/spark_parity_*.md
-git commit -m "Record the first verified mirror push to the Spark" -m "$COAUTHOR"
+git commit -m "Record the first verified mirror push to the Spark"
 ```
 
 ---
@@ -1542,7 +1541,7 @@ source scripts/spark/env.sh
 python -m pytest tests/test_analysis/test_spark_parity.py tests/test_analysis/test_spark_cli.py -q
 python -m ruff check analysis scripts/spark tests/test_analysis
 git add analysis/spark_parity.py scripts/spark/compare_json.py tests/test_analysis/
-git commit -m "Add the tolerance-aware JSON compare for Spark parity" -m "$COAUTHOR"
+git commit -m "Add the tolerance-aware JSON compare for Spark parity"
 ```
 Expected: `28 passed` (24 + 4), ruff reporting no findings for the three paths.
 
@@ -1805,7 +1804,7 @@ source scripts/spark/env.sh
 python -m pytest tests/test_analysis/test_spark_parity.py tests/test_analysis/test_spark_cli.py -q
 python -m ruff check analysis scripts/spark tests/test_analysis
 git add analysis/spark_parity.py scripts/spark/parity_score.py tests/test_analysis/
-git commit -m "Add the clockless scoring probe for Spark parity" -m "$COAUTHOR"
+git commit -m "Add the clockless scoring probe for Spark parity"
 git push
 ```
 Expected: `33 passed` (28 + 5), ruff reporting no findings for the three paths.
@@ -1842,7 +1841,7 @@ Run:
 source scripts/spark/env.sh
 git status --porcelain --untracked-files=no | grep -v '^ M docs/' && echo DIRTY_CODE || echo CODE_CLEAN
 git log --oneline -1
-"$SSH" spark 'cd ~/work/algorithmic-trade && git pull --ff-only && git log --oneline -1'
+"$SSH" spark 'cd ~/work/forecast-model && git pull --ff-only && git log --oneline -1'
 python scripts/spark/live_manifest.py --root ~/quant_data --out ~/quant_data_snapshot/parity/manifest_before_run.json
 wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/push_snapshot.sh"
 ```
@@ -1854,7 +1853,7 @@ Run:
 ```bash
 source scripts/spark/env.sh
 python scripts/spark/parity_score.py --root ~/quant_data_snapshot --out ~/quant_data_snapshot/parity/zenbook.json
-"$SSH" spark 'cd ~/work/algorithmic-trade && .venv/bin/python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json'
+"$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json'
 "$SCP" spark:parity_spark.json ~/quant_data_snapshot/parity/spark.json
 ```
 Expected: both print a `ladder=... fingerprint=... sweep=...` line with the same fingerprint and sweep timestamp. (`~/parity_spark.json` on the Spark is scratch; the copy under `parity/` is the evidence, and Step 7 commits it.)
@@ -1874,7 +1873,7 @@ Run (the Zenbook writes into the SNAPSHOT copy, never the live root; the first l
 source scripts/spark/env.sh
 test -f ~/quant_data_snapshot/climate_data/models/gtm_emos.json || { echo NO_SNAPSHOT; exit 1; }
 python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data 2>&1 | tail -5
-"$SSH" spark 'cd ~/work/algorithmic-trade && .venv/bin/python scripts/fit_gtm_emos.py --trend --root ~/quant_data/climate_data 2>&1 | tail -5'
+"$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/fit_gtm_emos.py --trend --root ~/quant_data/climate_data 2>&1 | tail -5'
 "$SCP" spark:quant_data/climate_data/models/gtm_emos.json ~/quant_data_snapshot/parity/gtm_emos_spark.json
 "$SCP" spark:quant_data/climate_data/reports/gtm_emos_diagnostics.json ~/quant_data_snapshot/parity/diagnostics_spark.json
 python scripts/spark/compare_json.py ~/quant_data_snapshot/climate_data/models/gtm_emos.json ~/quant_data_snapshot/parity/gtm_emos_spark.json --rtol 1e-6 --atol 1e-9 --ignore fingerprint
@@ -1890,7 +1889,7 @@ source scripts/spark/env.sh
 python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"
 python -m ruff check . --statistics --no-cache 2>&1 | tail -3
 git diff --name-only origin/main...HEAD -- '*.py' | xargs python -m ruff check && echo TOUCHED_FILES_LINT_OK
-"$SSH" spark 'cd ~/work/algorithmic-trade && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
+"$SSH" spark 'cd ~/work/forecast-model && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
 ```
 Expected: equal `passed` counts, `pytest_exit=0` twice, the same `Found N errors.` baseline total twice, `TOUCHED_FILES_LINT_OK` twice. Paste under `## 8. Suite and lint (Task 6)`.
 
@@ -1914,7 +1913,7 @@ cp ~/quant_data_snapshot/parity/spark.json "docs/spark_parity_${RUN_DATE}_spark.
 Add `## 9. Verdict` to the report: one paragraph stating whether scoring parity passed at the registered tolerance (the gate) and the max relative difference observed, the refit's max differences (informational), the suite counts and lint totals, the commit SHA, `LIVE_ROOT_UNTOUCHED`, and the Python plus numpy/scipy/pandas/pyarrow versions from both `identity.machine` blocks. The Zenbook copy is the runtime and is never deleted under Option B; this report is what "parity verified" means. Then:
 ```bash
 git add docs/spark_parity_*
-git commit -m "Record Spark scoring parity against the Zenbook snapshot" -m "$COAUTHOR"
+git commit -m "Record Spark scoring parity against the Zenbook snapshot"
 git push
 ```
 
@@ -2098,7 +2097,7 @@ Expected: 5 passed.
 source scripts/spark/env.sh
 python -m ruff check src/llm tests/test_llm
 git add src/llm tests/test_llm
-git commit -m "Add LocalLLMSettings with a required, config-driven model name" -m "$COAUTHOR"
+git commit -m "Add LocalLLMSettings with a required, config-driven model name"
 ```
 
 ---
@@ -2429,7 +2428,7 @@ Expected: 10 passed.
 source scripts/spark/env.sh
 python -m ruff check src/llm tests/test_llm
 git add src/llm tests/test_llm
-git commit -m "Add the httpx client for the local vLLM model with schema-constrained replies" -m "$COAUTHOR"
+git commit -m "Add the httpx client for the local vLLM model with schema-constrained replies"
 ```
 
 ---
@@ -2615,9 +2614,9 @@ Append to `.env.example` (after the IBKR block) with the Edit tool:
 # LLM_MAX_TOKENS=8192             # keep >= 8192: the reasoning model needs the room
 # LLM_REASONING_EFFORT=low        # the default effort burns ~1.6k reasoning tokens per call
 # LLM_TEMPERATURE=                # empty = server default
-# LLM_READ_TIMEOUT_S=900          # ~15 tok/s single-stream; cold start is 11-14 min -- warm
-#                                 # the sidecar first on the Spark:
-#                                 #   cat /opt/models/Qwen3.8-Flash-Next-NVFP4/ple-sidecar/ples_nvfp4/* > /dev/null
+# LLM_READ_TIMEOUT_S=900          # ~15 tok/s single-stream; after a reboot the stack needs
+#                                 # about 10 min (ple-warm.service warms the sidecar); ready when
+#                                 #   docker inspect -f '{{.State.Health.Status}}' qwenflash   prints healthy
 ```
 
 - [ ] **Step 5: Commit**
@@ -2626,7 +2625,7 @@ Append to `.env.example` (after the IBKR block) with the Edit tool:
 source scripts/spark/env.sh
 python -m ruff check tests/test_architecture
 git add tests/test_architecture/test_llm_boundary.py .env.example
-git commit -m "Guard the pricing and ordering path against LLM imports; document LLM_ settings" -m "$COAUTHOR"
+git commit -m "Guard the pricing and ordering path against LLM imports; document LLM_ settings"
 ```
 
 ---
@@ -2784,12 +2783,12 @@ Expected: `10 passed, 1 skipped`, ruff reporting no findings for the two paths.
 ```bash
 source scripts/spark/env.sh
 git add scripts/llm_smoke.py tests/test_llm/test_live.py
-git commit -m "Add the local-LLM smoke check and a gated live round-trip test" -m "$COAUTHOR"
+git commit -m "Add the local-LLM smoke check and a gated live round-trip test"
 git push
-"$SSH" spark 'cd ~/work/algorithmic-trade && git pull --ff-only && .venv/bin/python scripts/llm_smoke.py'
-"$SSH" spark 'cd ~/work/algorithmic-trade && LLM_LIVE=1 .venv/bin/python -m pytest tests/test_llm/test_live.py -q 2>&1 | tail -2'
+"$SSH" spark 'cd ~/work/forecast-model && git pull --ff-only && .venv/bin/python scripts/llm_smoke.py'
+"$SSH" spark 'cd ~/work/forecast-model && LLM_LIVE=1 .venv/bin/python -m pytest tests/test_llm/test_live.py -q 2>&1 | tail -2'
 ```
-Expected: `served: [...]` containing `LLM_MODEL`, a latency/tok-s line, `parsed: {'city': 'Izmir', 'year': 2024, 'passed': True}`, `OK`; then `1 passed`. If the server is down, the smoke prints `FAIL: GET /models: ConnectError...` and exits 1: the container start is the operator's call, exactly as in Task 1 Step 6 (ask, warm the sidecar, poll through the cold start), then re-run. Paste both outputs under `## 10. Local LLM smoke (Task 10)` and commit the report with `-m "$COAUTHOR"`.
+Expected: `served: [...]` containing `LLM_MODEL`, a latency/tok-s line, `parsed: {'city': 'Izmir', 'year': 2024, 'passed': True}`, `OK`; then `1 passed`. If the server is down, the smoke prints `FAIL: GET /models: ConnectError...` and exits 1: the stack restarts by itself (Task 1 Step 6: check the health status and poll through the roughly ten-minute cold start), then re-run. Paste both outputs under `## 10. Local LLM smoke (Task 10)` and commit the report.
 
 ---
 
@@ -2798,7 +2797,7 @@ Expected: `served: [...]` containing `LLM_MODEL`, a latency/tok-s line, `parsed:
 **Files:**
 - Create: `docs/spark_runbook.md`
 - Modify: `docs/ibkr_runbook.md` (the role table, lines 65-69)
-- Modify: `docs/MIGRATION_CHECKPOINT.md` (append section 9)
+- Modify: `docs/MIGRATION_CHECKPOINT.md` (append section 10)
 - Modify: memory `C:\Users\asus\.claude\projects\C--Users-asus-OneDrive-Desktop-new-work\memory\dgx-spark.md`
 - Modify: `docs/spark_parity_<date>.md` (section 10)
 
@@ -2836,7 +2835,7 @@ Never run on the Spark: `record_ibkr_ticks.py`, `sync_ibkr_paper.py`,
 
 ## 2. Layout on the Spark
 
-- Repo: `~/work/algorithmic-trade` (tracks `main` after the merge), venv
+- Repo: `~/work/forecast-model` (tracks `main` after the merge), venv
   `.venv` (uv-managed Python 3.14, pinned by the newest `constraints/zenbook-*.txt`).
 - Data: `~/quant_data` -- a MIRROR pushed from the Zenbook (section 3). Same
   default root as the Zenbook on purpose; no `IBKR_DATA_ROOT` /
@@ -2844,7 +2843,14 @@ Never run on the Spark: `record_ibkr_ticks.py`, `sync_ibkr_paper.py`,
 - `.env`: exactly one line, `LLM_MODEL=<served id>`. No API keys.
 - LLM stack: `~/stack/docker-compose.yml` (repo `curasinan/spark-llm-stack`);
   vLLM on `127.0.0.1:8000`, Open WebUI 8080, Portainer 9000, Phoenix 6006/4317,
-  all loopback-only behind ufw (22/tcp is the only open port).
+  all loopback-only behind ufw (22/tcp is the only open port). Images are
+  pinned by digest: never `docker compose pull`, never edit the compose file
+  without the operator. NVIDIA driver packages are on `apt-mark hold`: no
+  `apt upgrade`.
+- Memory: with vLLM loaded about 24 GiB is available and the realistic budget
+  for forecast work is about 15 GiB. Read it with `free -h` (`docker stats`
+  does not show vLLM's CUDA memory). For anything larger, finish the LLM
+  batch first, then `docker compose stop qwenflash`.
 
 ## 3. Pushing data (Zenbook -> Spark, never back)
 
@@ -2881,7 +2887,7 @@ on the Zenbook only.
     source scripts/spark/env.sh
     wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/push_snapshot.sh"
     python scripts/spark/parity_score.py --root ~/quant_data_snapshot --out ~/quant_data_snapshot/parity/zenbook.json
-    "$SSH" spark 'cd ~/work/algorithmic-trade && .venv/bin/python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json'
+    "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json'
     "$SCP" spark:parity_spark.json ~/quant_data_snapshot/parity/spark.json
     python scripts/spark/compare_json.py ~/quant_data_snapshot/parity/zenbook.json ~/quant_data_snapshot/parity/spark.json --ignore identity.machine --rtol 1e-8 --atol 1e-10
 
@@ -2903,8 +2909,11 @@ artifacts carry a fingerprint string that changes with any last bit.
 - Request rules (measured on the Spark): `max_tokens >= 8192`,
   `reasoning_effort=low` (default effort burns ~1.6k reasoning tokens),
   MTP off. Single-stream ~15.7 tok/s.
-- Cold start is 11-14 min. Warm the sidecar first:
-  `cat /opt/models/Qwen3.8-Flash-Next-NVFP4/ple-sidecar/ples_nvfp4/* > /dev/null`
+- After a reboot the stack comes up by itself in about 10 minutes
+  (`ple-warm.service` warms the sidecar before docker; every service has
+  `restart: always`). It is ready when
+  `docker inspect -f '{{.State.Health.Status}}' qwenflash` prints `healthy`.
+  The served model name is `Qwen3.8-Flash-Next-NVFP4`.
 - `python scripts/llm_smoke.py` checks that `LLM_MODEL` is what the server
   serves and that a schema-constrained extraction round-trips.
 - Boundary: `src.llm` never appears under `climate/`, `src/trading/`,
@@ -2917,8 +2926,9 @@ artifacts carry a fingerprint string that changes with any last bit.
 The Spark's LAN address (192.168.1.31) is a DHCP reservation on its Wi-Fi
 MAC; switching to Ethernet needs a second reservation. The move to the US
 changes the address entirely: mDNS (`spark-8f47.local`) or Tailscale keep
-`ssh spark` working. If the Gateway is ever opened to the LAN for a
-Spark-side `research` role, do it on Tailscale addresses from day one.
+`ssh spark` working. The Gateway's API port is never opened to the LAN: a
+Spark-side `research` role, if it ever comes, goes over Tailscale first
+(operator decision 2026-10-02).
 ```
 
 - [ ] **Step 2: Add the machine column to the IBKR runbook's role table**
@@ -2942,7 +2952,7 @@ and each of the three remaining rows gains `| Zenbook ` after the clientId cell 
 Append to `docs/MIGRATION_CHECKPOINT.md`:
 ```markdown
 
-## 9. Spark research mirror (2026-10)
+## 10. Spark research mirror (2026-10)
 
 The research half of the repo also runs on the DGX Spark against a one-way
 mirror of `~/quant_data`; the trading runtime, every client id and every
@@ -2958,7 +2968,7 @@ name) and is fenced out of the pricing/ordering path by
 With the Edit tool, replace in the memory file `dgx-spark.md` the paragraph starting `- Decision on which option: pending` with:
 ```
 - Option B implemented 2026-10 on branch spark-research-split: Spark clone
-  at ~/work/algorithmic-trade, uv Python 3.14 venv, mirror pushed by
+  at ~/work/forecast-model, uv Python 3.14 venv, mirror pushed by
   `wsl -d Ubuntu -- bash <repo>/scripts/spark/push_snapshot.sh` (Git Bash
   needs the //mnt form from scripts/spark/env.sh), parity gate =
   scripts/spark/parity_score.py on both machines + compare_json.py
@@ -2976,11 +2986,11 @@ python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"
 python -m ruff check . --statistics --no-cache 2>&1 | tail -3
 git diff --name-only origin/main...HEAD -- '*.py' | xargs python -m ruff check && echo TOUCHED_FILES_LINT_OK
 git add docs/spark_runbook.md docs/ibkr_runbook.md docs/MIGRATION_CHECKPOINT.md
-git commit -m "Document the Spark research mirror and the machine each role lives on" -m "$COAUTHOR"
+git commit -m "Document the Spark research mirror and the machine each role lives on"
 git push
-"$SSH" spark 'cd ~/work/algorithmic-trade && git pull --ff-only && git log --oneline -1 && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
+"$SSH" spark 'cd ~/work/forecast-model && git pull --ff-only && git log --oneline -1 && HOME=$(mktemp -d) .venv/bin/python -m pytest -q 2>&1 | tail -3; echo "pytest_exit=${PIPESTATUS[0]}"; .venv/bin/python -m ruff check . --statistics --no-cache 2>&1 | tail -3; git diff --name-only origin/main...HEAD -- "*.py" | xargs -r .venv/bin/python -m ruff check && echo TOUCHED_FILES_LINT_OK'
 ```
-Expected: equal `passed` counts on both, `pytest_exit=0` twice, the same ruff baseline total twice, `TOUCHED_FILES_LINT_OK` twice, same SHA. Paste under `## 11. Final suites (Task 11)`, commit the report with `-m "$COAUTHOR"`, push.
+Expected: equal `passed` counts on both, `pytest_exit=0` twice, the same ruff baseline total twice, `TOUCHED_FILES_LINT_OK` twice, same SHA. Paste under `## 11. Final suites (Task 11)`, commit the report, push.
 
 - [ ] **Step 6: Open the PR**
 
@@ -2995,11 +3005,9 @@ gh pr create --base main --head spark-research-split --title "Spark research mir
 - The dated docs/spark_parity_*.md report and its two payload files: environment, mirror push, registered tolerance, scoring parity (gate), refit parity (report-only), suites on both machines, live-root manifests, LLM smoke.
 
 Design: docs/plans/2026-09-30-spark-research-split-design.md. Plan: docs/plans/2026-10-01-spark-research-split.md.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 ```
-After the merge: `"$SSH" spark 'cd ~/work/algorithmic-trade && git checkout main && git pull --ff-only'` so the Spark tracks `main` as the runbook says.
+After the merge: `"$SSH" spark 'cd ~/work/forecast-model && git checkout main && git pull --ff-only'` so the Spark tracks `main` as the runbook says.
 
 ---
 
@@ -3014,4 +3022,4 @@ After the merge: `"$SSH" spark 'cd ~/work/algorithmic-trade && git checkout main
 - Section 7: runbook with both invocation forms, role table, checkpoint pointer, memory (Task 11), none carrying a date placeholder.
 - Section 8 testing table: every row has a task; the shell script is syntax-checked, rehearsed on temp dirs, and exercised by real pushes; scoped test counts are 17/20 (Task 2), 24/28 (Task 4), 28/33 (Task 5), 5, 10, 4 (Tasks 7-9), 10 + 1 skipped (Task 10).
 - Placeholder scan: `<date>` is defined in Global Constraints and appears only in file names the executor derives from `RUN_DATE`; `CLONE_URL`, `<served id>` and `<paste>` are each filled in the same step from a command's output before the file is committed; `<repo>` in `push_snapshot.sh`'s usage comment is documentation of an operator-supplied path. No committed prose keeps a placeholder.
-- Type consistency: `SparkRoot` fields (`root`, `sweep`, `ledger`, `model`, `seas5`, `era5`) used identically in Tasks 2, 4, 5; `compare_json` signature and `CompareResult` fields match between the Task 4 module and CLI; `score_snapshot` keyword names match between the Task 5 module, tests and CLI; `operational_manifest` / `HEARTBEAT_REL` match between the Task 2 module and `live_manifest.py`; `LLMReply` fields and error classes match between the Task 8 module, tests, Task 10 smoke and live test; every commit uses `$COAUTHOR` from `env.sh`.
+- Type consistency: `SparkRoot` fields (`root`, `sweep`, `ledger`, `model`, `seas5`, `era5`) used identically in Tasks 2, 4, 5; `compare_json` signature and `CompareResult` fields match between the Task 4 module and CLI; `score_snapshot` keyword names match between the Task 5 module, tests and CLI; `operational_manifest` / `HEARTBEAT_REL` match between the Task 2 module and `live_manifest.py`; `LLMReply` fields and error classes match between the Task 8 module, tests, Task 10 smoke and live test; no commit carries a tool trailer.
