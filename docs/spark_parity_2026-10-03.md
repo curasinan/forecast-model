@@ -134,3 +134,72 @@ pytest_exit=0
 ```
 Ruff on the Spark: `Found 112 errors.` (same total as the Zenbook, ruff 0.15.4);
 touched-files gate: `TOUCHED_FILES_LINT_OK`.
+
+## 3. First mirror push (Task 3)
+
+Run 2026-10-03 01:02 local, both machines at commit 8481554 (Tasks 2 and 3 delivered by
+`git push spark spark-research-split`). Live-root manifest before, the push, manifest after:
+
+```
+manifest: 8/9 files present, heartbeat mtime_ns=1790633302591280700 -> ...\parity\manifest_before_push.json
+== 1/4 freeze: /mnt/c/Users/asus/quant_data -> /mnt/c/Users/asus/quant_data_snapshot
+== 2/4 push: /mnt/c/Users/asus/quant_data_snapshot -> spark:quant_data
+Number of files: 603 (reg: 547, dir: 56)
+Number of created files: 603 (reg: 547, dir: 56)
+Number of deleted files: 0
+Number of regular files transferred: 547
+Total file size: 7,407,990 bytes
+Total transferred file size: 7,407,990 bytes
+sent 7,446,535 bytes  received 10,812 bytes  2,130,670.57 bytes/sec
+== 3/4 verify on the Spark
+== 4/4 identity (saved to /mnt/c/Users/asus/quant_data_snapshot/identity_spark.json)
+push_exit=0
+manifest: 8/9 files present, heartbeat mtime_ns=1790633302591280700 -> ...\parity\manifest_after_push.json
+LIVE_ROOT_UNTOUCHED
+```
+The one absent manifest entry is `climate_data/paper/gtm_signals_history.jsonl`, which does not
+exist on the Zenbook yet (no signals run since that file was introduced). The heartbeat mtime did
+not move: the recorder was not running during the push. The newest partition on the Zenbook is
+`date=2026-09-28`, matching the identity's `newest_sweep`.
+
+Identity printed by the Spark (`verify_mirror.py --root ~/quant_data`, exit 0):
+```
+{
+  "code_sha": "8481554943b6c91bc0d26416568bd808ccbf48bd",
+  "hourly_count": 420,
+  "inputs_sha256": {
+    "climate_data/forecasts/seas5_global_mean.parquet": "0568916381dcc2e271913e7b0ba6ea11ab8bc6dda8fe7834198aeacfd230c6ed",
+    "climate_data/labels/labels_ledger.parquet": "5c4fd2455378ed6ddc89cf956d5dbc148c05f74b71c7587b1820c0a478272550",
+    "climate_data/models/gtm_emos.json": "c08cbe14396dabbd0375cc1f7abc311e8997a892771bc201843d3ad96d6d3cac",
+    "climate_data/reference/era5_global_mean.parquet": "11601d2cf274546fe0761fb05b46fe666f740168402e046237aea318ac1a8392",
+    "climate_data/reports/gtm_emos_diagnostics.json": "32c6ae7355085f076bdce5a34e4ff062061faa51ee75c3b84be37f65d3028f56",
+    "ibkr_ticks/contracts_cache.db": "cda232aca470f4c2c1ce5c9ebbebe97c9bf2a56a1dcfb761cd0cb0dff31483a7"
+  },
+  "labels_max_first_seen_utc": "2026-09-11T13:30:15.641964+00:00",
+  "labels_max_period": "2026-08",
+  "labels_rows": 3702,
+  "labels_sha256": "5c4fd2455378ed6ddc89cf956d5dbc148c05f74b71c7587b1820c0a478272550",
+  "model_fingerprint": "2fd53f921150c094",
+  "newest_hourly": "ibkr_ticks/quotes_hourly/date=2026-08-24/hourly-20260825T143919Z-390.parquet",
+  "newest_sweep": "ibkr_ticks/quotes/date=2026-09-28/quotes-220822Z.parquet",
+  "newest_sweep_sha256": "a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688",
+  "paper_db_quick_check": "ok",
+  "paper_runs_lines": 5,
+  "sweep_count": 107
+}
+```
+
+Independent hash cross-check (Step 6): coreutils `sha256sum` on each machine, then the
+identity's own values, for the newest sweep and the labels ledger:
+```
+--- zenbook snapshot
+a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688
+5c4fd2455378ed6ddc89cf956d5dbc148c05f74b71c7587b1820c0a478272550
+--- spark mirror
+a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688
+5c4fd2455378ed6ddc89cf956d5dbc148c05f74b71c7587b1820c0a478272550
+--- identity's own hashes
+  "labels_sha256": "5c4fd2455378ed6ddc89cf956d5dbc148c05f74b71c7587b1820c0a478272550",
+  "newest_sweep_sha256": "a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688",
+```
+Three independent computations of the same bytes agree.
