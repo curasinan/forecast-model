@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 
 import analysis.spark_parity as sp
+from climate.storage import ledger_path
 
 # --------------------------------------------------------------------------- #
 # check_parquet / check_sqlite
@@ -88,6 +90,15 @@ def test_verify_mirror_lists_every_broken_file(spark_root):
     assert len(failures) == 2
     assert any("quotes-220822Z.parquet" in f for f in failures)
     assert any("gtm_emos.json" in f for f in failures)
+
+
+def test_verify_mirror_reports_a_non_object_model_instead_of_aborting(spark_root):
+    # json.loads("[]") succeeds and EmosModel.from_dict then raises AttributeError,
+    # which the old narrow catch let escape and abort the whole scan.
+    spark_root.model.write_text("[]", encoding="utf-8")
+    failures = sp.verify_mirror(spark_root.root)
+    assert len(failures) == 1
+    assert failures[0].startswith("climate_data/models/gtm_emos.json: ")
 
 
 def test_verify_mirror_reports_missing_required_files(tmp_path):
@@ -208,6 +219,12 @@ def test_inputs_sha256_lists_every_input_present_or_not(spark_root):
     assert sp.snapshot_identity(spark_root.root)["inputs_sha256"] == hashes
 
 
+def test_ledger_rel_is_the_owners_path():
+    # LEDGER_REL is the one hand-written path constant (the others are imported
+    # from climate.reduce / climate.fit): pin it to climate.storage's own path.
+    assert sp.LEDGER_REL == ledger_path(Path("x")).relative_to(Path("x")).parts
+
+
 def test_code_identity_reports_the_commit_and_survives_a_non_repo(spark_root, tmp_path):
     here = sp.code_identity()
     assert len(here["git_sha"]) == 40
@@ -247,12 +264,17 @@ def test_compare_within_tolerance_records_max_diffs():
     res = sp.compare_json({"x": 1.0}, {"x": 1.0 + 1e-12})
     assert res.ok
     assert 0.9e-12 < res.max_abs < 1.1e-12
+    assert 0.9e-12 < res.max_rel < 1.1e-12
+    # near zero rtol*scale vanishes, so only atol can accept this pair
+    assert sp.compare_json({"x": 0.0}, {"x": 1e-13}).ok
 
 
 def test_compare_beyond_tolerance_fails_with_the_path():
     res = sp.compare_json({"a": {"b": [0.5, 0.25]}}, {"a": {"b": [0.5, 0.2500001]}})
     assert not res.ok
     assert res.mismatches[0].startswith("a.b[1]:")
+    # and a near-zero pair that is past atol is rejected
+    assert not sp.compare_json({"x": 0.0}, {"x": 1e-11}).ok
 
 
 def test_compare_nan_equals_nan_but_none_does_not():
@@ -260,11 +282,21 @@ def test_compare_nan_equals_nan_but_none_does_not():
     res = sp.compare_json({"v": None}, {"v": float("nan")})
     assert not res.ok
     assert res.mismatches[0].startswith("v:")
+    # a NaN or an infinity against anything else must fail loudly: without the
+    # guard both |a-b| and the scale go NaN/inf and ``nan > nan`` is False
+    nan, inf = float("nan"), float("inf")
+    assert not sp.compare_json({"v": nan}, {"v": 1.0}).ok
+    assert not sp.compare_json({"v": 1.0}, {"v": nan}).ok
+    assert not sp.compare_json({"v": inf}, {"v": 1.0}).ok
+    assert not sp.compare_json({"v": inf}, {"v": -inf}).ok
+    assert sp.compare_json({"v": inf}, {"v": inf}).ok
 
 
 def test_compare_missing_extra_keys_and_list_lengths():
     res = sp.compare_json({"a": 1, "b": 2, "l": [1]}, {"a": 1, "c": 3, "l": [1, 2]})
     assert {m.split(":")[0] for m in res.mismatches} == {"b", "c", "l"}
+    assert "b: missing on right" in res.mismatches
+    assert "c: missing on left" in res.mismatches
 
 
 def test_compare_ignore_skips_a_dotted_subtree():
@@ -277,3 +309,15 @@ def test_compare_ignore_skips_a_dotted_subtree():
 def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
     assert not sp.compare_json({"t": True}, {"t": 1}).ok
     assert sp.compare_json({"t": 1}, {"t": 1.0}).ok
+    # int against float still goes through the tolerance (only int-int is exact)
+    assert sp.compare_json({"t": 1}, {"t": 1.0 + 1e-12}).ok
+    # two ints are exact (design 5.3): at the gate's tolerances an id off by 3
+    # (or by 1, 5, 8 at 8e8) must fail, never hide inside rtol * scale
+    gate = {"rtol": 1e-8, "atol": 1e-10}
+    res = sp.compare_json({"i": 812345678}, {"i": 812345681}, **gate)
+    assert not res.ok
+    assert res.mismatches[0].startswith("i:")
+    assert res.n_numeric == 1
+    assert sp.compare_json({"i": 812345678}, {"i": 812345678}, **gate).ok
+    for delta in (1, 5, 8):
+        assert not sp.compare_json({"i": 800_000_000}, {"i": 800_000_000 + delta}, **gate).ok

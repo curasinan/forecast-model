@@ -355,12 +355,16 @@ def compare_json(
 ) -> CompareResult:
     """Recursive structural compare of two JSON documents.
 
-    Numbers agree when ``|a-b| <= atol + rtol*max(|a|,|b|)``; NaN equals
-    NaN; None never equals NaN; bools, strings and None are exact; dict key
-    sets and list lengths must match. ``ignore`` holds dotted paths
-    (``identity.machine``) whose subtrees are skipped. Every mismatch is
-    reported with its path; the result also carries the largest numeric
-    differences seen, so a passing run still shows how close it was.
+    Floats (and an int against a float) agree when
+    ``|a-b| <= atol + rtol*max(|a|,|b|)``; NaN equals NaN; None never equals
+    NaN. Ints, bools, strings and None are exact: two ints are compared with
+    ``!=`` before any float conversion, so an id that differs by 1 cannot
+    hide inside the tolerance (design 5.3). Dict key sets and list lengths
+    must match. ``ignore`` holds dotted paths (``identity.machine``) whose
+    subtrees are skipped. Every mismatch is reported with its path; the
+    result also carries the largest differences seen among the
+    tolerance-compared numbers, so a passing run still shows how close it
+    was. ``n_numeric`` counts every number pair, ints included.
     """
     result = _result if _result is not None else CompareResult()
     ignored = set(ignore)
@@ -389,6 +393,12 @@ def compare_json(
         return result
     if _is_number(left) and _is_number(right):
         result.n_numeric += 1
+        if isinstance(left, int) and isinstance(right, int):
+            # exact: _is_number already kept bools out, and no float conversion
+            # may blur two large ids or counts into "within tolerance"
+            if left != right:
+                result.mismatches.append(f"{_path}: {left!r} != {right!r}")
+            return result
         fa, fb = float(left), float(right)
         if math.isnan(fa) and math.isnan(fb):
             return result
