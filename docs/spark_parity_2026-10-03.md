@@ -83,3 +83,54 @@ Constraints file `constraints/zenbook-2026-10-03.txt`: 238 lines; the twelve pin
 design's wheel check covered are present with the verified versions (httpx 0.28.1,
 ib_async 2.1.0, lightgbm 4.6.0, netCDF4 1.7.4, numpy 2.4.2, pandas 3.0.1, pyarrow 25.0.0,
 pydantic 2.12.5, pydantic_core 2.41.5, scikit-learn 1.8.0, scipy 1.17.1, xgboost 3.2.0).
+
+## 2. Spark environment (Task 1)
+
+Code delivery (ruling R-A): `git init ~/work/forecast-model` on the Spark with
+`receive.denyCurrentBranch=updateInstead`; from the worktree `git push spark main
+spark-research-split` (remote `spark` = `spark:work/forecast-model`, `core.sshCommand` = the
+Windows OpenSSH client); then `git checkout spark-research-split` on the Spark. Both machines
+at commit 48982c8 for the runs below.
+
+```
+uname: aarch64 | python: Python 3.14.2 | uv: uv 0.12.22 (aarch64-unknown-linux-gnu)
+```
+
+Install: `uv python install 3.14.2`, `uv venv .venv --python 3.14.2`, then
+`uv pip install -e ".[dev,ibkr,climate,mcp,web]" -c constraints/zenbook-2026-10-03.txt`
+(exit 0, no unsatisfiable pin), later plus `.[trading]` (ruling R-H below). 104 packages.
+Key pins on the Spark, identical to the Zenbook's:
+```
+httpx 0.28.1, ib-async 2.1.0, lightgbm 4.6.0, netcdf4 1.7.4, numpy 2.4.2, pandas 3.0.1,
+pyarrow 25.0.0, pydantic 2.12.5, pydantic-core 2.41.5, pytest 9.0.2, ruff 0.15.4,
+scikit-learn 1.8.0, scipy 1.17.1, xgboost 3.2.0
+```
+
+Served model (Step 6): `/v1/models` lists exactly `['Qwen3.8-Flash-Next-NVFP4']`;
+`docker inspect -f '{{.State.Health.Status}}' qwenflash` prints `healthy`. `.env` holds the
+single line `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` with mode `-rw-------`.
+
+Invariant 1 proof (Step 7):
+```
+NO_IBKR_ENV
+NO_IBKR_IN_PROFILES
+trading_mode
+  Field required [type=missing, input_value={'llm_model': 'Qwen3.8-Flash-Next-NVFP4'}, input_type=dict]
+```
+(`IBKRSettings()` raises pydantic's ValidationError: `port` and `trading_mode` have no default.)
+
+Suite and lint (Step 8, `HOME=$(mktemp -d)`). First run, extras `[dev,ibkr,climate,mcp,web]`:
+```
+990 passed, 1 skipped, 1 warning in 31.79s
+pytest_exit=0
+SKIPPED [1] tests/test_venues/test_polymarket_adapter.py:225: could not import 'py_clob_client': No module named 'py_clob_client'
+```
+The Zenbook has `py_clob_client==0.34.6` installed (it is in the constraints file), so the
+design's "py-clob-client absent" was wrong. Ruling R-H: `.[trading]` installed on the Spark
+as well (24 packages). Second run:
+```
+991 passed, 1 warning in 29.67s
+pytest_exit=0
+```
+Ruff on the Spark: `Found 112 errors.` (same total as the Zenbook, ruff 0.15.4);
+touched-files gate: `TOUCHED_FILES_LINT_OK`.
