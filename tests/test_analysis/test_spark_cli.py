@@ -16,7 +16,10 @@ if str(REPO_ROOT / "scripts" / "spark") not in sys.path:
 
 import compare_json as compare_cli  # noqa: E402
 import live_manifest as manifest_cli  # noqa: E402
+import parity_score as score_cli  # noqa: E402
 import verify_mirror as verify_cli  # noqa: E402
+
+import analysis.spark_parity as sp  # noqa: E402
 
 
 def test_live_manifest_cli_writes_the_manifest(spark_root, tmp_path, capsys):
@@ -59,3 +62,18 @@ def test_compare_json_cli_exit_codes(tmp_path, capsys):
     empty.write_text("{}", encoding="utf-8")
     assert compare_cli.main([str(empty), str(empty)]) == 1
     assert "floor" in capsys.readouterr().out
+
+
+def test_parity_score_cli_writes_a_clockless_payload(
+    spark_root, universe_json, dec_2026_frame, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sp, "build_training_frame", lambda root: dec_2026_frame)
+    out = tmp_path / "parity" / "out.json"
+    rc = score_cli.main([
+        "--root", str(spark_root.root), "--out", str(out), "--universe-json", str(universe_json),
+    ])
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert "ts_utc" not in payload
+    assert payload["identity"]["snapshot"]["sweep_count"] == 1
+    assert not (spark_root.root / "climate_data" / "paper").exists()

@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 import analysis.spark_parity as sp
 from climate.storage import ledger_path
@@ -213,6 +216,9 @@ def test_verify_mirror_requires_the_cds_inputs(spark_root):
 def test_inputs_sha256_lists_every_input_present_or_not(spark_root):
     hashes = sp.inputs_sha256(spark_root.root)
     assert set(hashes) == {"/".join(p) for p in sp.INPUT_FILES}
+    # the key-set check above is derived from the constant, so it would pass even
+    # with the ledger dropped from it: pin the entry the scorer cannot do without
+    assert (sp.CLIMATE_DIR, *sp.LEDGER_REL) in sp.INPUT_FILES
     expected = hashlib.sha256(spark_root.model.read_bytes()).hexdigest()
     assert hashes["climate_data/models/gtm_emos.json"] == expected
     assert hashes["ibkr_ticks/contracts_cache.db"] is None
@@ -236,6 +242,8 @@ def test_code_identity_reports_the_commit_and_survives_a_non_repo(spark_root, tm
 def test_operational_manifest_lists_files_and_tracks_changes(spark_root):
     manifest = sp.operational_manifest(spark_root.root)
     assert set(manifest) == {"/".join(p) for p in sp.MANIFEST_FILES}
+    # derived from the constant too: pin the ledger, which a refit must never touch
+    assert (sp.CLIMATE_DIR, *sp.LEDGER_REL) in sp.MANIFEST_FILES
     entry = manifest["climate_data/models/gtm_emos.json"]
     assert set(entry) == {"sha256", "size", "mtime_ns"}
     assert entry["size"] == spark_root.model.stat().st_size
@@ -321,3 +329,110 @@ def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
     assert sp.compare_json({"i": 812345678}, {"i": 812345678}, **gate).ok
     for delta in (1, 5, 8):
         assert not sp.compare_json({"i": 800_000_000}, {"i": 800_000_000 + delta}, **gate).ok
+
+
+# --------------------------------------------------------------------------- #
+# machine_info / score_snapshot
+# --------------------------------------------------------------------------- #
+
+
+def test_machine_info_reports_platform_versions_and_dirtiness():
+    info = sp.machine_info()
+    assert info["python"] == platform.python_version()
+    assert info["machine"] == platform.machine()
+    assert set(sp.MACHINE_PACKAGES) <= set(info)
+    assert isinstance(info["git_dirty"], bool)
+
+
+def test_score_snapshot_strips_the_clock_marks_the_probe_and_never_writes(
+    spark_root, universe_json, dec_2026_frame, emos_identity_model
+):
+    payload = sp.score_snapshot(
+        dec_2026_frame,
+        emos_identity_model,
+        ticks_root=spark_root.root / "ibkr_ticks",
+        universe_json=universe_json,
+        identity=sp.snapshot_identity(spark_root.root),
+    )
+    assert "ts_utc" not in payload
+    assert payload["probe"] == "spark_parity"
+    assert payload["bridge"] is None  # the synthetic frame carries no bridge
+    assert payload["sweep_ts_utc"] == "2026-09-28T22:08:22Z"
+    assert payload["n_quotes"] == 1
+    assert payload["n_ladder"] == 1
+    assert payload["signals"][0]["target_month"] == "2026-12"
+    assert payload["identity"]["snapshot"]["sweep_count"] == 1
+    assert payload["identity"]["machine"]["python"] == platform.python_version()
+    assert payload["go_live"]["passed"] is False  # live-paper gate required: never a verdict
+    assert not (spark_root.root / "climate_data" / "paper").exists()
+    json.dumps(payload, default=str)  # serialisable the way the entrypoint serialises
+
+
+def test_score_snapshot_refuses_a_missing_universe_file(
+    spark_root, tmp_path, dec_2026_frame, emos_identity_model
+):
+    with pytest.raises(FileNotFoundError):
+        sp.score_snapshot(
+            dec_2026_frame,
+            emos_identity_model,
+            ticks_root=spark_root.root / "ibkr_ticks",
+            universe_json=tmp_path / "absent.json",
+            identity=sp.snapshot_identity(spark_root.root),
+        )
+
+
+def test_score_snapshot_from_root_wires_model_identity_frame_and_bridge(
+    spark_root, universe_json, dec_2026_frame, monkeypatch
+):
+    # build_training_frame needs real SEAS5/ERA5/NOAA inputs; stub it and check the wiring.
+    dec_2026_frame.attrs["bridge_json"] = '{"alpha": 1.5, "beta": 0.9}'
+    monkeypatch.setattr(sp, "build_training_frame", lambda root: dec_2026_frame)
+    payload = sp.score_snapshot_from_root(spark_root.root, universe_json=universe_json)
+    expected = sp.snapshot_identity(spark_root.root)["model_fingerprint"]
+    assert payload["identity"]["snapshot"]["model_fingerprint"] == expected
+    assert payload["model_fingerprint"] == expected
+    assert payload["bridge"] == {"alpha": 1.5, "beta": 0.9}
+    assert payload["n_ladder"] == 1
+
+
+def test_score_snapshot_refuses_an_identity_without_a_usable_code_sha(
+    spark_root, universe_json, dec_2026_frame, emos_identity_model
+):
+    # Two machines that both fail to read git would both report "unknown" and
+    # compare equal, so the identity block would witness nothing (ruling R-J).
+    valid = sp.snapshot_identity(spark_root.root)
+    for unusable in ("unknown", None):
+        with pytest.raises(RuntimeError, match="code_sha"):
+            sp.score_snapshot(
+                dec_2026_frame,
+                emos_identity_model,
+                ticks_root=spark_root.root / "ibkr_ticks",
+                universe_json=universe_json,
+                identity={**valid, "code_sha": unusable},
+            )
+
+
+def test_score_snapshot_refuses_a_sweep_the_identity_does_not_name(
+    spark_root, universe_json, dec_2026_frame, emos_identity_model
+):
+    # The identity and the scorer list the sweep folder separately: if the root moved
+    # between the two, the identity would vouch for bytes that were not scored (R-M).
+    valid = sp.snapshot_identity(spark_root.root)
+
+    def score(identity):
+        return sp.score_snapshot(
+            dec_2026_frame,
+            emos_identity_model,
+            ticks_root=spark_root.root / "ibkr_ticks",
+            universe_json=universe_json,
+            identity=identity,
+        )
+
+    moved = {**valid, "newest_sweep": "ibkr_ticks/quotes/date=2026-09-27/quotes-010101Z.parquet"}
+    with pytest.raises(RuntimeError) as excinfo:
+        score(moved)
+    assert "2026-09-28T22:08:22Z" in str(excinfo.value)  # the sweep run_paper scored
+    assert "2026-09-27T01:01:01Z" in str(excinfo.value)  # the sweep the identity names
+    # an identity that names no sweep has nothing to vouch for
+    with pytest.raises(RuntimeError, match="newest_sweep"):
+        score({**valid, "newest_sweep": None})

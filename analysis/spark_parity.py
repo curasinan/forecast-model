@@ -29,20 +29,25 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import json
 import math
 import os
+import platform
 import sqlite3
 import subprocess
 from dataclasses import dataclass, field
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
 import pyarrow.parquet as pq
 
+from climate.dataset import build_training_frame
 from climate.emos import EmosModel
 from climate.fit import MODEL_REL, REPORT_JSON_REL, model_fingerprint
-from climate.ladder import list_sweep_files
+from climate.ladder import list_sweep_files, sweep_ts_from_path
+from climate.paper import format_ts_utc, run_paper
 from climate.reduce import ERA5_PARQUET, SEAS5_PARQUET
 from climate.storage import ledger_path
 
@@ -419,3 +424,115 @@ def compare_json(
     if type(left) is not type(right) or left != right:
         result.mismatches.append(f"{_path}: {left!r} != {right!r}")
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Machine info and the scoring probe
+# --------------------------------------------------------------------------- #
+
+MACHINE_PACKAGES = ("numpy", "scipy", "pandas", "pyarrow")
+PROBE_MARKER = "spark_parity"
+
+
+def machine_info() -> dict[str, Any]:
+    """Which machine and numerical stack produced a payload (ignored by the compare)."""
+    info: dict[str, Any] = {
+        "machine": platform.machine(),
+        "system": platform.system(),
+        "python": platform.python_version(),
+        "git_dirty": code_identity()["dirty"],
+    }
+    for name in MACHINE_PACKAGES:
+        try:
+            info[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            info[name] = "missing"
+    return info
+
+
+def score_snapshot(
+    frame: pd.DataFrame,
+    model: EmosModel,
+    *,
+    ticks_root: Path,
+    universe_json: Path | None,
+    identity: dict[str, Any],
+    summary: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """``climate.paper.run_paper`` on a frozen snapshot, minus the wall clock.
+
+    A parity probe, not an operator entrypoint: no staleness gate (that
+    belongs to scripts/run_gtm_paper.py, and this probe must work on a
+    stale mirror); gate inputs pinned to zero with the live-paper gate
+    REQUIRED, so ``go_live.passed`` is False by construction on both
+    machines and can never be mistaken for an operational verdict; a
+    top-level ``probe`` marker for the same reason; nothing written under
+    ``paper/``. The bridge the frame was built with travels along, so a
+    parity failure can be localised to the LAPACK fit rather than the CDF.
+
+    The identity has to be able to witness the run, or this raises
+    ``RuntimeError``: a ``code_sha`` of None or "unknown" is refused (two
+    machines that both fail to read git would compare equal), and so is a
+    scored sweep that is not the identity's ``newest_sweep`` (the identity
+    and the scorer list the sweep folder separately, so a root that moved
+    between the two would be vouched for on bytes that were not scored).
+    """
+    if identity.get("code_sha") in (None, "unknown"):
+        raise RuntimeError(
+            f"identity code_sha is unusable ({identity.get('code_sha')!r}): two machines that "
+            "both fail to read git would compare equal, so the witness would be void"
+        )
+    if universe_json is not None and not Path(universe_json).exists():
+        raise FileNotFoundError(f"universe json not found: {universe_json}")
+    payload = run_paper(
+        frame,
+        model,
+        summary=summary,
+        ticks_root=ticks_root,
+        universe_json=universe_json,
+        paper_days=0,
+        resolved_months=0,
+        require_live_paper=True,
+    )
+    # sweep_ts_from_path(None) is None: an identity without a newest sweep, or with
+    # one that is not a recorder path, has nothing to vouch for the scored sweep
+    named = sweep_ts_from_path(identity.get("newest_sweep"))
+    if named is None:
+        raise RuntimeError(
+            f"identity names no usable newest_sweep ({identity.get('newest_sweep')!r}): "
+            "there is nothing to vouch for the sweep that was scored"
+        )
+    expected = format_ts_utc(named)
+    if payload["sweep_ts_utc"] != expected:
+        raise RuntimeError(
+            f"scored sweep {payload['sweep_ts_utc']} is not the identity's newest_sweep "
+            f"{expected}: the root changed between the identity and the scoring"
+        )
+    payload.pop("ts_utc", None)
+    payload["probe"] = PROBE_MARKER
+    bridge_json = frame.attrs.get("bridge_json")
+    payload["bridge"] = json.loads(bridge_json) if bridge_json else None
+    payload["identity"] = {"snapshot": identity, "machine": machine_info()}
+    return payload
+
+
+def score_snapshot_from_root(root: Path, *, universe_json: Path | None) -> dict[str, Any]:
+    """Load frame, model and diagnostics from ``root`` exactly like the entrypoint, then score."""
+    root = Path(root)
+    climate = root / CLIMATE_DIR
+    frame = build_training_frame(climate)
+    model = EmosModel.from_json(climate.joinpath(*MODEL_REL))
+    summary = None
+    diag_path = climate / "reports" / "gtm_emos_diagnostics.json"
+    if diag_path.exists():
+        diag = json.loads(diag_path.read_text(encoding="utf-8"))
+        if diag.get("summary"):
+            summary = pd.DataFrame(diag["summary"])
+    return score_snapshot(
+        frame,
+        model,
+        ticks_root=root / TICKS_DIR,
+        universe_json=universe_json,
+        identity=snapshot_identity(root),
+        summary=summary,
+    )
