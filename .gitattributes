@@ -1,0 +1,4 @@
+# Shell files under scripts/spark/ are read by WSL's bash and sourced by Git Bash
+# straight from the Windows working tree, where core.autocrlf=true would otherwise
+# check them out with CRLF ("$'\r': command not found" on every line).
+scripts/spark/*.sh text eol=lf
