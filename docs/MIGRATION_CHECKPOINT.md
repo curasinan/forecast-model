@@ -410,3 +410,16 @@ Nothing is half-built. The useful moves, in order:
    down, this shows the hole and the real run fills it.
 4. Deeper quote history (back to 2026-01-17) is available in ~8 more 30-day
    `--start/--end` chunks at ~75 min each, if the model ever needs it.
+
+## 9. History rewrite and rename (2026-10-02)
+
+The repository was renamed `forecast-model` and its history rewritten once.
+Commit messages lost their tool co-author trailers, and the two real IBKR
+account identifiers were replaced everywhere by placeholders: `U0000000`
+is the live account and `DU0000000` the paper account (the rule that a
+DU/DF prefix means paper is unchanged). Every commit hash therefore
+changed. Hashes cited in this file, in `docs/migration_report.md` and in
+`docs/plans/` are the PRE-rewrite hashes;
+`docs/history_rewrite_2026-10-02_sha_map.txt` maps each old hash to its new
+one. The real account identifiers live only in the operator's local,
+untracked `docs/local/` notes.

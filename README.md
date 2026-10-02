@@ -1,11 +1,14 @@
-# tech-event-predictor
+# forecast-model
 
-Quantitative prediction system. The live venue is **IBKR ForecastEx**
-(climate lane): NOAA-label ingestion, SEAS5/ERA5-driven EMOS post-processing,
-a strike ladder, and paper-trading execution against ForecastEx climate
-contracts (`docs/ibkr_runbook.md` for operations, `docs/venue_semantics.md`
-for verified venue facts). Paper-trading since 2026-08-25; live trading
-stays a manual act by the account holder, never enabled by a commit here.
+Probabilistic forecast models and the pipeline around them. The active
+model is the **GTM climate forecast**: NOAA first-print labels, SEAS5/ERA5
+inputs, an ERA5-to-NOAA bridge and per-lead Gaussian EMOS post-processing,
+verified by expanding-window CRPS skill against trend climatology
+(`docs/gtm_model_report.md`). Its forecasts are paper-traded as a strike
+ladder on **IBKR ForecastEx** climate contracts (`docs/ibkr_runbook.md` for
+operations, `docs/venue_semantics.md` for verified venue facts).
+Paper-trading since 2026-08-25; live trading stays a manual act by the
+account holder, never enabled by a commit here.
 
 The original **Polymarket** track (evidence collection, probability
 estimation, calibration, edge detection, position sizing) is research-only

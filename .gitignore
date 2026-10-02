@@ -69,3 +69,6 @@ logs/
 .agents/
 *.zip
 bist_brief/
+
+# Operator-local notes (real account identifiers and similar); never committed.
+docs/local/

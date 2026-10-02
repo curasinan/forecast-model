@@ -1,7 +1,7 @@
 [project]
-name = "tech-event-predictor"
+name = "forecast-model"
 version = "0.1.0"
-description = "Quantitative prediction system for tech events on Polymarket"
+description = "Probabilistic forecast models (climate and weather EMOS) with calibration, evaluation and a paper-trading harness"
 requires-python = ">=3.12"
 
 dependencies = [
