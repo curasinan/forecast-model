@@ -85,11 +85,18 @@ def spark_root(tmp_path: Path) -> SparkRoot:
     seas5 = climate / "forecasts" / "seas5_global_mean.parquet"
     seas5.parent.mkdir(parents=True)
     pd.DataFrame(
-        {"init": ["2026-08"], "lead": [1], "member": [0], "value_K": [288.1]}
+        {
+            "init_date": ["2026-08-01"],
+            "lead_month": [1],
+            "member": [0],
+            "t2m_global_K": [288.1],
+        }
     ).to_parquet(seas5, index=False)
     era5 = climate / "reference" / "era5_global_mean.parquet"
     era5.parent.mkdir(parents=True)
-    pd.DataFrame({"month": ["2026-07"], "value_K": [288.0]}).to_parquet(era5, index=False)
+    pd.DataFrame({"month": ["2026-07-01"], "t2m_global_K": [288.0]}).to_parquet(
+        era5, index=False
+    )
     return SparkRoot(root=root, sweep=sweep, ledger=ledger, model=model, seas5=seas5, era5=era5)
 
 

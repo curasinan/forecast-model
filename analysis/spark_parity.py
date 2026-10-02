@@ -13,10 +13,16 @@ Layout assumed under a quant-data root (``~/quant_data`` on both machines,
     <root>/ibkr_ticks/quotes_hourly/date=*/*.parquet          (optional)
     <root>/ibkr_ticks/contracts_cache.db                       (optional)
     <root>/ibkr_ticks/paper/ibkr_paper.db                      (optional)
+    <root>/climate_data/forecasts/seas5_global_mean.parquet
+    <root>/climate_data/reference/era5_global_mean.parquet
     <root>/climate_data/labels/labels_ledger.parquet
     <root>/climate_data/models/gtm_emos.json
     <root>/climate_data/paper/ibkr_paper_runs.jsonl            (optional)
     <root>/climate_data/reports/gtm_emos_diagnostics.json      (optional)
+
+Entries without a marker are required: a missing one is a verify_mirror
+failure, not a skip. That includes the two CDS products (SEAS5 and ERA5),
+which build_training_frame reads, so a mirror without them cannot be scored.
 """
 
 from __future__ import annotations
@@ -33,8 +39,9 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from climate.emos import EmosModel
-from climate.fit import MODEL_REL, model_fingerprint
+from climate.fit import MODEL_REL, REPORT_JSON_REL, model_fingerprint
 from climate.ladder import list_sweep_files
+from climate.reduce import ERA5_PARQUET, SEAS5_PARQUET
 from climate.storage import ledger_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,9 +51,10 @@ CLIMATE_DIR = "climate_data"
 CONTRACTS_DB = "contracts_cache.db"
 PAPER_DB_REL = ("paper", "ibkr_paper.db")
 RUNS_JSONL_REL = ("paper", "ibkr_paper_runs.jsonl")
-SEAS5_REL = ("forecasts", "seas5_global_mean.parquet")
-ERA5_REL = ("reference", "era5_global_mean.parquet")
-DIAG_REL = ("reports", "gtm_emos_diagnostics.json")
+SEAS5_REL = SEAS5_PARQUET
+ERA5_REL = ERA5_PARQUET
+DIAG_REL = REPORT_JSON_REL
+LEDGER_REL = ("labels", "labels_ledger.parquet")
 HEARTBEAT_REL = (TICKS_DIR, "state", "recorder_state.json")
 
 # Everything the scoring probe reads, hashed into the compared identity block
@@ -54,7 +62,7 @@ HEARTBEAT_REL = (TICKS_DIR, "state", "recorder_state.json")
 INPUT_FILES = (
     (CLIMATE_DIR, *SEAS5_REL),
     (CLIMATE_DIR, *ERA5_REL),
-    (CLIMATE_DIR, "labels", "labels_ledger.parquet"),
+    (CLIMATE_DIR, *LEDGER_REL),
     (CLIMATE_DIR, *MODEL_REL),
     (CLIMATE_DIR, *DIAG_REL),
     (TICKS_DIR, CONTRACTS_DB),
@@ -71,7 +79,7 @@ MANIFEST_FILES = (
     (CLIMATE_DIR, *RUNS_JSONL_REL),
     (CLIMATE_DIR, *MODEL_REL),
     (CLIMATE_DIR, *DIAG_REL),
-    (CLIMATE_DIR, "labels", "labels_ledger.parquet"),
+    (CLIMATE_DIR, *LEDGER_REL),
 )
 
 # --------------------------------------------------------------------------- #
@@ -96,11 +104,18 @@ def check_sqlite(path: Path) -> str | None:
     """None when ``PRAGMA quick_check`` answers ``ok``, else the error text.
 
     Opens read-only and closes explicitly (Windows keeps an open handle
-    alive until GC, which would block a later rewrite in tests).
+    alive until GC, which would block a later rewrite in tests). The URI is
+    built with ``Path.as_uri`` so a ``#`` or ``?`` in the path cannot cut it
+    short and drop ``mode=ro`` (SQLite would then create a stray file and
+    report a false ok). A 0-byte file is refused up front: SQLite treats it
+    as an empty, valid database.
     """
+    target = Path(path)
+    if target.is_file() and target.stat().st_size == 0:
+        return "empty file (0 bytes)"
     conn = None
     try:
-        conn = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+        conn = sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True)
         rows = conn.execute("PRAGMA quick_check").fetchall()
     except sqlite3.Error as exc:
         return f"{type(exc).__name__}: {exc}"
@@ -122,9 +137,10 @@ def hourly_files(ticks_root: Path) -> list[Path]:
 def verify_mirror(root: Path) -> list[str]:
     """Every unreadable or missing canonical file under ``root``, as 'relpath: error'.
 
-    Never skips silently: a missing REQUIRED file (newest sweep, labels
-    ledger, model) is a failure; the optional trees (hourly bars, the two
-    SQLite files) are checked only when present. Empty list = readable.
+    Never skips silently: a missing REQUIRED file (the newest sweep, the
+    SEAS5 and ERA5 products, the labels ledger, the model) is a failure; the
+    optional trees (hourly bars, the two SQLite files) are checked only when
+    present. Empty list = readable.
     """
     root = Path(root)
     ticks = root / TICKS_DIR
@@ -164,7 +180,7 @@ def verify_mirror(root: Path) -> list[str]:
     else:
         try:
             EmosModel.from_json(model)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001 -- any loader error IS the finding
             failures.append(f"{_rel(model)}: {type(exc).__name__}: {exc}")
 
     for db in (ticks / CONTRACTS_DB, ticks.joinpath(*PAPER_DB_REL)):
@@ -212,6 +228,10 @@ def snapshot_identity(root: Path) -> dict[str, Any]:
 
     labels_rows = int(len(ledger_df)) if ledger_df is not None else None
     has_labels = bool(labels_rows)
+    paper_runs_lines: int | None = None
+    if runs.exists():
+        with runs.open("rb") as fh:
+            paper_runs_lines = sum(1 for _ in fh)
     return {
         "newest_sweep": _rel(sweeps[-1]) if sweeps else None,
         "newest_sweep_sha256": _sha256(sweeps[-1]) if sweeps else None,
@@ -229,9 +249,7 @@ def snapshot_identity(root: Path) -> dict[str, Any]:
         "model_fingerprint": (
             model_fingerprint(EmosModel.from_json(model_path)) if model_path.exists() else None
         ),
-        "paper_runs_lines": (
-            sum(1 for _ in runs.open("rb")) if runs.exists() else None
-        ),
+        "paper_runs_lines": paper_runs_lines,
         "paper_db_quick_check": (
             (check_sqlite(paper_db) or "ok") if paper_db.exists() else None
         ),
@@ -261,8 +279,10 @@ def code_identity(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
 
     def _git(*args: str) -> str | None:
         try:
+            # --no-optional-locks: `git status` would otherwise refresh and
+            # rewrite .git/index (taking its lock); this probe stays read-only.
             done = subprocess.run(
-                ["git", "-C", str(repo_root), *args],
+                ["git", "--no-optional-locks", "-C", str(repo_root), *args],
                 capture_output=True, text=True, timeout=30, check=False,
             )
         except (OSError, subprocess.SubprocessError):

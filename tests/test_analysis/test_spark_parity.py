@@ -47,6 +47,31 @@ def test_check_sqlite_rejects_a_non_database_file(tmp_path):
     assert sp.check_sqlite(junk)
 
 
+def _tree_listing(root):
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+
+
+def test_check_sqlite_survives_a_hash_in_the_path_and_creates_nothing(tmp_path):
+    # An unescaped '#' ends the SQLite URI path, so the old probe opened (and
+    # created) a stray file named "a" next to the folder and reported a false ok.
+    folder = tmp_path / "a#b"
+    folder.mkdir()
+    db = folder / "paper.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE t(x INTEGER)")
+    conn.commit()
+    conn.close()
+    before = _tree_listing(tmp_path)
+    assert sp.check_sqlite(db) is None
+    assert _tree_listing(tmp_path) == before
+
+
+def test_check_sqlite_rejects_an_empty_file(tmp_path):
+    empty = tmp_path / "empty.db"
+    empty.write_bytes(b"")
+    assert sp.check_sqlite(empty) == "empty file (0 bytes)"
+
+
 # --------------------------------------------------------------------------- #
 # verify_mirror
 # --------------------------------------------------------------------------- #
@@ -70,7 +95,10 @@ def test_verify_mirror_reports_missing_required_files(tmp_path):
     (root / "ibkr_ticks").mkdir(parents=True)
     (root / "climate_data").mkdir()
     failures = sp.verify_mirror(root)
+    assert len(failures) == 5
     assert any("no sweep parquet" in f for f in failures)
+    assert any("seas5_global_mean.parquet: missing" in f for f in failures)
+    assert any("era5_global_mean.parquet: missing" in f for f in failures)
     assert any("labels_ledger.parquet: missing" in f for f in failures)
     assert any("gtm_emos.json: missing" in f for f in failures)
 
