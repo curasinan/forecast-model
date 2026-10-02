@@ -8,6 +8,22 @@ climate/, src/trading/, src/venues/, src/edge/, src/domain/, monitoring/
 and the ordering scripts.
 """
 
+from src.llm.client import (
+    LLMConfigError,
+    LLMError,
+    LLMHTTPError,
+    LLMOutputError,
+    LLMReply,
+    LocalLLMClient,
+)
 from src.llm.settings import LocalLLMSettings
 
-__all__ = ["LocalLLMSettings"]
+__all__ = [
+    "LLMConfigError",
+    "LLMError",
+    "LLMHTTPError",
+    "LLMOutputError",
+    "LLMReply",
+    "LocalLLMClient",
+    "LocalLLMSettings",
+]
