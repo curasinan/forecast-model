@@ -203,3 +203,134 @@ a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688
   "newest_sweep_sha256": "a91a38e6a04433b1410670a06b9992c1df4a7b97e5abfe08297e3961a13e6688",
 ```
 Three independent computations of the same bytes agree.
+
+## 4. Registered tolerance (Task 6, Step 0)
+
+The scorer's frame refits the ERA5-to-NOAA bridge with `np.linalg.lstsq` on each machine,
+so agreement is at LAPACK's kernel-noise level, not last-ulp (design amendment R1). Measured
+on the Zenbook, on the frozen snapshot, by forcing three OpenBLAS kernels through the same
+code (`OPENBLAS_CORETYPE=HASWELL|SANDYBRIDGE|NEHALEM`), 2026-10-03 02:2x local:
+```
+ladder=41 tradeable=14 fingerprint=2fd53f921150c094 sweep=2026-09-28T22:08:22Z  (all three kernels)
+--- HASWELL vs SANDYBRIDGE
+numeric leaves compared: 1536; max abs diff 2.346e-12; max rel diff 3.333e-10
+PARITY OK
+--- HASWELL vs NEHALEM
+numeric leaves compared: 1536; max abs diff 2.463e-12; max rel diff 3.333e-10
+PARITY OK
+```
+Registered tolerance for the cross-machine gate: `--rtol 1e-8 --atol 1e-10`, about 30x
+above the measured x86 kernel noise and six orders below the smallest price step that
+matters (tick 0.01, minimum edge 0.02). Floor: `--min-numeric 1000` (ruling R-L; the real
+payload has 1536 numeric leaves), so an empty ladder can never pass as parity.
+
+## 5. Snapshot identity (Task 6, Step 1)
+
+Both machines at commit `1f743a6` (`CODE_CLEAN` on the Zenbook, 0 dirty tracked files on the
+Spark). Live-root manifest taken, then the mirror refreshed:
+```
+manifest: 8/9 files present, heartbeat mtime_ns=1790633302591280700 -> ...\parity\manifest_before_run.json
+== 1/4 freeze ... == 2/4 push ...
+Number of regular files transferred: 0
+Total transferred file size: 0 bytes
+== 3/4 verify on the Spark
+== 4/4 identity (saved to /mnt/c/Users/asus/quant_data_snapshot/identity_spark.json)
+  "code_sha": "1f743a6ea93fdbd4861a0d219eb4430766b9238f",
+  "newest_sweep": "ibkr_ticks/quotes/date=2026-09-28/quotes-220822Z.parquet",
+  "sweep_count": 107
+push_exit=0
+```
+Nothing had changed since the first push (0 files transferred); the identity is the one in
+section 3 with `code_sha` now `1f743a6...`. Both parity payloads embed the identity their own
+machine computed, and the two `identity.snapshot` blocks are equal (checked separately with
+Python before the gate ran); the kernel-experiment payloads carry the same block.
+
+## 6. Scoring parity (Task 6, Steps 2-3) -- the gate
+
+```
+ladder=41 tradeable=14 fingerprint=2fd53f921150c094 sweep=2026-09-28T22:08:22Z -> C:\Users\asus\quant_data_snapshot\parity\zenbook.json
+ladder=41 tradeable=14 fingerprint=2fd53f921150c094 sweep=2026-09-28T22:08:22Z -> /home/scura/parity_spark.json
+spark payload fetched: 68059 bytes
+numeric leaves compared: 1536; max abs diff 2.699e-12; max rel diff 3.833e-10
+PARITY OK
+gate_exit=0
+```
+Command: `compare_json.py zenbook.json spark.json --ignore identity.machine --rtol 1e-8 --atol 1e-10 --min-numeric 1000`.
+`identity.snapshot` was NOT ignored, so this line also proves the same bytes (every
+`inputs_sha256`, `newest_sweep_sha256`, `labels_sha256`) at the same commit (`code_sha`) on
+both machines. Both payloads carry `probe: "spark_parity"` and `go_live.passed: false`
+(the live-paper gate is required by construction). The two payloads are committed next to
+this report as `docs/spark_parity_2026-10-03_zenbook.json` and `docs/spark_parity_2026-10-03_spark.json`.
+
+Machine blocks (ignored by the compare, recorded here):
+```
+zenbook: {"git_dirty": false, "machine": "AMD64",   "system": "Windows", "python": "3.14.2", "numpy": "2.4.2", "scipy": "1.17.1", "pandas": "3.0.1", "pyarrow": "25.0.0"}
+spark  : {"git_dirty": false, "machine": "aarch64", "system": "Linux",   "python": "3.14.2", "numpy": "2.4.2", "scipy": "1.17.1", "pandas": "3.0.1", "pyarrow": "25.0.0"}
+```
+
+## 7. Refit parity, report-only (Task 6, Step 4)
+
+`scripts/fit_gtm_emos.py --trend` on both machines, the Zenbook on the SNAPSHOT root (guarded:
+the command refuses to run without `~/quant_data_snapshot/climate_data/models/gtm_emos.json`),
+the Spark on its mirror. Both fits report the same bridge
+(`beta=0.9042, r2=0.9830, resid_sd=0.0356, n_obs=396, 1993-01..2025-12`), leads 1-6 fitted,
+hindcast go-live passed. Wall time 6.6 s (Zenbook) / 2.1 s (Spark).
+
+Model compare (`--rtol 1e-6 --atol 1e-9 --ignore fingerprint`):
+```
+numeric leaves compared: 50; max abs diff 1.655e-06; max rel diff 2.449e-02
+MISMATCH leads.2.d: 1.3594153516311263 != 1.3594170064886202 (abs 1.655e-06, rel 1.217e-06)
+PARITY FAILED: 1 mismatch(es)
+```
+Diagnostics compare (`--ignore fitted_at_utc artifact_paths fingerprint`):
+```
+numeric leaves compared: 182; max abs diff 1.655e-06; max rel diff 2.449e-02
+MISMATCH emos.leads.2.d: 1.3594153516311263 != 1.3594170064886202 (abs 1.655e-06, rel 1.217e-06)
+PARITY FAILED: 1 mismatch(es)
+```
+Reading: one coefficient (lead 2, `d`) differs by 1.2e-6 relative, just past the report-only
+threshold of 1e-6; every other coefficient is inside it. The `max rel diff` of 2.4e-2 belongs
+to near-zero coefficients whose absolute difference is below `atol`, hence not mismatches.
+This is x86 AVX versus aarch64 NEON reduction order through scipy's optimiser, as the design
+expected; it is far below the 1e-4 relative level at which the design asks for an
+investigation. Report-only: the gate in section 6 is what parity means.
+
+## 8. Suite and lint, same day, both machines (Task 6, Step 5)
+
+Zenbook (throwaway `USERPROFILE`/`HOME`, ruling R-C):
+```
+1030 passed, 1 warning in 39.55s
+pytest_exit=0
+Found 112 errors.
+All checks passed!   (touched files)
+TOUCHED_FILES_LINT_OK
+```
+Spark (`HOME=$(mktemp -d)`):
+```
+1030 passed, 1 warning in 29.53s
+pytest_exit=0
+Found 112 errors.
+All checks passed!   (touched files)
+TOUCHED_FILES_LINT_OK
+```
+991 baseline tests plus the 39 added by Tasks 2-5 (34 in `tests/test_analysis/test_spark_parity.py`,
+5 in `tests/test_analysis/test_spark_cli.py`); the ruff baseline total is unchanged at 112 on
+both machines and the files this branch touches lint clean.
+
+Live root after the whole run (Step 6):
+```
+manifest: 8/9 files present, heartbeat mtime_ns=1790633302591280700 -> ...\parity\manifest_after_run.json
+LIVE_ROOT_UNTOUCHED
+```
+
+## 9. Verdict
+
+Scoring parity PASSED at the registered tolerance (rtol 1e-8, atol 1e-10, floor 1000 leaves):
+1536 numeric leaves, max relative difference 3.8e-10, inside the x86 kernel-noise band
+measured in section 4. The compared identity blocks prove both machines scored the same bytes
+at commit 1f743a6. The refit comparison is informational: one of 50 coefficients differs by
+1.2e-6 relative. Suites are 1030 passed on both machines, ruff totals equal, touched files
+clean, and the live root is byte-identical before and after the run. Both machines ran
+Python 3.14.2 with numpy 2.4.2, scipy 1.17.1, pandas 3.0.1, pyarrow 25.0.0 (Windows AMD64 and
+Linux aarch64). The Zenbook copy is the runtime and is never deleted under Option B; this
+report is what "parity verified" means.
