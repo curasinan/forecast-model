@@ -228,3 +228,52 @@ def test_operational_manifest_lists_files_and_tracks_changes(spark_root):
     changed = sp.operational_manifest(spark_root.root)
     assert changed["climate_data/models/gtm_emos.json"]["sha256"] != entry["sha256"]
     assert {k for k in manifest if manifest[k] != changed[k]} == {"climate_data/models/gtm_emos.json"}
+
+
+# --------------------------------------------------------------------------- #
+# compare_json
+# --------------------------------------------------------------------------- #
+
+
+def test_compare_identical_documents_ok():
+    doc = {"x": 1.0, "s": "a", "l": [1, 2, {"k": True}], "n": None}
+    res = sp.compare_json(doc, json.loads(json.dumps(doc)))
+    assert res.ok
+    assert res.n_numeric == 3
+    assert res.max_abs == 0.0
+
+
+def test_compare_within_tolerance_records_max_diffs():
+    res = sp.compare_json({"x": 1.0}, {"x": 1.0 + 1e-12})
+    assert res.ok
+    assert 0.9e-12 < res.max_abs < 1.1e-12
+
+
+def test_compare_beyond_tolerance_fails_with_the_path():
+    res = sp.compare_json({"a": {"b": [0.5, 0.25]}}, {"a": {"b": [0.5, 0.2500001]}})
+    assert not res.ok
+    assert res.mismatches[0].startswith("a.b[1]:")
+
+
+def test_compare_nan_equals_nan_but_none_does_not():
+    assert sp.compare_json({"v": float("nan")}, {"v": float("nan")}).ok
+    res = sp.compare_json({"v": None}, {"v": float("nan")})
+    assert not res.ok
+    assert res.mismatches[0].startswith("v:")
+
+
+def test_compare_missing_extra_keys_and_list_lengths():
+    res = sp.compare_json({"a": 1, "b": 2, "l": [1]}, {"a": 1, "c": 3, "l": [1, 2]})
+    assert {m.split(":")[0] for m in res.mismatches} == {"b", "c", "l"}
+
+
+def test_compare_ignore_skips_a_dotted_subtree():
+    left = {"identity": {"snapshot": {"n": 1}, "machine": {"python": "3.14.2"}}}
+    right = {"identity": {"snapshot": {"n": 1}, "machine": {"python": "3.12.3"}}}
+    assert not sp.compare_json(left, right).ok
+    assert sp.compare_json(left, right, ignore=["identity.machine"]).ok
+
+
+def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
+    assert not sp.compare_json({"t": True}, {"t": 1}).ok
+    assert sp.compare_json({"t": 1}, {"t": 1.0}).ok

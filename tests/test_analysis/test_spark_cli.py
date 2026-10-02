@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT / "scripts" / "spark") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "scripts" / "spark"))
 
+import compare_json as compare_cli  # noqa: E402
 import live_manifest as manifest_cli  # noqa: E402
 import verify_mirror as verify_cli  # noqa: E402
 
@@ -41,3 +42,20 @@ def test_verify_mirror_cli_exit_1_lists_failures(spark_root, capsys):
     assert rc == 1
     assert "quotes-220822Z.parquet" in captured.err
     assert captured.out == ""
+
+
+def test_compare_json_cli_exit_codes(tmp_path, capsys):
+    left = tmp_path / "a.json"
+    right = tmp_path / "b.json"
+    left.write_text(json.dumps({"x": 1.0, "identity": {"machine": {"python": "a"}}}),
+                    encoding="utf-8")
+    right.write_text(json.dumps({"x": 1.0, "identity": {"machine": {"python": "b"}}}),
+                     encoding="utf-8")
+    assert compare_cli.main([str(left), str(right)]) == 1
+    assert "MISMATCH identity.machine.python" in capsys.readouterr().out
+    assert compare_cli.main([str(left), str(right), "--ignore", "identity.machine"]) == 0
+    assert "PARITY OK" in capsys.readouterr().out
+    empty = tmp_path / "e.json"
+    empty.write_text("{}", encoding="utf-8")
+    assert compare_cli.main([str(empty), str(empty)]) == 1
+    assert "floor" in capsys.readouterr().out

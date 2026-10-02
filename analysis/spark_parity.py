@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import math
 import os
 import sqlite3
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -318,3 +320,92 @@ def operational_manifest(root: Path) -> dict[str, dict[str, Any] | None]:
         else:
             out["/".join(parts)] = None
     return out
+
+
+# --------------------------------------------------------------------------- #
+# JSON compare
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class CompareResult:
+    mismatches: list[str] = field(default_factory=list)
+    n_numeric: int = 0
+    max_abs: float = 0.0
+    max_rel: float = 0.0
+
+    @property
+    def ok(self) -> bool:
+        return not self.mismatches
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def compare_json(
+    left: Any,
+    right: Any,
+    *,
+    rtol: float = 1e-9,
+    atol: float = 1e-12,
+    ignore: Iterable[str] = (),
+    _path: str = "",
+    _result: CompareResult | None = None,
+) -> CompareResult:
+    """Recursive structural compare of two JSON documents.
+
+    Numbers agree when ``|a-b| <= atol + rtol*max(|a|,|b|)``; NaN equals
+    NaN; None never equals NaN; bools, strings and None are exact; dict key
+    sets and list lengths must match. ``ignore`` holds dotted paths
+    (``identity.machine``) whose subtrees are skipped. Every mismatch is
+    reported with its path; the result also carries the largest numeric
+    differences seen, so a passing run still shows how close it was.
+    """
+    result = _result if _result is not None else CompareResult()
+    ignored = set(ignore)
+    if _path in ignored:
+        return result
+    if isinstance(left, dict) and isinstance(right, dict):
+        for key in sorted(set(left) | set(right), key=str):
+            sub = f"{_path}.{key}" if _path else str(key)
+            if sub in ignored:
+                continue
+            if key not in left:
+                result.mismatches.append(f"{sub}: missing on left")
+            elif key not in right:
+                result.mismatches.append(f"{sub}: missing on right")
+            else:
+                compare_json(left[key], right[key], rtol=rtol, atol=atol,
+                             ignore=ignored, _path=sub, _result=result)
+        return result
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            result.mismatches.append(f"{_path}: length {len(left)} != {len(right)}")
+            return result
+        for i, (a, b) in enumerate(zip(left, right, strict=True)):
+            compare_json(a, b, rtol=rtol, atol=atol, ignore=ignored,
+                         _path=f"{_path}[{i}]", _result=result)
+        return result
+    if _is_number(left) and _is_number(right):
+        result.n_numeric += 1
+        fa, fb = float(left), float(right)
+        if math.isnan(fa) and math.isnan(fb):
+            return result
+        if math.isnan(fa) or math.isnan(fb) or math.isinf(fa) or math.isinf(fb):
+            if fa != fb:
+                result.mismatches.append(f"{_path}: {left!r} != {right!r}")
+            return result
+        diff = abs(fa - fb)
+        scale = max(abs(fa), abs(fb))
+        rel = diff / scale if scale > 0 else 0.0
+        result.max_abs = max(result.max_abs, diff)
+        result.max_rel = max(result.max_rel, rel)
+        if diff > atol + rtol * scale:
+            result.mismatches.append(
+                f"{_path}: {left!r} != {right!r} (abs {diff:.3e}, rel {rel:.3e})"
+            )
+        return result
+    if type(left) is not type(right) or left != right:
+        result.mismatches.append(f"{_path}: {left!r} != {right!r}")
+    return result
