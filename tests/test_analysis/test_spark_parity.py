@@ -219,6 +219,9 @@ def test_inputs_sha256_lists_every_input_present_or_not(spark_root):
     # the key-set check above is derived from the constant, so it would pass even
     # with the ledger dropped from it: pin the entry the scorer cannot do without
     assert (sp.CLIMATE_DIR, *sp.LEDGER_REL) in sp.INPUT_FILES
+    # score_snapshot_from_root reads the diagnostics through this same constant, so
+    # what is hashed into the identity is what the scorer reads: pin it to the owner's path
+    assert sp.DIAG_REL == ("reports", "gtm_emos_diagnostics.json")
     expected = hashlib.sha256(spark_root.model.read_bytes()).hexdigest()
     assert hashes["climate_data/models/gtm_emos.json"] == expected
     assert hashes["ibkr_ticks/contracts_cache.db"] is None
@@ -345,8 +348,18 @@ def test_machine_info_reports_platform_versions_and_dirtiness():
 
 
 def test_score_snapshot_strips_the_clock_marks_the_probe_and_never_writes(
-    spark_root, universe_json, dec_2026_frame, emos_identity_model
+    spark_root, universe_json, dec_2026_frame, emos_identity_model, climate_default_root,
+    monkeypatch,
 ):
+    # delegating spy: the real run_paper still runs, the kwargs it was handed are kept
+    real_run_paper = sp.run_paper
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real_run_paper(*args, **kwargs)
+
+    monkeypatch.setattr(sp, "run_paper", spy)
     payload = sp.score_snapshot(
         dec_2026_frame,
         emos_identity_model,
@@ -364,7 +377,17 @@ def test_score_snapshot_strips_the_clock_marks_the_probe_and_never_writes(
     assert payload["identity"]["snapshot"]["sweep_count"] == 1
     assert payload["identity"]["machine"]["python"] == platform.python_version()
     assert payload["go_live"]["passed"] is False  # live-paper gate required: never a verdict
+    # The line above holds even with the gate broken: an empty summary fails before the
+    # live-paper branch is reached (climate/paper_criteria.py), so pin the gate inputs
+    # the probe hands to run_paper instead.
+    (gate_kwargs,) = calls
+    assert gate_kwargs["paper_days"] == 0
+    assert gate_kwargs["resolved_months"] == 0
+    assert gate_kwargs["require_live_paper"] is True
     assert not (spark_root.root / "climate_data" / "paper").exists()
+    # score_snapshot takes no root: an unrooted write_paper_payload / append_paper_history
+    # would resolve through the default climate root, which conftest points at a tmp dir
+    assert not (climate_default_root / "paper").exists()
     json.dumps(payload, default=str)  # serialisable the way the entrypoint serialises
 
 
@@ -436,3 +459,6 @@ def test_score_snapshot_refuses_a_sweep_the_identity_does_not_name(
     # an identity that names no sweep has nothing to vouch for
     with pytest.raises(RuntimeError, match="newest_sweep"):
         score({**valid, "newest_sweep": None})
+    # and neither does one whose path is not a recorder path (the sweep regex misses)
+    with pytest.raises(RuntimeError, match="newest_sweep"):
+        score({**valid, "newest_sweep": "ibkr_ticks/quotes/not-a-sweep.parquet"})

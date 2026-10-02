@@ -7,7 +7,8 @@ SWEEP_SCHEMA columns), climate_data/labels/labels_ledger.parquet
 one-lead identity EMOS model) and the two reduced CDS products that
 build_training_frame reads. The sweep columns are spelled out here on
 purpose so these tests never import the recorder, which drags in the venue
-layer.
+layer. An autouse fixture (climate_default_root) also redirects the default
+climate data root to an empty tmp dir for every test in this directory.
 """
 
 from __future__ import annotations
@@ -158,3 +159,18 @@ def universe_json(tmp_path: Path) -> Path:
     path = tmp_path / "universe.json"
     path.write_text(json.dumps({"contracts": contracts}), encoding="utf-8")
     return path
+
+
+@pytest.fixture(autouse=True)
+def climate_default_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The default climate data root, redirected to an empty tmp dir for every test here.
+
+    climate.paths.data_root(None) resolves CLIMATE_DATA_ROOT and otherwise the
+    operator's real ~/quant_data/climate_data. score_snapshot takes no root, so an
+    unrooted write_paper_payload / append_paper_history added to it would land there,
+    out of sight of every assertion on the synthetic root. With the variable set,
+    such a write lands here instead, and the "never writes" tests assert on <root>/paper.
+    """
+    root = tmp_path / "default_root"
+    monkeypatch.setenv("CLIMATE_DATA_ROOT", str(root))
+    return root

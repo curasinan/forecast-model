@@ -523,7 +523,7 @@ def score_snapshot_from_root(root: Path, *, universe_json: Path | None) -> dict[
     frame = build_training_frame(climate)
     model = EmosModel.from_json(climate.joinpath(*MODEL_REL))
     summary = None
-    diag_path = climate / "reports" / "gtm_emos_diagnostics.json"
+    diag_path = climate.joinpath(*DIAG_REL)
     if diag_path.exists():
         diag = json.loads(diag_path.read_text(encoding="utf-8"))
         if diag.get("summary"):

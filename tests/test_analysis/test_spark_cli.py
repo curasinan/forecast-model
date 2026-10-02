@@ -65,7 +65,8 @@ def test_compare_json_cli_exit_codes(tmp_path, capsys):
 
 
 def test_parity_score_cli_writes_a_clockless_payload(
-    spark_root, universe_json, dec_2026_frame, tmp_path, monkeypatch
+    spark_root, universe_json, dec_2026_frame, tmp_path, monkeypatch, capsys,
+    climate_default_root,
 ):
     monkeypatch.setattr(sp, "build_training_frame", lambda root: dec_2026_frame)
     out = tmp_path / "parity" / "out.json"
@@ -73,7 +74,11 @@ def test_parity_score_cli_writes_a_clockless_payload(
         "--root", str(spark_root.root), "--out", str(out), "--universe-json", str(universe_json),
     ])
     assert rc == 0
+    assert "sweep=2026-09-28T22:08:22Z" in capsys.readouterr().out  # the summary line
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert "ts_utc" not in payload
     assert payload["identity"]["snapshot"]["sweep_count"] == 1
     assert not (spark_root.root / "climate_data" / "paper").exists()
+    # the CLI is rooted at --root, never at the default climate root (an unrooted write
+    # would land in the tmp dir conftest points CLIMATE_DATA_ROOT at)
+    assert not (climate_default_root / "paper").exists()
