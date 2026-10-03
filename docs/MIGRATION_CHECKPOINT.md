@@ -99,11 +99,13 @@ account holder; no commit in this repo enables it.
       (Telegram if ALERT_METHOD configured, else log-only). Alerts on health
       STATE CHANGES (the recorder/sync status pair changes: outage starts,
       recovers, changes kind), one reminder per 24 h of an unchanged outage,
-      and a retry after a failed send -- not on every unhealthy run
+      and a retry on every run after a failed send until one gets through (a
+      lost recovery message included) -- not on every unhealthy run
       (2026-10-03; state in `logs/ibkr_health_alert_state.json`, every send
-      attempt logged as ALERT_SENT / ALERT_FAILED in `logs/ibkr_health.log`).
-      `--test-alert` sends a labelled test message without touching that
-      state.
+      attempt logged as ALERT_SENT / ALERT_FAILED in `logs/ibkr_health.log`
+      together with its method, `telegram` or `log_only`). `--test-alert`
+      sends a labelled test message without touching that state and says which
+      method carried it (a `log_only` run says nothing went to Telegram).
 - [ ] Headless Gateway auto-login (IBC) deliberately NOT configured -- it
       stores credentials on disk; user decision. Gateway is set to Auto
       restart at **23:45 local** and needs a manual re-login weekly.

@@ -285,6 +285,78 @@ def test_send_alert_telegram_exception_returns_false_instead_of_raising(
     )
 
 
+# --------------------------------------------------------------------------- #
+# delivery_method names the channel send_alert uses: "telegram" or "log_only".
+# The health probe puts it in its durable ALERT_SENT / ALERT_FAILED lines and in
+# the --test-alert output, so a log_only run (which send_alert reports as
+# delivered: its line was written) can never be mistaken for a Telegram
+# delivery. send_alert branches on the same function, so the two cannot differ.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("alert_method", "expected"),
+    [
+        (None, "log_only"),
+        ("", "log_only"),
+        ("log_only", "log_only"),
+        ("telegram", "telegram"),
+        ("TELEGRAM", "telegram"),
+        ("Telegram", "telegram"),
+        ("sms", "log_only"),  # anything but telegram takes the log_only path
+    ],
+    ids=["unset", "empty", "log_only", "telegram", "TELEGRAM", "Telegram", "unknown"],
+)
+def test_delivery_method_follows_alert_method_and_falls_back_to_log_only(
+    monkeypatch, alert_method, expected
+):
+    if alert_method is None:
+        monkeypatch.delenv("ALERT_METHOD", raising=False)
+    else:
+        monkeypatch.setenv("ALERT_METHOD", alert_method)
+
+    assert heartbeat_mod.delivery_method() == expected
+
+
+@pytest.mark.parametrize(
+    ("explicit", "env", "expected"),
+    [
+        ("telegram", "log_only", "telegram"),
+        ("log_only", "telegram", "log_only"),
+        ("sms", "telegram", "log_only"),
+        (None, "telegram", "telegram"),
+    ],
+    ids=["explicit-telegram", "explicit-log_only", "explicit-unknown", "no-explicit"],
+)
+def test_an_explicit_method_overrides_the_environment(monkeypatch, explicit, env, expected):
+    monkeypatch.setenv("ALERT_METHOD", env)
+
+    assert heartbeat_mod.delivery_method(explicit) == expected
+
+
+@pytest.mark.parametrize("method", ["telegram", "log_only", "sms", None])
+def test_send_alert_uses_the_channel_delivery_method_names(monkeypatch, caplog, method):
+    _telegram_env(monkeypatch)  # credentials present, so only the method decides
+    monkeypatch.delenv("ALERT_METHOD", raising=False)
+    posts: list[str] = []
+
+    def _post(url, **kwargs):
+        posts.append(url)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(heartbeat_mod.requests, "post", _post)
+
+    with caplog.at_level(logging.CRITICAL, logger="monitoring.heartbeat"):
+        outcome = send_alert("probe says DOWN", method=method)
+
+    assert outcome is True
+    went_to_telegram = bool(posts)
+    assert went_to_telegram == (heartbeat_mod.delivery_method(method) == "telegram")
+    # The log_only path writes its CRITICAL line; the Telegram path does not.
+    wrote_the_log_line = any("probe says DOWN" in r.getMessage() for r in caplog.records)
+    assert wrote_the_log_line == (not went_to_telegram)
+
+
 def test_retired_main_points_to_probe_and_exits_0(capsys):
     """python -m monitoring.heartbeat must not silently claim success -- it
     prints a pointer to the live probe and exits 0 (retired, not broken)."""

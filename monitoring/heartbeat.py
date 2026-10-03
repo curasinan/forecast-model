@@ -15,9 +15,11 @@ What remains, and why:
   ``ALERT_METHOD`` / ``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID`` env vars,
   else a ``log_only`` CRITICAL log line; Telegram failures degrade to
   ``log_only`` rather than losing the alert). It returns whether the alert
-  was delivered, so the probe can retry one that was not. This is imported
-  directly by ``scripts/check_ibkr_recorder.py`` -- the current IBKR
-  recorder/paper-sync health probe -- and must keep this import path
+  was delivered, so the probe can retry one that was not; ``delivery_method``
+  names the channel it uses (``telegram`` or ``log_only``), so the probe can
+  say which one an outcome belongs to. ``send_alert`` is imported directly by
+  ``scripts/check_ibkr_recorder.py`` -- the current IBKR recorder/paper-sync
+  health probe -- and must keep this import path
   (``from monitoring.heartbeat import send_alert``) stable.
 - ``setup_logging`` -- generic file+console logging setup for this logger.
   Nothing in this module's own retired CLI calls it any more (the pointer
@@ -94,10 +96,30 @@ def _scrub(text: str, secret: str) -> str:
     return text
 
 
+METHOD_TELEGRAM = "telegram"
+METHOD_LOG_ONLY = "log_only"
+
+
+def delivery_method(method: str | None = None) -> str:
+    """The channel :func:`send_alert` uses for ``method``: ``"telegram"`` or
+    ``"log_only"``.
+
+    ``method`` defaults to the ALERT_METHOD env var, then ``log_only``; the
+    match is case-insensitive and anything that is not "telegram" takes the
+    log_only path. This is the one place that resolves the method:
+    :func:`send_alert` branches on it, and the health probe names it in its
+    durable ALERT_SENT / ALERT_FAILED lines and in the ``--test-alert`` output.
+    ``send_alert`` reports a log_only run as delivered (its line was written),
+    so without the method a log_only run could pass for a Telegram delivery.
+    """
+    name = (method or os.environ.get("ALERT_METHOD") or METHOD_LOG_ONLY).lower()
+    return METHOD_TELEGRAM if name == METHOD_TELEGRAM else METHOD_LOG_ONLY
+
+
 def send_alert(message: str, method: str | None = None) -> bool:
     """Dispatch an alert. ``method`` defaults to the ALERT_METHOD env var, then
-    ``log_only``. Telegram failures fall back to a CRITICAL log line so an
-    alert is never silently lost.
+    ``log_only`` (see :func:`delivery_method`). Telegram failures fall back to
+    a CRITICAL log line so an alert is never silently lost.
 
     Returns the outcome: ``True`` when the alert was delivered (Telegram
     answered HTTP 200, or the ``log_only`` method wrote its line), ``False``
@@ -118,9 +140,7 @@ def send_alert(message: str, method: str | None = None) -> bool:
     just ``RequestException``): one escaping would reach the probe's own
     ``print(... exc ...)`` fallback on the same stderr channel.
     """
-    method = (method or os.environ.get("ALERT_METHOD") or "log_only").lower()
-
-    if method == "telegram":
+    if delivery_method(method) == METHOD_TELEGRAM:
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
         chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
         if not token or not chat_id:

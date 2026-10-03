@@ -248,8 +248,10 @@ Three layers, cheapest first:
    hourly run stays quiet about it. Run it from a shell that has the three
    alert variables (section 10.3; HKCU variables reach only shells opened
    after they were set): without them the alert degrades to `log_only`, which
-   counts as delivered, and the Telegram message that run would have sent is
-   never sent. To test the alert channel use `--test-alert` instead.
+   counts as delivered (its line was written), and the Telegram message that
+   run would have sent is never sent -- the `ALERT_SENT ... log_only` line it
+   leaves in `logs\ibkr_health.log` is how you can tell. To test the alert
+   channel use `--test-alert` instead.
 
 One-liners (from the repo root):
 
@@ -300,26 +302,32 @@ token or chat id). Each message starts with a short prefix:
 | Prefix | Meaning |
 | --- | --- |
 | `[OK -> DOWN]`, `[DOWN+SYNC_STALE -> SYNC_STALE]` | the pair changed: an outage began or changed kind |
-| `[DOWN -> OK] recovered after 4d 12h:` | the pair is all-OK again (the recovery message) |
+| `[DOWN -> OK] recovered after 4d 12h:` | the pair is all-OK again (the recovery message; the duration is the outage length, and a retry of a lost one says exactly the same) |
 | `[still DOWN, 2d 3h]` | unchanged and still unhealthy, sent either as the daily reminder (24 h after the last DELIVERED message) or as the retry after a send that failed; the duration runs from the start of the outage |
 
-An unchanged healthy run sends nothing. A failed send is retried on every
-hourly run until one gets through (the network is often down exactly during an
-outage); a failed *recovery* message is not retried, because the state is
-healthy by then -- if you never saw one, look for `ALERT_FAILED` in the log
-below. A missing or corrupt state file reads as "healthy, nothing alerted yet",
-so deleting it (or the first run after this change) re-announces an ongoing
+An unchanged healthy run sends nothing -- except after a lost message. A
+failed send is retried on every hourly run until one gets through, whatever
+state the probe is in by then (the network is often down exactly during an
+outage, and still coming back when it ends): a lost *recovery* message is sent
+again with the same `[DOWN -> OK] recovered after ...` text (if the system
+fails again before it gets through, the new `[OK -> ...]` alert replaces it).
+A channel that stays broken therefore leaves one `ALERT_FAILED` line per run
+in the log below.
+A missing or corrupt state file reads as "healthy, nothing alerted yet", so
+deleting it (or the first run after this change) re-announces an ongoing
 outage once as `[OK -> ...]`; it never swallows an alert.
 
 `logs\ibkr_health.log` keeps one status line per unhealthy run
 (`<utc> <STATUS> <message>`) and now also one line per send attempt:
-`<utc> ALERT_SENT <kind> <STATUS>` or
-`<utc> ALERT_FAILED <kind> <STATUS> <reason>`, with kind `transition`,
-`reminder`, `retry` or `test`, and reason a fixed phrase or an exception class
-name (never exception text, which can quote the bot token). A recovery appends
-only its ALERT line. So a successful send is no longer invisible, and
-`Select-String ALERT_ logs\ibkr_health.log` shows every message the probe
-tried to send.
+`<utc> ALERT_SENT <kind> <STATUS> <method>` or
+`<utc> ALERT_FAILED <kind> <STATUS> <method> <reason>`, with kind `transition`,
+`reminder`, `retry` or `test`, method `telegram` or `log_only`, and reason a
+fixed phrase or an exception class name (never exception text, which can quote
+the bot token). A recovery appends only its ALERT line. A `log_only` line means
+the text went to the log (stderr), not to Telegram: the probe counts such a
+run as delivered, but nothing reached the phone. So a successful send is no
+longer invisible, and `Select-String ALERT_ logs\ibkr_health.log` shows every
+message the probe tried to send and which way it went.
 
 Triage in this order; each layer depends on the one above it, so fix the
 first broken layer and re-check before touching the next:
@@ -474,7 +482,7 @@ prices off this one number.
   (`src/venues/ibkr/recorder.py:193-196`, `SNAPSHOT_REFRESH_CMD` defined at
   `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
   age, informationally, as `snapshot_age_days=` on its OK message
-  (`scripts/check_ibkr_recorder.py:246-259,340-348`) -- it is never a
+  (`scripts/check_ibkr_recorder.py:257-270,351-359`) -- it is never a
   failure axis, so nothing pages for this; the operator has to notice it.
 - Evidence: as cited above (code review).
 - Date verified: 2026-08-27.
@@ -515,19 +523,21 @@ python scripts/check_ibkr_recorder.py --test-alert
 This sends one clearly labelled message (`TEST ibkr health alert, sent <utc>
 -- no action needed`) through the same `send_alert` path a real alert takes
 (`_run_test_alert` in `scripts/check_ibkr_recorder.py`, which calls
-`send_alert` in `monitoring/heartbeat.py`), appends `ALERT_SENT test -` (or
-`ALERT_FAILED test - <reason>`) to `logs\ibkr_health.log`, prints `test alert
-delivered` or `test alert NOT delivered (<reason>)`, and exits 0 or 1. It runs
-no health check and never reads or writes `logs\ibkr_health_alert_state.json`,
-so it is safe at any time, mid-outage included: no phantom transition, no
-reset reminder clock. When the three vars are set, expect **both**: a new
-`ALERT_SENT test -` line in `logs\ibkr_health.log`, and a Telegram message.
-If `ALERT_METHOD` is unset (a fresh machine, or these vars cleared),
-`send_alert` degrades to `log_only`: the test still exits 0 and logs
-`ALERT_SENT` (that method's "delivery" is its log line, which appears on
-stderr), but nothing reaches the phone. That is expected in that state, and
-it is NOT proof the Telegram path works; set the three HKCU vars below first,
-then re-run and expect the message.
+`send_alert` in `monitoring/heartbeat.py`), appends `ALERT_SENT test - telegram`
+(or `ALERT_FAILED test - telegram <reason>`) to `logs\ibkr_health.log`, prints
+`test alert delivered via telegram` or `test alert NOT delivered via telegram
+(<reason>)`, and exits 0 or 1. It runs no health check and never reads or
+writes `logs\ibkr_health_alert_state.json`, so it is safe at any time,
+mid-outage included: no phantom transition, no reset reminder clock. When the
+three vars are set, expect **both**: a new `ALERT_SENT test - telegram` line in
+`logs\ibkr_health.log`, and a Telegram message. If `ALERT_METHOD` is unset (a
+fresh machine, or these vars cleared), `send_alert` degrades to `log_only` and
+the test says so: it prints `test alert delivered via log_only -- nothing was
+sent to Telegram (ALERT_METHOD is not telegram)`, logs `ALERT_SENT test -
+log_only` and still exits 0 (the configured path worked: its "delivery" is the
+log line, which appears on stderr), but nothing reaches the phone. That is
+expected in that state, and it is NOT a Telegram test; set the three HKCU vars
+below first, then re-run and expect the message and `via telegram`.
 
 Do not use the old recipe (`--state-path C:\nonexistent.json`) as an alert
 test any more: it is a real unhealthy run, so it drives the alert state -- a
