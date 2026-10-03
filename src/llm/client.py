@@ -40,7 +40,7 @@ class LLMOutputError(LLMError):
 
 
 class LLMConfigError(LLMError):
-    """LLM_MODEL does not match what the server serves."""
+    """LLM_MODEL does not match what the server serves, or LLM_BASE_URL is not a usable URL."""
 
 
 _MISSING = object()  # an absent key, as opposed to one present with a JSON null
@@ -84,16 +84,22 @@ class LocalLLMClient:
         self, settings: LocalLLMSettings, transport: httpx.BaseTransport | None = None
     ) -> None:
         self.settings = settings
-        self._http = httpx.Client(
-            base_url=settings.base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {settings.api_key.get_secret_value()}"},
-            timeout=httpx.Timeout(settings.read_timeout_s, connect=settings.connect_timeout_s),
-            transport=transport,
-            # Never read the proxy environment (HTTP_PROXY, ALL_PROXY, ...): this client talks
-            # only to settings.base_url, usually a loopback tunnel, and a proxy would receive
-            # the prompts and the bearer. (Also ignores SSL_CERT_FILE / SSL_CERT_DIR.)
-            trust_env=False,
-        )
+        timeout = httpx.Timeout(settings.read_timeout_s, connect=settings.connect_timeout_s)
+        try:
+            self._http = httpx.Client(
+                base_url=settings.base_url.rstrip("/"),
+                headers={"Authorization": f"Bearer {settings.api_key.get_secret_value()}"},
+                timeout=timeout,
+                transport=transport,
+                # Never read the proxy environment (HTTP_PROXY, ALL_PROXY, ...): this client
+                # talks only to settings.base_url, usually a loopback tunnel, and a proxy would
+                # receive the prompts and the bearer. (Also ignores SSL_CERT_FILE / DIR.)
+                trust_env=False,
+            )
+        except httpx.InvalidURL as exc:
+            # Raised while httpx parses base_url. It words the problem ("Invalid port: 'abc'")
+            # without the URL, which may hold credentials; the api key is never part of it.
+            raise LLMConfigError(f"LLM_BASE_URL cannot be used: {exc}") from exc
 
     # -- lifecycle --------------------------------------------------------- #
 
@@ -188,7 +194,18 @@ class LocalLLMClient:
             raise _bad_shape(
                 "POST", "/chat/completions", "'content' to be a string or null", content
             )
-        reasoning = message.get("reasoning_content")
+        # The reasoning text is ``reasoning_content`` in older vLLM builds and on OpenAI-style
+        # servers but ``reasoning`` on newer ones, the Spark's among them (captured 2026-10-03).
+        # reasoning_content wins when it is not null, else reasoning; the one chosen must be
+        # a string or null, and is never dropped silently.
+        reasoning_key = (
+            "reasoning_content" if message.get("reasoning_content") is not None else "reasoning"
+        )
+        reasoning = message.get(reasoning_key)
+        if reasoning is not None and not isinstance(reasoning, str):
+            raise _bad_shape(
+                "POST", "/chat/completions", f"'{reasoning_key}' to be a string or null", reasoning
+            )
         usage_raw = data.get("usage")
         if usage_raw is None:
             usage_raw = {}
@@ -212,7 +229,7 @@ class LocalLLMClient:
                 raise LLMOutputError(f"content is not valid JSON: {exc}", raw=content) from exc
         return LLMReply(
             content=content,
-            reasoning=reasoning if isinstance(reasoning, str) else None,
+            reasoning=reasoning,
             parsed=parsed,
             usage=usage,
             latency_s=latency,

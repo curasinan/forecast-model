@@ -189,13 +189,33 @@ MALFORMED_COMPLETIONS = [
         )
         for usage in ([1, 2], [], "abc", 5, 0)
     ),
+    # The reasoning text lives under ``reasoning`` (the Spark) or ``reasoning_content``
+    # (OpenAI-style servers); whichever is chosen must be a string or null, never dropped
+    # silently as None.
+    *(
+        _case(
+            f"{key}-{json.dumps(value)}",
+            _raw_completion({"content": "x", key: value}),
+            None,
+            f"'{key}'",
+        )
+        for key in ("reasoning", "reasoning_content")
+        for value in (5, ["part"], {"text": "x"}, True)
+    ),
+    _case(
+        "null-reasoning-content-then-int-reasoning",
+        _raw_completion({"content": "x", "reasoning_content": None, "reasoning": 5}),
+        None,
+        "'reasoning'",
+    ),
 ]
 
 
 @pytest.mark.parametrize("payload, schema, fragment", MALFORMED_COMPLETIONS)
 def test_malformed_completion_is_an_llm_error(payload, schema, fragment):
     """Kills: a wrong-shaped completion escaping as TypeError/AttributeError, a list or int
-    ``content`` slipping into LLMReply.content (with or without a schema), a non-object usage."""
+    ``content`` slipping into LLMReply.content (with or without a schema), a non-object usage,
+    a non-string reasoning silently becoming None."""
     client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.chat(MESSAGES, json_schema=schema)

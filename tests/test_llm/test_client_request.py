@@ -13,7 +13,7 @@ import json
 import httpx
 import pytest
 
-from src.llm.client import LocalLLMClient
+from src.llm.client import LLMConfigError, LocalLLMClient
 from tests.test_llm.test_client import _client, _completion, _settings
 
 MESSAGES = [
@@ -156,3 +156,30 @@ def test_client_without_a_transport_ignores_the_proxy_environment(monkeypatch):
         assert client._http.follow_redirects is False  # a redirect must never carry the bearer
     finally:
         client.close()
+
+
+@pytest.mark.parametrize(
+    "base_url, secret",
+    [
+        ("http://localhost:abc/v1", "k-123"),
+        ("http://user:pa55word@localhost:abc/v1", "pa55word"),
+    ],
+    ids=["bad-port", "bad-port-with-credentials-in-the-url"],
+)
+def test_unparseable_base_url_is_a_config_error_not_an_httpx_exception(base_url, secret):
+    """Kills: httpx.InvalidURL escaping the constructor, which every caller that catches only
+    LLMError (the smoke check, the pipeline) would let through as a traceback.
+
+    No transport: this is the construction path production uses, and the one that parses the
+    URL. The message names the problem httpx found (here ``Invalid port: 'abc'``) and never
+    the base URL, which may hold credentials, nor the api key.
+    """
+    settings = _settings(base_url=base_url, api_key="k-123")
+    with pytest.raises(LLMConfigError) as info:
+        LocalLLMClient(settings)
+    text = str(info.value)
+    assert "LLM_BASE_URL" in text
+    assert isinstance(info.value.__cause__, httpx.InvalidURL)
+    assert str(info.value.__cause__) in text  # the problem, as httpx words it
+    assert secret not in text
+    assert "k-123" not in text

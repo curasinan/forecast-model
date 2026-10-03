@@ -110,7 +110,9 @@ def test_smoke_exits_1_naming_the_type_when_the_reply_is_not_a_json_object(
 
 def test_smoke_exits_1_naming_the_served_ids_when_the_model_is_not_served(capsys):
     """Kills: a prompt sent to a server that does not serve LLM_MODEL, a FAIL that hides the ids."""
-    served = ["other-model", "another-model"]
+    # Neither id may be a substring of the other ("other-model" is one of "another-model"),
+    # or the per-id `in` check below cannot tell a message listing both from one listing one.
+    served = ["alpha-model", "beta-model"]
     transport, seen = _server(served, COMPLETE)  # it could answer a chat, and must not be asked
 
     rc = main(transport=transport)
