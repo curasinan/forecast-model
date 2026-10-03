@@ -24,8 +24,18 @@ half of this repo and the local vLLM model. It is NOT a trading machine:
 The Spark holds no client id, and two independent guards keep it from
 trading even by accident:
 
-- The Gateway's API is bound to localhost on the Zenbook, so there is nothing
-  on the LAN to connect to.
+- The Gateway's API cannot be reached from the LAN. The guard is NOT the bind
+  address: the Gateway listens on every interface (`[::]:4002`, checked
+  2026-10-03 with `Get-NetTCPConnection -State Listen -LocalPort 4002`). What
+  closes it is Windows Firewall (two inbound Block rules named `IB Gateway` on
+  the Public profile, which the Wi-Fi is in, and no Allow rule) plus the
+  Gateway's own trusted list (`TrustedIPs=127.0.0.1` in its `jts.ini`).
+  Verified from the Spark the same day: a TCP connect to the Zenbook's 4002
+  gets no answer. Re-check after a Gateway reinstall, a Windows "allow access"
+  prompt, or a change of network profile (Public to Private); from Git Bash on
+  the Zenbook, `rc=124` (timeout) is the passing result:
+
+      "$SSH" spark 'timeout 6 bash -c "exec 3<>/dev/tcp/${SSH_CLIENT%% *}/4002"; echo "rc=$?"'
 - The Spark's `.env` and shell carry no `IBKR_PORT` / `IBKR_TRADING_MODE`, so
   the entrypoints that build `IBKRSettings` (`record_ibkr_ticks.py`,
   `run_ibkr_paper.py`, `sync_ibkr_paper.py`, and `backfill_ibkr_hourly.py`

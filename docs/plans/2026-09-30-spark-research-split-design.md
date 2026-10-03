@@ -467,9 +467,16 @@ noise on a copy of the real snapshot. What that changed in this design:
   `probe_ibkr_history.py` build no settings: they dial `127.0.0.1` directly
   (the first by default) and simply fail to connect on the Spark. The
   mechanism is therefore two facts, the Spark has no `IBKR_*` environment and
-  the Gateway API is bound to the Zenbook's localhost, plus the never-run
+  the Gateway API cannot be reached from the LAN, plus the never-run
   list in the runbook (`docs/spark_runbook.md`, section 1), which is the
-  guard for everything else. Section 2 is left as written.
+  guard for everything else. Section 2 is left as written. Its "bound to
+  localhost" is also wrong in mechanism: checked on 2026-10-03 with the
+  Gateway running, the API socket listens on every interface (`[::]:4002`);
+  the LAN is closed by Windows Firewall (inbound Block rules for IB Gateway on
+  the Public profile, no Allow rule) and by the Gateway's `TrustedIPs=127.0.0.1`,
+  and a TCP connect from the Spark to the Zenbook's 4002 times out. The
+  runbook carries the re-check command, because a network-profile change or a
+  Windows "allow access" prompt can change this without any change in the repo.
 - **R16. Delivery, install, `LLMReply`, guard scope and the gate, corrected
   after the final review (2026-10-03).** Section 3 and assumption A1 are left
   as written; where they disagree with this entry, this entry rules.
