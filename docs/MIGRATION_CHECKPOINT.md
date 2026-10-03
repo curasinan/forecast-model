@@ -335,8 +335,10 @@ python scripts/fetch_climate_forecasts.py --pilot | --hindcast 2000-2025
 # GTM EMOS fit + diagnostics. --live refits the operational model under
 # ~/quant_data/climate_data (override with CLIMATE_DATA_ROOT -- never
 # %LOCALAPPDATA%, see section 3); --root <path> fits another root; with
-# neither the fit names the files it would have overwritten and exits 2
-python scripts/fit_gtm_emos.py --live [--trend]
+# neither the fit names the files it would have overwritten and exits 2.
+# The operational model is the trend variant: keep --trend on a live refit
+# (without it the no-trend fit would replace models/gtm_emos.json).
+python scripts/fit_gtm_emos.py --trend --live
 # GTM paper signals vs latest IBKR recorder sweep (no orders)
 python scripts/run_gtm_paper.py
 # Tests / lint
