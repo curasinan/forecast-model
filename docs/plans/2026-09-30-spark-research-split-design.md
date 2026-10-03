@@ -470,3 +470,41 @@ noise on a copy of the real snapshot. What that changed in this design:
   the Gateway API is bound to the Zenbook's localhost, plus the never-run
   list in the runbook (`docs/spark_runbook.md`, section 1), which is the
   guard for everything else. Section 2 is left as written.
+- **R16. Delivery, install, `LLMReply`, guard scope and the gate, corrected
+  after the final review (2026-10-03).** Section 3 and assumption A1 are left
+  as written; where they disagree with this entry, this entry rules.
+  (a) Code reaches the Spark by push, never by pull (ruling R-A). A1 (the
+  Spark's GitHub credential may clone `forecast-model`) was found false on
+  2026-10-02: its key works only in the operator's interactive session and
+  there is no credential helper. `~/work/forecast-model` is a non-bare
+  checkout with `receive.denyCurrentBranch=updateInstead`, and
+  `git push spark <branch>` from the Zenbook (remote
+  `spark:work/forecast-model`, over the same Windows `ssh.exe` and
+  `Host spark` entry as every other command) updates the checked-out branch
+  in place. Section 3's clone from `origin`, its GitHub credential and every
+  pull on the Spark are superseded.
+  (b) The install is `uv pip install -e ".[dev,ibkr,climate,mcp,web,trading]"
+  -c constraints/zenbook-2026-10-03.txt`. Section 3 said the Zenbook has no
+  `py-clob-client`; it has 0.34.6, so the `trading` extra is installed on the
+  Spark too (ruling R-H: without it one test was skipped and the two
+  machines' counts differed). The constraints file carries the date the
+  parity report was created, not 2026-09-30 (ruling R-E).
+  (c) `LLMReply` gains an additive last field, `finish_reason` (ruling R-Y),
+  read from `choices[0].finish_reason`: a string, or None when absent or
+  null; anything else is a bad shape. When schema content is not valid JSON
+  the `LLMOutputError` names the ending unless it is `stop`, so a reply cut
+  off at `length` is told apart from invalid JSON. Section 6's field list is
+  otherwise unchanged.
+  (d) R13's guarded set gains `scripts/fit_gtm_emos.py`, which writes the
+  operational model, and `scripts/collect_climate_labels.py`, which writes the
+  training labels (ruling R-Z): thin CLIs over `climate/` but outside it, so an
+  `src.llm` import there would feed the model or its labels unseen. Both join
+  `GUARDED_FILES` and the literal `REQUIRED_SCOPE`.
+  (e) `compare_json.py` gains `--differ PATH` (repeatable), and the gate uses
+  it. `--ignore identity.machine` keeps the machine blocks out of the numbers
+  because the two machines differ there by design, but alone it let a payload
+  pass against a copy of itself; `--differ identity.machine` fails unless both
+  payloads hold the block and the blocks are not identical. The CLI also
+  prints a `machines:` line and warns on `git_dirty=true`. The 2026-10-03
+  report's own gate command predates the flag and stays as evidence; its two
+  machine blocks differ (report, section 6).

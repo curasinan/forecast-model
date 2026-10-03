@@ -289,8 +289,9 @@ before the next scoring parity run.
   `LLM_MODEL` is what the server serves and that a schema-constrained
   extraction round-trips; it exits 0 only then, and prints latency, tokens/s
   and the reasoning-token count. The live test is skipped unless
-  `LLM_LIVE=1`, and it reads `LLM_MODEL` only from `.env` (the test
-  conftest clears every other `LLM_*` variable from its environment):
+  `LLM_LIVE=1`. The test conftest clears every `LLM_*` variable except
+  `LLM_LIVE` from its environment (`LLM_MODEL` included), so the live test
+  reads `LLM_MODEL` only from `.env`:
 
       "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/llm_smoke.py'
       "$SSH" spark 'cd ~/work/forecast-model && LLM_LIVE=1 .venv/bin/python -m pytest tests/test_llm/test_live.py -q'
@@ -311,12 +312,13 @@ before the next scoring parity run.
 
 ## 6. When the network changes
 
-The Spark's LAN address (192.168.1.31) is a DHCP reservation on its Wi-Fi
-MAC; switching to Ethernet needs a second reservation. The move to the US
-changes the address entirely: mDNS (`spark-8f47.local`) or Tailscale keep
-`ssh spark` working. Everything on this page reaches the Spark through the
-`Host spark` entry of the Zenbook's `~/.ssh/config` (`ssh`, `git push spark`,
-the data push, the tunnel), so a new address is an edit to that one entry.
+The Spark's LAN address is a DHCP reservation on its Wi-Fi MAC; switching to
+Ethernet needs a second reservation. The move to the US changes the address
+entirely: mDNS (the Spark's `.local` name) or Tailscale keep `ssh spark`
+working. The `Host spark` entry of the Zenbook's `~/.ssh/config` is the single
+source of truth for where the Spark is, and everything on this page reaches
+it through that entry (`ssh`, `git push spark`, the data push, the tunnel),
+so a new address is an edit to that one entry.
 The Gateway's API port is never opened to the LAN: a Spark-side `research`
 role, if it ever comes, goes over Tailscale first (operator decision
 2026-10-02).
