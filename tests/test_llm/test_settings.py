@@ -19,7 +19,7 @@ def test_env_prefix_and_defaults(monkeypatch):
     settings = LocalLLMSettings(_env_file=None)
     assert settings.model == "qwen-test"
     assert settings.base_url == "http://127.0.0.1:8000/v1"
-    assert settings.api_key == "EMPTY"
+    assert settings.api_key.get_secret_value() == "EMPTY"
     assert settings.max_tokens == 8192
     assert settings.reasoning_effort == "low"
     assert settings.temperature is None

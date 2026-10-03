@@ -68,7 +68,7 @@ class LocalLLMClient:
         self.settings = settings
         self._http = httpx.Client(
             base_url=settings.base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {settings.api_key}"},
+            headers={"Authorization": f"Bearer {settings.api_key.get_secret_value()}"},
             timeout=httpx.Timeout(settings.read_timeout_s, connect=settings.connect_timeout_s),
             transport=transport,
             # Never read the proxy environment (HTTP_PROXY, ALL_PROXY, ...): this client talks
