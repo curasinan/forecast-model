@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from mcp_server.tools import markets, quotes, status
+from src.config import settings
 from weather.storage import init_weather_db
 
 
@@ -109,12 +110,16 @@ def poly_db(tmp_path: Path) -> Path:
 def weather_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "wxroot"
     root.mkdir()
-    monkeypatch.setenv("WEATHER_DATA_ROOT", str(root))
+    # resolve_weather_data_root() reads the ``settings`` singleton, built once
+    # at import -- a WEATHER_DATA_ROOT set in the environment now never
+    # reaches it, and the default would be the REAL ~/quant_data/polymarket_weather.
+    # Patch the attribute, so init_weather_db() and the default-path resource
+    # handlers below all land in this tmp root.
+    monkeypatch.setattr(settings, "weather_data_root", str(root))
     return init_weather_db()
 
 
-def test_status_counts(poly_db: Path, weather_db: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("WEATHER_DATA_ROOT", str(weather_db.parent))
+def test_status_counts(poly_db: Path, weather_db: Path):
     out = status.status(
         ping_network=False,
         polymarket_db=str(poly_db),
@@ -126,8 +131,7 @@ def test_status_counts(poly_db: Path, weather_db: Path, monkeypatch: pytest.Monk
     assert out["data"]["weather"]["exists"] is True
 
 
-def test_wx_discover_and_list(poly_db: Path, weather_db: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("WEATHER_DATA_ROOT", str(weather_db.parent))
+def test_wx_discover_and_list(poly_db: Path, weather_db: Path):
     disc = markets.wx_discover_markets(
         skip_gamma=True,
         min_end_date="2026-07-01",
@@ -189,8 +193,7 @@ def test_server_registers_tools():
     assert expected.issubset(names)
 
 
-def test_resources_json(poly_db: Path, weather_db: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("WEATHER_DATA_ROOT", str(weather_db.parent))
+def test_resources_json(poly_db: Path, weather_db: Path):
     from mcp_server.server import resource_weather_status
 
     # Patch default DB paths by calling status helpers directly already covered;
