@@ -12,7 +12,7 @@ import json
 import httpx
 import pytest
 
-from src.llm.client import LLMError, LLMHTTPError, LLMOutputError
+from src.llm.client import LLMConfigError, LLMError, LLMHTTPError, LLMOutputError
 from tests.test_llm.test_client import _client, _completion
 
 KEY = "sk-live-9f3a"  # distinctive on purpose: no error message may ever contain it
@@ -108,21 +108,25 @@ def test_null_content_with_a_schema_is_an_output_error():
 
 
 @pytest.mark.parametrize(
-    "data",
+    "payload",
     [
-        None,
-        "abc",
-        5,
-        {"id": "x"},
-        ["str"],
-        [1],
-        [None],
-        [{}],
-        [{"id": None}],
-        [{"id": 5}],
-        [{"id": "ok"}, "the-second-entry-is-not-an-object"],
+        {},
+        {"object": "list"},
+        {"data": None},
+        {"data": "abc"},
+        {"data": 5},
+        {"data": {"id": "x"}},
+        {"data": ["str"]},
+        {"data": [1]},
+        {"data": [None]},
+        {"data": [{}]},
+        {"data": [{"id": None}]},
+        {"data": [{"id": 5}]},
+        {"data": [{"id": "ok"}, "the-second-entry-is-not-an-object"]},
     ],
     ids=[
+        "payload-empty",
+        "payload-without-data",
         "data-null",
         "data-str",
         "data-int",
@@ -136,12 +140,24 @@ def test_null_content_with_a_schema_is_an_output_error():
         "second-entry-str",
     ],
 )
-def test_malformed_models_listing_is_an_llm_error(data):
-    """Kills: a wrong-shaped listing escaping as TypeError/AttributeError, or an entry
-    without a string id being skipped or stringified instead of reported."""
-    client = _client(lambda request: httpx.Response(200, json={"data": data}), api_key=KEY)
+def test_malformed_models_listing_is_an_llm_error(payload):
+    """Kills: a wrong-shaped listing escaping as TypeError/AttributeError, an entry without a
+    string id being skipped or stringified, a payload without 'data' reading as an empty list."""
+    client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.models()
+    _assert_names_the_request_only(info.value, "GET /models", "'data'")
+
+
+def test_models_payload_without_data_is_not_an_empty_listing():
+    """A server answering /models with {} is broken, not serving nothing: assert_model_served
+    must not report it as "not served, the server lists []"."""
+    client = _client(lambda request: httpx.Response(200, json={}), api_key=KEY)
+    with pytest.raises(LLMError) as info:
+        client.assert_model_served()
+    assert not isinstance(info.value, LLMConfigError)
+    assert "not served" not in str(info.value)
+    assert "got missing" in str(info.value)  # an absent key is named as such, not as NoneType
     _assert_names_the_request_only(info.value, "GET /models", "'data'")
 
 
@@ -194,3 +210,53 @@ def test_absent_or_empty_usage_is_an_empty_dict(extra):
     payload = _raw_completion({"content": "x"}, **extra)
     client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
     assert client.chat(MESSAGES).usage == {}
+
+
+# NaN, Infinity and 1e400 cannot be built with httpx's strict ``json=`` encoder (it refuses
+# out-of-range floats), so these usage objects are written as raw JSON text; Python's json
+# parses all three. The bad value goes either into a count or into reasoning_tokens.
+BAD_USAGE_VALUES = ["NaN", "Infinity", "1e400", '"12"', "true"]
+USAGE_PLACES = {
+    "count": '{"prompt_tokens": %s}',
+    "reasoning": '{"completion_tokens_details": {"reasoning_tokens": %s}}',
+}
+
+
+@pytest.mark.parametrize(
+    "literal", BAD_USAGE_VALUES, ids=["nan", "infinity", "1e400", "string", "bool"]
+)
+@pytest.mark.parametrize("place", sorted(USAGE_PLACES))
+def test_usage_values_that_are_not_finite_numbers_are_an_llm_error(place, literal):
+    """Kills: int() choking on NaN or Infinity (ValueError/OverflowError escaping chat()), a
+    string count skipped silently, a bool counted as 1; for the counts and reasoning_tokens."""
+    usage = USAGE_PLACES[place] % literal
+    body = ('{"choices": [{"message": {"content": "x"}}], "usage": ' + usage + "}").encode()
+    client = _client(lambda request: httpx.Response(200, content=body), api_key=KEY)
+    with pytest.raises(LLMError) as info:
+        client.chat(MESSAGES)
+    _assert_names_the_request_only(info.value, "POST /chat/completions", "finite number")
+
+
+def test_usage_counts_are_ints_and_detail_blocks_are_skipped():
+    """What the finite-number check must keep accepting: int and whole-float counts (always
+    returned as int), an int too large for a float (math.isfinite overflows on it, so it
+    must only be applied to floats), and null or object-valued detail blocks (the brief's
+    own fixture has completion_tokens_details as an object)."""
+    usage = {
+        "prompt_tokens": 7,
+        "completion_tokens": 5.0,
+        "total_tokens": 10**400,
+        "prompt_tokens_details": None,
+        "other_details": {"cached_tokens": 1},
+        "completion_tokens_details": {"reasoning_tokens": 2},
+    }
+    payload = _raw_completion({"content": "x"}, usage=usage)
+    client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
+    reply_usage = client.chat(MESSAGES).usage
+    assert reply_usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 5,
+        "total_tokens": 10**400,
+        "reasoning_tokens": 2,
+    }
+    assert {type(count) for count in reply_usage.values()} == {int}  # 5.0 == 5, so check types

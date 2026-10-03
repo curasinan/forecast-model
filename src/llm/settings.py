@@ -11,9 +11,10 @@ per call), a long read timeout (~15 tok/s single-stream, plus queueing).
 Same pattern as ``src/venues/ibkr/settings.py``: pydantic-settings with an
 env prefix, ``.env`` as the file source, unknown keys ignored.
 
-Numeric fields are bounded (``max_tokens`` and both timeouts > 0, ``temperature``
->= 0 and finite) so a typo fails at construction, not as a server 400 or a hang
-mid-run. ``api_key`` is a ``SecretStr`` and validation errors hide their input,
+Numeric fields are bounded (``max_tokens`` > 0, both timeouts > 0 and finite,
+``temperature`` >= 0 and finite) so a typo fails at construction, not as a server
+400 or a hang mid-run; an infinite timeout would end in an OverflowError at the
+socket layer. ``api_key`` is a ``SecretStr`` and validation errors hide their input,
 so a configured key never reaches a log through ``repr(settings)`` or a
 ``ValidationError``.
 """
@@ -49,5 +50,5 @@ class LocalLLMSettings(BaseSettings):
     reasoning_effort: Literal["low", "medium", "high"] = "low"
     # None -> omitted from the request (server default); 0.0 is valid (greedy decoding).
     temperature: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    connect_timeout_s: float = Field(default=10.0, gt=0)
-    read_timeout_s: float = Field(default=900.0, gt=0)
+    connect_timeout_s: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    read_timeout_s: float = Field(default=900.0, gt=0, allow_inf_nan=False)

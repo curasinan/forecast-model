@@ -10,6 +10,7 @@ separate from ``content`` so callers never accidentally parse it.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
@@ -42,13 +43,30 @@ class LLMConfigError(LLMError):
     """LLM_MODEL does not match what the server serves."""
 
 
+_MISSING = object()  # an absent key, as opposed to one present with a JSON null
+
+
 def _bad_shape(method: str, path: str, expected: str, got: object) -> LLMError:
     """The LLMError for an HTTP-200 payload of the wrong shape.
 
-    Names the request and the offending type only: never the base URL, the api key
-    or the payload itself.
+    Names the request and the offending type (``missing`` for an absent key) only:
+    never the base URL, the api key or the payload itself.
     """
-    return LLMError(f"{method} {path}: expected {expected}, got {type(got).__name__}")
+    seen = "missing" if got is _MISSING else type(got).__name__
+    return LLMError(f"{method} {path}: expected {expected}, got {seen}")
+
+
+def _usage_count(value: Any, what: str) -> int:
+    """A token count from a completion's ``usage``: an int or a finite float, truncated.
+
+    A bool is not a count, and NaN, Infinity and 1e400 would otherwise escape ``int()`` as
+    ValueError or OverflowError. ``math.isfinite`` is applied to floats only: it overflows
+    on an int too large for a float, and every int is finite anyway.
+    """
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not is_number or (isinstance(value, float) and not math.isfinite(value)):
+        raise _bad_shape("POST", "/chat/completions", f"{what} to be a finite number", value)
+    return int(value)
 
 
 @dataclass
@@ -110,9 +128,9 @@ class LocalLLMClient:
     def models(self) -> list[str]:
         """Ids the server lists under /models."""
         data = self._request("GET", "/models")
-        entries = data.get("data", [])
+        entries = data.get("data", _MISSING)  # {} is a broken server, not an empty listing
         if not isinstance(entries, list):
-            raise _bad_shape("GET", "/models", "'data' to be a list", entries)
+            raise _bad_shape("GET", "/models", "a list under 'data'", entries)
         ids: list[str] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -176,10 +194,16 @@ class LocalLLMClient:
             usage_raw = {}
         elif not isinstance(usage_raw, dict):
             raise _bad_shape("POST", "/chat/completions", "'usage' to be an object", usage_raw)
-        usage = {k: int(v) for k, v in usage_raw.items() if isinstance(v, (int, float))}
-        details = usage_raw.get("completion_tokens_details") or {}
-        if isinstance(details, dict) and isinstance(details.get("reasoning_tokens"), (int, float)):
-            usage["reasoning_tokens"] = int(details["reasoning_tokens"])
+        usage: dict[str, int] = {}
+        for key, value in usage_raw.items():
+            if value is None or isinstance(value, dict):
+                continue  # detail blocks (prompt_tokens_details, ...), not counts
+            usage[key] = _usage_count(value, "each 'usage' count")
+        details = usage_raw.get("completion_tokens_details")
+        if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+            usage["reasoning_tokens"] = _usage_count(
+                details["reasoning_tokens"], "'reasoning_tokens'"
+            )
         parsed: Any | None = None
         if json_schema is not None:
             try:

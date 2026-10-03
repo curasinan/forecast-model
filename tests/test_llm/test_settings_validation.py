@@ -40,8 +40,12 @@ def test_dotenv_keys_for_other_services_are_ignored(tmp_path):
         ("max_tokens", "-5"),
         ("connect_timeout_s", "0"),
         ("connect_timeout_s", "-1"),
+        ("connect_timeout_s", "inf"),
+        ("connect_timeout_s", "nan"),
         ("read_timeout_s", "0"),
         ("read_timeout_s", "-1"),
+        ("read_timeout_s", "inf"),
+        ("read_timeout_s", "nan"),
         ("temperature", "-0.1"),
         ("temperature", "nan"),
         ("temperature", "inf"),
@@ -49,7 +53,8 @@ def test_dotenv_keys_for_other_services_are_ignored(tmp_path):
     ],
 )
 def test_numeric_settings_reject_values_the_server_cannot_use(monkeypatch, name, bad):
-    """Kills: a bound dropped. Fails at construction, not as a 400 or a hang mid-run."""
+    """Kills: a bound dropped, an infinite timeout let through (socket.settimeout(inf) raises
+    OverflowError at request time). Fails at construction, not as a 400 or a hang mid-run."""
     monkeypatch.setenv("LLM_MODEL", "qwen-test")
     monkeypatch.setenv(f"LLM_{name.upper()}", bad)
     with pytest.raises(ValidationError) as info:
