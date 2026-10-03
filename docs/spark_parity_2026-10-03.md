@@ -379,3 +379,31 @@ What the real server settled (design section 6 left these to the live run):
 
 Unit coverage at f11cf09: `tests/test_llm` 132 passed + 1 skipped (the live test without
 `LLM_LIVE`), `tests/test_architecture` 22 passed.
+
+## 11. Final suites (Task 11)
+
+Final code commit 88122a6 (after the whole-branch review and its fix wave), 2026-10-03 09:22
+local, both machines at the same SHA (the Spark delivered by `git push spark spark-research-split`).
+
+Zenbook (throwaway `USERPROFILE`/`HOME`, ruling R-C):
+```
+1243 passed, 1 skipped, 1 warning in 111.40s (0:01:51)
+pytest_exit=0
+Found 112 errors.
+All checks passed!   (touched files)
+TOUCHED_FILES_LINT_OK
+```
+Spark (`HOME=$(mktemp -d)`):
+```
+1243 passed, 1 skipped, 1 warning in 30.54s
+pytest_exit=0
+Found 112 errors.
+All checks passed!   (touched files)
+TOUCHED_FILES_LINT_OK
+```
+The 1030 tests of section 8 plus 213 added since: 159 in `tests/test_llm` (the client, the
+smoke script, the real-reply fixtures and the fix wave's `finish_reason` / nested-body cases;
+plus the gated live test, the one skip), 23 more in `tests/test_architecture/test_llm_boundary.py`
+and 31 more in `tests/test_analysis` (the `--differ` gate and `subtree`). The warning is the
+pre-existing one of section 8. The ruff baseline total is 112 on both machines and every file
+this branch touches lints clean on both.
