@@ -29,7 +29,7 @@ Climate / IBKR instead:
 
 ```bash
 python scripts/collect_climate_labels.py
-python scripts/fit_gtm_emos.py
+python scripts/fit_gtm_emos.py --trend --live
 python scripts/run_gtm_paper.py
 ```
 
