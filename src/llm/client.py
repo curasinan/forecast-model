@@ -6,7 +6,11 @@ mode; the decoded object is returned as ``LLMReply.parsed``. Reasoning text
 (vLLM's reasoning parser sends it as ``reasoning_content`` in older builds and
 as ``reasoning`` on newer ones, the Spark's included; the client reads the
 first, falling back to the second) is kept separate from ``content`` so
-callers never accidentally parse it.
+callers never accidentally parse it. ``LLMReply.finish_reason`` is the server's
+``choices[0].finish_reason`` (a string, or None when absent or null); when
+schema content is not valid JSON the ``LLMOutputError`` names it unless it is
+``stop``, so "cut off at ``length``" is told apart from "wrote invalid JSON".
+Every failure, nested-past-the-decoder bodies included, is an ``LLMError``.
 """
 
 from __future__ import annotations
@@ -58,6 +62,29 @@ def _bad_shape(method: str, path: str, expected: str, got: object) -> LLMError:
     return LLMError(f"{method} {path}: expected {expected}, got {seen}")
 
 
+def _excerpt(data: object) -> str:
+    """The first 300 characters of ``data`` as JSON, for an error message; never raises.
+
+    ``json.loads`` accepts nesting that ``json.dumps`` then refuses (on Python 3.14.2 /
+    Windows: parsed to about 17k levels, printed to fewer), so printing a body the decoder
+    took can itself raise RecursionError.
+    """
+    try:
+        return json.dumps(data)[:300]
+    except RecursionError:
+        return "<nested too deeply to print>"
+
+
+def _cutoff_note(finish_reason: str | None) -> str:
+    """What an "invalid JSON" error adds about how generation ended: nothing for ``stop`` or
+    for a server that did not say, the explanation for ``length``, the bare reason otherwise."""
+    if finish_reason is None or finish_reason == "stop":
+        return ""
+    if finish_reason == "length":
+        return " (finish_reason=length: the reply was cut off before it finished)"
+    return f" (finish_reason={finish_reason})"
+
+
 def _usage_count(value: Any, what: str) -> int:
     """A token count from a completion's ``usage``: an int or a finite float, truncated.
 
@@ -79,6 +106,9 @@ class LLMReply:
     usage: dict[str, int]
     latency_s: float
     model: str
+    # choices[0].finish_reason ("stop", "length", ...); None when the server sent none.
+    # Additive and last: nothing that builds an LLMReply today has to change.
+    finish_reason: str | None = None
 
 
 class LocalLLMClient:
@@ -125,7 +155,7 @@ class LocalLLMClient:
             raise LLMHTTPError(response.status_code, response.text)
         try:
             data = response.json()
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:  # RecursionError: nested past the decoder
             raise LLMError(f"{method} {path}: non-JSON body: {response.text[:200]}") from exc
         if not isinstance(data, dict):
             raise _bad_shape(method, path, "a JSON object", data)
@@ -184,9 +214,10 @@ class LocalLLMClient:
         data = self._request("POST", "/chat/completions", json=body)
         latency = time.perf_counter() - started
         try:
-            message = data["choices"][0]["message"]
+            choice = data["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise LLMError(f"malformed completion: {json.dumps(data)[:300]}") from exc
+            raise LLMError(f"malformed completion: {_excerpt(data)}") from exc
         if not isinstance(message, dict):
             raise _bad_shape("POST", "/chat/completions", "'message' to be an object", message)
         content = message.get("content")
@@ -223,12 +254,20 @@ class LocalLLMClient:
             usage["reasoning_tokens"] = _usage_count(
                 details["reasoning_tokens"], "'reasoning_tokens'"
             )
+        # An absent key and a null are both "the server did not say"; anything else must be text.
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and not isinstance(finish_reason, str):
+            raise _bad_shape(
+                "POST", "/chat/completions", "'finish_reason' to be a string or null", finish_reason
+            )
         parsed: Any | None = None
         if json_schema is not None:
             try:
                 parsed = json.loads(content)
-            except ValueError as exc:
-                raise LLMOutputError(f"content is not valid JSON: {exc}", raw=content) from exc
+            except (ValueError, RecursionError) as exc:
+                raise LLMOutputError(
+                    f"content is not valid JSON{_cutoff_note(finish_reason)}: {exc}", raw=content
+                ) from exc
         return LLMReply(
             content=content,
             reasoning=reasoning,
@@ -236,4 +275,5 @@ class LocalLLMClient:
             usage=usage,
             latency_s=latency,
             model=str(data.get("model", "")),
+            finish_reason=finish_reason,
         )

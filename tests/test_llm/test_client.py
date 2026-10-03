@@ -29,13 +29,15 @@ def _settings(**overrides) -> LocalLLMSettings:
     return LocalLLMSettings(_env_file=None, **base)
 
 
-def _completion(content: str, reasoning: str | None = "thinking") -> dict:
+def _completion(
+    content: str | None, reasoning: str | None = "thinking", finish_reason: str | None = "stop"
+) -> dict:
     message = {"role": "assistant", "content": content}
     if reasoning is not None:
         message["reasoning_content"] = reasoning
     return {
         "model": "qwen-test",
-        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {
             "prompt_tokens": 10,
             "completion_tokens": 5,
@@ -78,6 +80,7 @@ def test_chat_sends_configured_fields_and_parses_a_schema_reply():
     assert reply.usage["completion_tokens"] == 5
     assert reply.usage["reasoning_tokens"] == 3
     assert reply.model == "qwen-test"
+    assert reply.finish_reason == "stop"
     assert reply.latency_s >= 0.0
 
 

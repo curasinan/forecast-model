@@ -12,7 +12,7 @@ import json
 import httpx
 import pytest
 
-from src.llm.client import LLMConfigError, LLMError, LLMHTTPError, LLMOutputError
+from src.llm.client import LLMConfigError, LLMError, LLMHTTPError, LLMOutputError, LocalLLMClient
 from tests.test_llm.test_client import _client, _completion
 
 KEY = "sk-live-9f3a"  # distinctive on purpose: no error message may ever contain it
@@ -23,6 +23,13 @@ SCHEMA = {"type": "object"}
 def _raw_completion(message, **extra) -> dict:
     """A completion whose ``message`` (and top-level extras) are taken exactly as given."""
     return {"model": "qwen-test", "choices": [{"index": 0, "message": message}], **extra}
+
+
+def _with_finish_reason(value) -> dict:
+    """A completion whose ``choices[0].finish_reason`` is taken exactly as given (any JSON)."""
+    payload = _raw_completion({"content": "x"})
+    payload["choices"][0]["finish_reason"] = value
+    return payload
 
 
 def _assert_names_the_request_only(error: LLMError, request: str, fragment: str) -> None:
@@ -208,6 +215,18 @@ MALFORMED_COMPLETIONS = [
         None,
         "'reasoning'",
     ),
+    # finish_reason is surfaced on every reply, so it is validated with or without a schema:
+    # a string or null only, never dropped silently as None.
+    *(
+        _case(
+            f"finish_reason-{json.dumps(value)}-{kind}",
+            _with_finish_reason(value),
+            schema,
+            "'finish_reason'",
+        )
+        for value in (5, 1.5, True, ["length"], {"reason": "length"})
+        for kind, schema in (("plain", None), ("schema", SCHEMA))
+    ),
 ]
 
 
@@ -280,3 +299,132 @@ def test_usage_counts_are_ints_and_detail_blocks_are_skipped():
         "reasoning_tokens": 2,
     }
     assert {type(count) for count in reply_usage.values()} == {int}  # 5.0 == 5, so check types
+
+
+# ---- a pathologically nested body or content: RecursionError is not an LLMError by itself -------
+
+# Parses to nothing, but the decoder recurses once per bracket. Far deeper than any platform's
+# limit (about 17k levels on Python 3.14.2 / Windows), so the RecursionError branch is reached
+# everywhere, not only where the stack happens to be small.
+NESTED = "[" * 1_000_000
+
+
+def test_a_pathologically_nested_200_body_is_an_llm_error():
+    """Kills: RecursionError escaping ``response.json()`` (it is not a ValueError), so a hostile
+    or broken server could crash the caller instead of failing as an LLMError."""
+    client = _client(lambda request: httpx.Response(200, content=NESTED.encode()), api_key=KEY)
+    with pytest.raises(LLMError) as info:
+        client.models()
+    assert not isinstance(info.value, LLMHTTPError)
+    _assert_names_the_request_only(info.value, "GET /models", "non-JSON body")
+
+
+def test_pathologically_nested_schema_content_is_an_output_error_carrying_the_raw_text():
+    """Kills: RecursionError escaping ``json.loads`` of the schema content."""
+    client = _client(lambda request: httpx.Response(200, json=_completion(NESTED)), api_key=KEY)
+    with pytest.raises(LLMOutputError) as info:
+        client.chat(MESSAGES, json_schema=SCHEMA)
+    assert info.value.raw == NESTED
+    assert "not valid JSON" in str(info.value)
+    assert len(str(info.value)) < 500  # the 100k brackets are in raw, not in the message
+
+
+def test_a_malformed_completion_too_deep_to_print_is_still_an_llm_error(monkeypatch):
+    """Kills: RecursionError escaping the excerpt of the "malformed completion" message.
+    ``json.loads`` accepts nesting that ``json.dumps`` refuses (on Python 3.14.2 / Windows the
+    decoder takes about 17k levels and the encoder fewer), so printing a body the decoder took
+    can itself raise. The body is built in memory, far deeper than any platform's encoder limit,
+    because the depth the decoder takes is platform-bound."""
+    deep: list = []
+    for _ in range(200_000):
+        deep = [deep]
+    payload = {"choices": [1], "x": deep}  # choices[0] is not an object: the malformed path
+    monkeypatch.setattr(LocalLLMClient, "_request", lambda self, method, path, **kw: payload)
+    with pytest.raises(LLMError) as info:
+        _client(lambda request: httpx.Response(500)).chat(MESSAGES)
+    assert "malformed completion" in str(info.value)
+
+
+# ---- finish_reason: why generation ended -----------------------------------------------------
+
+
+@pytest.mark.parametrize("reason", ["stop", "length", "content_filter", "tool_calls", "abort"])
+def test_the_finish_reason_string_is_surfaced_on_the_reply_without_a_schema(reason):
+    """Any string the server sends reaches LLMReply.finish_reason, on the plain path too."""
+    client = _client(
+        lambda request: httpx.Response(200, json=_completion("text", finish_reason=reason)),
+        api_key=KEY,
+    )
+    assert client.chat(MESSAGES).finish_reason == reason
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [_completion("x", finish_reason=None), _raw_completion({"content": "x"})],
+    ids=["null", "absent"],
+)
+def test_a_null_or_absent_finish_reason_is_none(payload):
+    """Servers may omit it: that is "unknown", not a malformed reply."""
+    client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
+    assert client.chat(MESSAGES).finish_reason is None
+
+
+def test_complete_json_is_parsed_whatever_the_finish_reason_says():
+    """finish_reason only explains a parse failure; it never fails a reply that parsed."""
+    client = _client(
+        lambda request: httpx.Response(
+            200, json=_completion('{"answer": 42}', finish_reason="length")
+        ),
+        api_key=KEY,
+    )
+    reply = client.chat(MESSAGES, json_schema=SCHEMA)
+    assert reply.parsed == {"answer": 42}
+    assert reply.finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"city": "Izmir", "yea', None],
+    ids=["truncated-json", "budget-spent-in-reasoning"],
+)
+def test_unparsable_content_cut_off_at_length_says_so(content):
+    """The first thing a caller must tell apart: the reply was cut off (raise max_tokens) or the
+    model wrote invalid JSON. Kills: a bare "content is not valid JSON" for both."""
+    client = _client(
+        lambda request: httpx.Response(200, json=_completion(content, finish_reason="length")),
+        api_key=KEY,
+    )
+    with pytest.raises(LLMOutputError) as info:
+        client.chat(MESSAGES, json_schema=SCHEMA)
+    assert info.value.raw == (content or "")
+    assert "content is not valid JSON" in str(info.value)
+    assert "finish_reason=length: the reply was cut off before it finished" in str(info.value)
+
+
+def test_another_unusual_finish_reason_is_named_without_claiming_a_cut_off():
+    """Kills: calling every non-stop ending a truncation."""
+    client = _client(
+        lambda request: httpx.Response(
+            200, json=_completion("I cannot help", finish_reason="content_filter")
+        ),
+        api_key=KEY,
+    )
+    with pytest.raises(LLMOutputError) as info:
+        client.chat(MESSAGES, json_schema=SCHEMA)
+    assert "finish_reason=content_filter" in str(info.value)
+    assert "cut off" not in str(info.value)
+
+
+@pytest.mark.parametrize("reason", ["stop", None], ids=["stop", "unknown"])
+def test_invalid_json_after_a_normal_or_unknown_ending_does_not_blame_the_ending(reason):
+    """The model finished and still wrote invalid JSON (or the server said nothing): the message
+    must not send the caller after the token budget."""
+    client = _client(
+        lambda request: httpx.Response(200, json=_completion("not json", finish_reason=reason)),
+        api_key=KEY,
+    )
+    with pytest.raises(LLMOutputError) as info:
+        client.chat(MESSAGES, json_schema=SCHEMA)
+    assert info.value.raw == "not json"
+    assert "finish_reason" not in str(info.value)
+    assert "cut off" not in str(info.value)

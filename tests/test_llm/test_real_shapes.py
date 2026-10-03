@@ -90,6 +90,12 @@ def test_real_reply_names_the_served_model():
     assert _real_reply().model == "Qwen3.8-Flash-Next-NVFP4"
 
 
+def test_real_reply_finish_reason_is_stop():
+    """The server says why generation ended; a complete schema reply says ``stop``. Kills:
+    dropping choices[0].finish_reason, or reading it from the wrong level of the reply."""
+    assert _real_reply().finish_reason == "stop"
+
+
 # ---- the captured /v1/models listing ---------------------------------------------------------
 
 
