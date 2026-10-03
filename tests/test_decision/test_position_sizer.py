@@ -9,8 +9,6 @@ import pandas as pd
 import pytest
 
 from decision.position_sizer import (
-    DEFAULT_MAX_SINGLE_POSITION_PCT,
-    DEFAULT_MIN_POSITION_DOLLARS,
     _kelly_fraction,
     _load_kelly_inputs,
     size_positions,
@@ -112,7 +110,7 @@ def test_sizing_applies_kelly_and_quarter_multiplier(tmp_path):
     assert sized.loc[0, "kelly_fraction"] == pytest.approx(0.375)
     # Capped at 5% of bankroll = $50
     assert sized.loc[0, "position_dollars"] == pytest.approx(50.0)
-    assert sized.loc[0, "tradeable"] == True
+    assert sized.loc[0, "tradeable"]
 
 
 def test_sizing_respects_5pct_cap(tmp_path):
@@ -129,7 +127,7 @@ def test_sizing_below_5_dollar_floor_marks_not_tradeable(tmp_path):
     # On $50 bankroll, even a 5%-of-bankroll cap = $2.50 → below $5 floor.
     edges = _edges_df([("m1", 0.01, True)])
     sized = size_positions(edges, bankroll=50.0, metrics_path=mp)
-    assert sized.loc[0, "tradeable"] == False
+    assert not sized.loc[0, "tradeable"]
     assert sized.loc[0, "position_dollars"] == 0.0
 
 
@@ -148,9 +146,9 @@ def test_sizing_passes_through_non_tradeable_unchanged(tmp_path):
     sized = size_positions(edges, bankroll=1000.0, metrics_path=mp)
     # m1 sized; m2 untouched
     by_id = sized.set_index("market_id")
-    assert by_id.at["m1", "tradeable"] == True
+    assert by_id.at["m1", "tradeable"]
     assert by_id.at["m1", "position_dollars"] > 0
-    assert by_id.at["m2", "tradeable"] == False
+    assert not by_id.at["m2", "tradeable"]
     assert by_id.at["m2", "position_dollars"] == 0
 
 

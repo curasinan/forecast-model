@@ -12,8 +12,7 @@ class _FakeIB:
 
 @pytest.fixture
 def fake_ib(monkeypatch):
-    import ib_async
-    monkeypatch.setattr(ib_async, "IB", _FakeIB)
+    monkeypatch.setattr("ib_async.IB", _FakeIB)
     return _FakeIB
 
 def _settings():

@@ -14,7 +14,6 @@ from src.collectors.news_api import NewsAPICollector
 from src.collectors.polymarket import PolymarketCollector
 from src.collectors.registry import CollectorRegistry
 from src.collectors.rss_feed import RSSFeedCollector
-from src.config import settings
 from src.edge.edge_finder import find_edge
 from src.edge.vpin import assess_vpin, estimate_vpin_from_price_movement
 from src.evaluation.tracker import EvaluationTracker
@@ -27,7 +26,7 @@ from src.features.temporal import TemporalExtractor
 from src.math.monte_carlo import simulate_edge, simulate_probability
 from src.models.evidence import EvidenceBundle
 from src.models.prediction import EdgeSignal, Prediction, PredictionRecord
-from src.models.question import MarketData, Question
+from src.models.question import Question
 from src.predictors.bayesian_predictor import BayesianPredictor
 from src.predictors.classical_ml import ClassicalMLPredictor
 from src.predictors.ensemble import EnsemblePredictor, compute_ensemble_weights

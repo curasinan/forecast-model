@@ -21,10 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from features.correlation_features import load_clusters
@@ -244,13 +242,11 @@ def apply_risk_limits(
     # ---- Rule 3: total exposure cap -------------------------------------- #
     total_cap = float(cfg["total_exposure_cap_pct"]) * bankroll
     new_total = float(result.loc[result["tradeable"], "position_dollars"].sum())
-    n_total_scaled = 0
     if existing_total + new_total > total_cap and new_total > 0:
         headroom = max(0.0, total_cap - existing_total)
         scale = headroom / new_total if new_total > 0 else 0.0
         tradeable_mask = result["tradeable"].astype(bool)
         result.loc[tradeable_mask, "position_dollars"] *= scale
-        n_total_scaled = int(tradeable_mask.sum())
 
         below_floor_after_total = (
             result["tradeable"] & (result["position_dollars"] < min_pos)

@@ -12,13 +12,9 @@ Uses Rich's Live display for auto-refreshing output.
 
 import asyncio
 import logging
-import os
-import sys
 from datetime import datetime
 
 from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -82,15 +78,12 @@ class Dashboard:
             if edge > 0.05:
                 edge_str = f"[green]{edge:+.1%}[/green]"
                 ev_str = f"[green]${r.edge.expected_value:+.3f}[/green]"
-                direction = "[green]YES[/green]"
             elif edge < -0.05:
                 edge_str = f"[red]{edge:+.1%}[/red]"
                 ev_str = f"[red]${r.edge.expected_value:+.3f}[/red]"
-                direction = "[red]NO[/red]"
             else:
                 edge_str = f"[yellow]{edge:+.1%}[/yellow]"
                 ev_str = f"[yellow]${r.edge.expected_value:+.3f}[/yellow]"
-                direction = "[yellow]-[/yellow]"
 
             # VPIN coloring
             vpin_colors = {"low": "green", "medium": "yellow", "elevated": "red", "high": "bold red"}

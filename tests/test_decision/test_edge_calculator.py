@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 
 from decision.edge_calculator import (
-    DEFAULT_MIN_EDGE_THRESHOLD,
     EDGE_COLUMNS,
     compute_edges,
 )
@@ -76,7 +75,7 @@ def test_direction_sign(tmp_path):
     assert out.at["b", "direction"] == "sell"
     # Exact zero → direction is None → not tradeable
     assert out.at["c", "direction"] is None or pd.isna(out.at["c", "direction"])
-    assert out.at["c", "tradeable"] == False
+    assert not out.at["c", "tradeable"]
 
 
 def test_adjusted_edge_formula(tmp_path):
@@ -99,9 +98,9 @@ def test_missing_snapshot_carries_through_as_not_tradeable(tmp_path):
         "predicted_change": [0.05, 0.05],
     })
     out = compute_edges(preds, db_path=db).set_index("market_id")
-    assert out.at["a", "tradeable"] == True
+    assert out.at["a", "tradeable"]
     ghost = out.loc["ghost_does_not_exist"]
-    assert ghost["tradeable"] == False
+    assert not ghost["tradeable"]
     # market-data columns NaN for missing snapshot
     assert pd.isna(ghost["best_bid"])
     assert pd.isna(ghost["spread"])

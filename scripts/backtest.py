@@ -29,11 +29,9 @@ from rich.table import Table
 
 from src.config import settings
 from src.evaluation.metrics import (
-    MetricsSummary,
     accuracy,
     brier_score,
     calibration_curve,
-    cumulative_ev,
     expected_calibration_error,
     log_loss,
 )
@@ -75,8 +73,6 @@ def run_backtest(
     # Extract data
     preds = [s.probability for s, _ in pairs]
     outcomes = [o for _, o in pairs]
-    markets = [s.market_price for s, _ in pairs]
-    edges = [s.edge_pct for s, _ in pairs]
 
     # Simulate trades
     trades: list[dict] = []

@@ -10,7 +10,6 @@ This module scans Polymarket for tech markets and ranks them by
 opportunity score (entropy x volume), then filters by our criteria.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime

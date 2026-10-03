@@ -8,8 +8,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from src.models.evidence import EvidenceBundle, EvidenceItem
-from src.models.prediction import EdgeSignal, Prediction, PredictionRecord
+from src.models.evidence import EvidenceBundle
+from src.models.prediction import PredictionRecord
 from src.models.question import MarketData, Question, QuestionStatus
 
 SCHEMA = """

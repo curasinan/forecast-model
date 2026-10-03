@@ -15,12 +15,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from collectors.weather.collect_forecasts import collect_station
-from collectors.weather.collect_obs_iem import collect_station as collect_obs
-from collectors.weather.discover_live_markets import discover_and_upsert
-from src.config import settings
-from weather.open_meteo import OpenMeteoClient, OpenMeteoLicenseError
-from weather.storage import init_weather_db
+from collectors.weather.collect_forecasts import collect_station  # noqa: E402
+from collectors.weather.collect_obs_iem import collect_station as collect_obs  # noqa: E402
+from collectors.weather.discover_live_markets import discover_and_upsert  # noqa: E402
+from src.config import settings  # noqa: E402
+from weather.open_meteo import OpenMeteoClient, OpenMeteoLicenseError  # noqa: E402
+from weather.storage import init_weather_db  # noqa: E402
 
 log = logging.getLogger("weather_collect_cycle")
 
