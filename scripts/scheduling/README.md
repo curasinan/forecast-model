@@ -12,7 +12,7 @@ Python CLIs that would have hit Gamma or CLOB now exit 2 unless
 | IBKR quote recorder | `python scripts/record_ibkr_ticks.py` | Task Scheduler `\IBKR\IBKR Recorder` |
 | Recorder health | `python scripts/check_ibkr_recorder.py` | hourly `\IBKR\IBKR Recorder Health` |
 | Climate labels | `python scripts/collect_climate_labels.py` | daily (register separately, elevated) |
-| GTM EMOS fit | `python scripts/fit_gtm_emos.py` | after hindcast/label updates |
+| GTM EMOS fit | `python scripts/fit_gtm_emos.py --trend --live` | after hindcast/label updates; `--live` names the live root (without it or `--root` the fit exits 2) |
 | GTM paper signals | `python scripts/run_gtm_paper.py` | research; no orders |
 
 Register IBKR jobs from an elevated PowerShell:

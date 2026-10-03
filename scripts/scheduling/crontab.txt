@@ -17,4 +17,4 @@
 # IBKR / climate instead:
 #   python scripts/record_ibkr_ticks.py
 #   python scripts/collect_climate_labels.py
-#   python scripts/fit_gtm_emos.py
+#   python scripts/fit_gtm_emos.py --trend --live

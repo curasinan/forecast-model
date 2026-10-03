@@ -190,9 +190,9 @@ payload is copied into `~/quant_data_snapshot/parity/` (section 4) and from
 there into git next to the report. Spark-side outputs (refits, parity
 payloads, experiments) are ephemeral; the next push overwrites any canonical
 file they touched. The operational `models/gtm_emos.json` and
-`paper/gtm_signals.json` are produced on the Zenbook only (`fit_gtm_emos.py`
-and `run_gtm_paper.py` there); on the Spark, scoring is `parity_score.py`,
-which writes nothing under `paper/`.
+`paper/gtm_signals.json` are produced on the Zenbook only
+(`fit_gtm_emos.py --live` and `run_gtm_paper.py` there); on the Spark,
+scoring is `parity_score.py`, which writes nothing under `paper/`.
 
 ## 4. Parity check (repeat after any numerical-stack change on either side)
 
@@ -241,11 +241,13 @@ unknown, which is what a checkout without git gives, so score from a git
 checkout on both machines.
 
 A refit comparison is report-only. Fit on both sides, the Zenbook on the
-snapshot root (always pass it: without `--root` the fit rewrites the live
-root's operational `models/gtm_emos.json`), fetch the Spark's two artifacts
-into the snapshot's evidence directory, and compare each pair files-first
-(`--ignore` takes a list, so it goes last; the diagnostics also need
-`fitted_at_utc` and `artifact_paths` ignored):
+snapshot root. The fit runs only on a root it is given: with no `--root`,
+or an empty one, it prints the files it would have overwritten and exits 2.
+`--live` is the operational refit: it rewrites the live root's
+`models/gtm_emos.json`, so it has no place in a comparison. Then fetch the
+Spark's two artifacts into the snapshot's evidence directory, and compare
+each pair files-first (`--ignore` takes a list, so it goes last; the
+diagnostics also need `fitted_at_utc` and `artifact_paths` ignored):
 
     # Zenbook, Git Bash, after the scoring parity run
     python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data
