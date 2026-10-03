@@ -14,9 +14,10 @@ What remains, and why:
 - ``send_alert`` -- the live alert dispatcher (Telegram via the
   ``ALERT_METHOD`` / ``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID`` env vars,
   else a ``log_only`` CRITICAL log line; Telegram failures degrade to
-  ``log_only`` rather than losing the alert). This is imported directly by
-  ``scripts/check_ibkr_recorder.py`` -- the current IBKR recorder/paper-sync
-  health probe -- and must keep this import path
+  ``log_only`` rather than losing the alert). It returns whether the alert
+  was delivered, so the probe can retry one that was not. This is imported
+  directly by ``scripts/check_ibkr_recorder.py`` -- the current IBKR
+  recorder/paper-sync health probe -- and must keep this import path
   (``from monitoring.heartbeat import send_alert``) stable.
 - ``setup_logging`` -- generic file+console logging setup for this logger.
   Nothing in this module's own retired CLI calls it any more (the pointer
@@ -93,10 +94,17 @@ def _scrub(text: str, secret: str) -> str:
     return text
 
 
-def send_alert(message: str, method: str | None = None) -> None:
+def send_alert(message: str, method: str | None = None) -> bool:
     """Dispatch an alert. ``method`` defaults to the ALERT_METHOD env var, then
     ``log_only``. Telegram failures fall back to a CRITICAL log line so an
     alert is never silently lost.
+
+    Returns the outcome: ``True`` when the alert was delivered (Telegram
+    answered HTTP 200, or the ``log_only`` method wrote its line), ``False``
+    when it was not (``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID`` missing, a
+    non-200 answer, or any exception). A caller that does not care can ignore
+    the result; the health probe uses it to retry an undelivered alert on its
+    next run instead of recording it as sent.
 
     SECRET HYGIENE (final-review finding C-2): Telegram's API puts the bot
     token in the URL PATH (``/bot<TOKEN>/sendMessage``), and requests'
@@ -120,7 +128,7 @@ def send_alert(message: str, method: str | None = None) -> None:
                 "ALERT (telegram requested but TELEGRAM_BOT_TOKEN/CHAT_ID unset): %s",
                 message,
             )
-            return
+            return False
         safe_message = _scrub(message, token)
         failure: str | None = None
         try:
@@ -137,14 +145,15 @@ def send_alert(message: str, method: str | None = None) -> None:
             failure = f"telegram send error: {type(exc).__name__}"
         if failure is None:
             log.info("alert sent via telegram")
-        else:
-            # Formatted OUTSIDE the except block, from a string that never
-            # saw the exception text; scrubbed once more as the belt.
-            log.critical("%s", _scrub(f"ALERT ({failure}): {safe_message}", token))
-        return
+            return True
+        # Formatted OUTSIDE the except block, from a string that never saw
+        # the exception text; scrubbed once more as the belt.
+        log.critical("%s", _scrub(f"ALERT ({failure}): {safe_message}", token))
+        return False
 
     # log_only (default)
     log.critical("ALERT: %s", message)
+    return True
 
 
 # --------------------------------------------------------------------------- #

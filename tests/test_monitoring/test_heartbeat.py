@@ -153,6 +153,138 @@ def test_telegram_alert_message_containing_the_token_is_redacted(caplog, monkeyp
     assert any("weird alert mentioning" in r.getMessage() for r in caplog.records)
 
 
+# --------------------------------------------------------------------------- #
+# send_alert reports whether the alert was delivered. The health probe's alert
+# state machine (scripts/check_ibkr_recorder.py) depends on it: an undelivered
+# alert is retried on the next run instead of being marked as sent.
+#   True  = delivered (Telegram HTTP 200, or the log_only method wrote its line)
+#   False = not delivered (missing token/chat id, non-200, any exception)
+# --------------------------------------------------------------------------- #
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+def _telegram_env(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", FAKE_CHAT_ID)
+
+
+def test_send_alert_log_only_returns_true_after_writing_its_line(caplog):
+    with caplog.at_level(logging.CRITICAL, logger="monitoring.heartbeat"):
+        outcome = send_alert("test message", method="log_only")
+    assert outcome is True
+    assert any("test message" in r.getMessage() for r in caplog.records)
+
+
+def test_send_alert_default_method_is_log_only_and_returns_true(caplog, monkeypatch):
+    monkeypatch.delenv("ALERT_METHOD", raising=False)
+    with caplog.at_level(logging.CRITICAL, logger="monitoring.heartbeat"):
+        outcome = send_alert("default message")
+    assert outcome is True
+    assert any("default message" in r.getMessage() for r in caplog.records)
+
+
+def test_send_alert_telegram_http_200_returns_true(caplog, monkeypatch):
+    _telegram_env(monkeypatch)
+    posts: list[tuple[str, dict]] = []
+
+    def _post(url, **kwargs):
+        posts.append((url, kwargs))
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(heartbeat_mod.requests, "post", _post)
+
+    with caplog.at_level(logging.DEBUG):
+        outcome = send_alert("probe says DOWN", method="telegram")
+
+    assert outcome is True
+    ((url, kwargs),) = posts
+    assert url == f"https://api.telegram.org/bot{FAKE_TOKEN}/sendMessage"
+    assert kwargs["json"] == {"chat_id": FAKE_CHAT_ID, "text": "probe says DOWN"}
+    # Delivered: no fallback line, and the token (which the URL must carry)
+    # still never reaches a log line.
+    assert not [r for r in caplog.records if r.levelno >= logging.CRITICAL]
+    assert FAKE_TOKEN not in _all_logged_text(caplog)
+
+
+def test_send_alert_env_selected_telegram_returns_true(monkeypatch):
+    """The probe calls ``send_alert(message)`` with no method: ALERT_METHOD
+    from the environment picks Telegram, and a 200 is reported as delivered."""
+    _telegram_env(monkeypatch)
+    monkeypatch.setenv("ALERT_METHOD", "telegram")
+    monkeypatch.setattr(heartbeat_mod.requests, "post", lambda url, **kw: _FakeResponse(200))
+
+    assert send_alert("probe says DOWN") is True
+
+
+@pytest.mark.parametrize("missing", ["token", "chat_id", "both"])
+def test_send_alert_telegram_missing_credentials_returns_false(caplog, monkeypatch, missing):
+    _telegram_env(monkeypatch)
+    if missing in ("token", "both"):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "  ")
+    if missing in ("chat_id", "both"):
+        monkeypatch.delenv("TELEGRAM_CHAT_ID")
+    # Nothing may be posted without credentials; the autouse tripwire in
+    # conftest.py also fails this test at teardown if something is.
+
+    with caplog.at_level(logging.CRITICAL, logger="monitoring.heartbeat"):
+        outcome = send_alert("fallback message", method="telegram")
+
+    assert outcome is False
+    # The alert is still not lost: the CRITICAL fallback line is written.
+    assert any("fallback message" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("status", [400, 401, 429, 500, 502])
+def test_send_alert_telegram_non_200_returns_false(caplog, monkeypatch, status):
+    _telegram_env(monkeypatch)
+    monkeypatch.setattr(heartbeat_mod.requests, "post", lambda url, **kw: _FakeResponse(status))
+
+    with caplog.at_level(logging.DEBUG):
+        outcome = send_alert("probe says STALE", method="telegram")
+
+    assert outcome is False
+    critical = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+    assert any(f"HTTP {status}" in r.getMessage() for r in critical)
+    assert any("probe says STALE" in r.getMessage() for r in critical)
+    assert FAKE_TOKEN not in _all_logged_text(caplog)
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    [
+        requests.ConnectionError,
+        requests.exceptions.ConnectTimeout,
+        requests.exceptions.SSLError,
+        ValueError,
+        OSError,
+    ],
+)
+def test_send_alert_telegram_exception_returns_false_instead_of_raising(
+    caplog, monkeypatch, exc_type
+):
+    _telegram_env(monkeypatch)
+
+    def _raise(*args, **kwargs):
+        raise exc_type(_leaky_text())
+
+    monkeypatch.setattr(heartbeat_mod.requests, "post", _raise)
+
+    with caplog.at_level(logging.DEBUG):
+        outcome = send_alert("probe says DOWN", method="telegram")
+
+    assert outcome is False
+    assert FAKE_TOKEN not in _all_logged_text(caplog)
+    assert any(
+        exc_type.__name__ in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.CRITICAL
+    )
+
+
 def test_retired_main_points_to_probe_and_exits_0(capsys):
     """python -m monitoring.heartbeat must not silently claim success -- it
     prints a pointer to the live probe and exits 0 (retired, not broken)."""
