@@ -193,11 +193,13 @@ def test_server_registers_tools():
     assert expected.issubset(names)
 
 
-def test_resources_json(poly_db: Path, weather_db: Path):
+def test_resources_json(tmp_path: Path, weather_db: Path):
     from mcp_server.server import resource_weather_status
 
-    # Patch default DB paths by calling status helpers directly already covered;
-    # resources use default paths — just ensure they return parseable JSON.
-    raw = resource_weather_status()
-    data = json.loads(raw)
-    assert "path" in data or "exists" in data
+    # The handler takes no path: it resolves the weather root itself, so it must
+    # read the root the weather_db fixture pinned, not the default one under ~
+    # (where no weather.db exists, so "exists" would be False).
+    data = json.loads(resource_weather_status())
+    assert data["exists"] is True
+    assert Path(data["data_root"]) == (tmp_path / "wxroot").resolve()
+    assert Path(data["path"]) == weather_db

@@ -87,11 +87,17 @@ class TestSettings:
         assert s.coupon_apy is None
         assert s.coupon_verified_on is None
 
-    def test_data_root_default_is_outside_repo(self):
+    def test_data_root_default_is_outside_repo(self, monkeypatch):
+        """The default is ``<home>/quant_data/ibkr_ticks``: derived from the home
+        directory alone, so it is neither in the (OneDrive-synced) checkout nor
+        under %LOCALAPPDATA%. The home is pinned to a fixed fake path, so the
+        assertion is exact wherever the suite runs and whatever pytest's temp
+        directories look like."""
+        fake_home = Path(REPO_ROOT.anchor) / "fake-home"
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         root = make_settings().resolved_data_root
+        assert root == fake_home / "quant_data" / "ibkr_ticks"
         assert not root.is_relative_to(REPO_ROOT)
-        assert "onedrive" not in {part.lower() for part in root.parts}
-        assert root.name == "ibkr_ticks"
 
     def test_data_root_override(self, tmp_path):
         s = make_settings(data_root=str(tmp_path / "ticks"))
