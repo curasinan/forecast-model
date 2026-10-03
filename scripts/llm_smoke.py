@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import httpx
+from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -44,7 +45,11 @@ PROMPT = (
 
 
 def main(argv: list[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
-    settings = LocalLLMSettings()
+    try:
+        settings = LocalLLMSettings()
+    except ValidationError as exc:  # the settings hide their input, so the text is safe to print
+        print(f"FAIL: settings: {exc}", file=sys.stderr)
+        return 1
     print(f"base_url={settings.base_url} model={settings.model} effort={settings.reasoning_effort}")
     try:
         with LocalLLMClient(settings, transport=transport) as client:
@@ -68,7 +73,14 @@ def main(argv: list[str] | None = None, *, transport: httpx.BaseTransport | None
         f"{rate:.1f} tok/s, reasoning tokens {reply.usage.get('reasoning_tokens', 'n/a')}"
     )
     print("parsed:", reply.parsed)
-    missing = [k for k in SCHEMA["required"] if k not in (reply.parsed or {})]
+    # Not an object: a list or str would pass the `in` test below, a number would raise.
+    if not isinstance(reply.parsed, dict):
+        print(
+            f"FAIL: parsed reply is not a JSON object ({type(reply.parsed).__name__})",
+            file=sys.stderr,
+        )
+        return 1
+    missing = [k for k in SCHEMA["required"] if k not in reply.parsed]
     if missing:
         print(f"FAIL: missing keys {missing}", file=sys.stderr)
         return 1

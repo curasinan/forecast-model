@@ -21,6 +21,7 @@ from tests.test_llm.test_client import _completion
 
 MODEL = "qwen-test"
 COMPLETE = {"city": "Izmir", "year": 2024, "passed": True}
+SECRET = "sekrit-value-123"
 
 
 @pytest.fixture(autouse=True)
@@ -30,10 +31,11 @@ def _smoke_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
 
 
-def _server(served: list[str], reply: dict) -> tuple[httpx.MockTransport, list[httpx.Request]]:
+def _server(served: list[str], reply: object) -> tuple[httpx.MockTransport, list[httpx.Request]]:
     """A healthy stand-in: lists ``served`` under /models, answers any chat with ``reply``.
 
-    Returns the transport and the list of every request it received.
+    ``reply`` is any JSON value, the content the model "wrote". Returns the transport and the
+    list of every request it received.
     """
     seen: list[httpx.Request] = []
 
@@ -84,6 +86,28 @@ def test_smoke_exits_1_naming_the_missing_key_when_the_reply_lacks_a_required_on
     assert "OK" not in lines
 
 
+@pytest.mark.parametrize(
+    ("reply", "type_name"),
+    [(["city", "year", "passed"], "list"), (5, "int")],
+    ids=["list-of-the-key-names", "number"],
+)
+def test_smoke_exits_1_naming_the_type_when_the_reply_is_not_a_json_object(
+    reply, type_name, capsys
+):
+    """Kills: a list holding the key names passing as OK, a number crashing the key check with
+    a TypeError (the guard must come before it)."""
+    transport, _ = _server([MODEL], reply)
+
+    rc = main(transport=transport)
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert f"FAIL: parsed reply is not a JSON object ({type_name})" in captured.err
+    lines = captured.out.splitlines()
+    assert f"parsed: {reply}" in lines  # the operator sees what came back
+    assert "OK" not in lines
+
+
 def test_smoke_exits_1_naming_the_served_ids_when_the_model_is_not_served(capsys):
     """Kills: a prompt sent to a server that does not serve LLM_MODEL, a FAIL that hides the ids."""
     served = ["other-model", "another-model"]
@@ -98,3 +122,21 @@ def test_smoke_exits_1_naming_the_served_ids_when_the_model_is_not_served(capsys
         assert name in captured.err
     assert "OK" not in captured.out.splitlines()
     assert not [request for request in seen if request.method == "POST"]  # no prompt was sent
+
+
+def test_smoke_exits_1_with_a_settings_line_when_llm_model_is_unset(monkeypatch, capsys):
+    """Kills: the settings ValidationError escaping main() as a traceback, the api key echoed
+    in the message (it is printed, so it must stay the withheld-input text)."""
+    monkeypatch.delenv("LLM_MODEL")  # the one required field; the cwd holds no .env
+    monkeypatch.setenv("LLM_API_KEY", SECRET)
+    transport, seen = _server([MODEL], COMPLETE)
+
+    rc = main(transport=transport)  # an escaping ValidationError would fail the test right here
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert captured.err.startswith("FAIL: settings:")
+    assert "model" in captured.err  # the missing field is named
+    assert SECRET not in captured.err + captured.out
+    assert captured.out == ""  # no banner: nothing was configured
+    assert seen == []  # and no request left the process
