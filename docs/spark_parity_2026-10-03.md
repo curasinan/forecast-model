@@ -334,3 +334,48 @@ clean, and the live root is byte-identical before and after the run. Both machin
 Python 3.14.2 with numpy 2.4.2, scipy 1.17.1, pandas 3.0.1, pyarrow 25.0.0 (Windows AMD64 and
 Linux aarch64). The Zenbook copy is the runtime and is never deleted under Option B; this
 report is what "parity verified" means.
+
+## 10. Local LLM smoke (Task 10)
+
+The branch reaches the Spark by `git push spark spark-research-split` from the Zenbook (ruling
+R-A: the Spark's GitHub key is unusable from a non-interactive session, so the Spark never pulls).
+The Spark's `.env` holds the single line `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` (mode 600) and the
+`qwenflash` container reported `healthy`. Run at 2026-10-03 06:51 local at commit f11cf09, in
+`~/work/forecast-model`:
+```
+$ .venv/bin/python scripts/llm_smoke.py
+base_url=http://127.0.0.1:8000/v1 model=Qwen3.8-Flash-Next-NVFP4 effort=low
+served: ['Qwen3.8-Flash-Next-NVFP4']
+latency 6.5s, completion tokens 106, 16.4 tok/s, reasoning tokens 86
+parsed: {'city': 'Izmir', 'year': 2024, 'passed': True}
+OK
+smoke_exit=0
+
+$ LLM_LIVE=1 .venv/bin/python -m pytest tests/test_llm/test_live.py -q
+.                                                                        [100%]
+1 passed in 6.88s
+pytest_exit=0
+```
+A first run at 06:25 (commit 658399a) gave the same verdict: latency 7.5 s, 87 completion tokens
+of which 63 reasoning, 11.7 tok/s, live test 1 passed in 9.46 s.
+
+What the real server settled (design section 6 left these to the live run):
+- It accepts the `json_schema` response format and the top-level `reasoning_effort`; the
+  schema-constrained reply is exactly `{"city":"Izmir","year":2024}` with `finish_reason: stop`.
+- The reasoning text comes back under `message.reasoning`, not `message.reasoning_content`.
+  The client read only the latter, so `LLMReply.reasoning` was None against the real server
+  while every unit test passed on a hand-drawn fixture. Fixed in f11cf09: the client reads
+  `reasoning_content` with a fallback to `reasoning`, and two replies captured from the Spark
+  (a schema-constrained completion and the `/v1/models` listing) are committed byte-for-byte
+  under `tests/test_llm/fixtures/` and driven through `tests/test_llm/test_real_shapes.py`.
+  Probe through the client after the fix: `content='hello' reasoning_chars=72
+  usage={'prompt_tokens': 47, 'total_tokens': 68, 'completion_tokens': 21, 'reasoning_tokens': 17}`.
+- `usage.completion_tokens_details.reasoning_tokens` is present and surfaces as
+  `usage["reasoning_tokens"]`; `prompt_tokens_details` is null.
+- At `reasoning_effort=low` a yes/no schema answer costs about 20 completion tokens and the
+  extraction about 100, so the live test's `max_tokens=2048` is comfortable (ruling R-U); the
+  8192 default in the settings stays for real work.
+- 11.7-16.4 tok/s single-stream on these short replies, in line with the status note's 15.7.
+
+Unit coverage at f11cf09: `tests/test_llm` 132 passed + 1 skipped (the live test without
+`LLM_LIVE`), `tests/test_architecture` 22 passed.
