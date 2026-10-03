@@ -423,3 +423,14 @@ changed. Hashes cited in this file, in `docs/migration_report.md` and in
 `docs/history_rewrite_2026-10-02_sha_map.txt` maps each old hash to its new
 one. The real account identifiers live only in the operator's local,
 untracked `docs/local/` notes.
+
+## 10. Spark research mirror (2026-10)
+
+The research half of the repo also runs on the DGX Spark against a one-way
+mirror of `~/quant_data`; the trading runtime, every client id and every
+scheduled task stay on the Zenbook. Code reaches the Spark by
+`git push spark` from the Zenbook (no GitHub credential is used on the
+Spark). Parity is evidenced in the newest `docs/spark_parity_*.md`; the
+operator's view is `docs/spark_runbook.md`. The local vLLM model is
+reachable through `src/llm/` (config-driven model name) and is fenced out of
+the pricing/ordering path by `tests/test_architecture/test_llm_boundary.py`.

@@ -61,12 +61,14 @@ Quick facts:
   auto-incremented on collision, and a collision raises
   `ClientIdInUseError` instead of silently taking the next id.
 
-  | Role | clientId | Notes |
-  | --- | --- | --- |
-  | `live_trading` | 1 | order-submission role. `scripts\run_ibkr_paper.py` connects as this (any run NOT using `--simulate`), `read_only=False`, then refuses to proceed unless the connected account is paper (`scripts/run_ibkr_paper.py:156-163`). Despite the name, this is the role that has placed every real order so far -- all of them paper. |
-  | `data_collector` | 2 | the recorder; the ONLY sanctioned writer of ticks |
-  | `research` | 3 | ad-hoc notebooks/probes; read-only. Also `scripts/verify_ibkr_entitlements.py`'s `--client-id` default (`scripts/verify_ibkr_entitlements.py:594`). |
-  | `paper_sync` | 4 | `\IBKR\IBKR Paper Sync` (`scripts\sync_ibkr_paper.py`), read-only; daily reconciliation of resting GTC orders (section 1). |
+  | Role | clientId | Machine | Notes |
+  | --- | --- | --- | --- |
+  | `live_trading` | 1 | Zenbook | order-submission role. `scripts\run_ibkr_paper.py` connects as this (any run NOT using `--simulate`), `read_only=False`, then refuses to proceed unless the connected account is paper (`scripts/run_ibkr_paper.py:156-163`). Despite the name, this is the role that has placed every real order so far -- all of them paper. |
+  | `data_collector` | 2 | Zenbook | the recorder; the ONLY sanctioned writer of ticks |
+  | `research` | 3 | Zenbook | ad-hoc notebooks/probes; read-only. Also `scripts/verify_ibkr_entitlements.py`'s `--client-id` default (`scripts/verify_ibkr_entitlements.py:594`). |
+  | `paper_sync` | 4 | Zenbook | `\IBKR\IBKR Paper Sync` (`scripts\sync_ibkr_paper.py`), read-only; daily reconciliation of resting GTC orders (section 1). |
+
+  The DGX Spark holds no client id (docs/spark_runbook.md section 1).
 
 - Evidence: `src/venues/ibkr/clients.py` (`CLIENT_IDS`, `connect_ib`).
 - Date verified: 2026-08-16 (code review; collision path unit-tested with fakes); `paper_sync` role added since (Task 1.6/2.2).

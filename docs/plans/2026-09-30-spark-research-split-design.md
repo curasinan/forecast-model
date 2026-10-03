@@ -430,3 +430,27 @@ noise on a copy of the real snapshot. What that changed in this design:
   (invariant 4) with mode 600; the status note's "copy .env by scp" is read
   as that one-line file unless the account holder decides the keys should
   travel too.
+- **R13. The boundary test guards two more directories (2026-10-03).**
+  Section 6's list of guarded paths is superseded. Ruling R-Q extended the
+  `src.llm` boundary test to `src/math` and `src/models` (the sizing inputs
+  the guarded modules import: EV and Kelly, `EdgeSignal`), so the guarded
+  set is `climate/`, `src/trading/`, `src/venues/`, `src/edge/`,
+  `src/domain/`, `src/math/`, `src/models/` and `monitoring/`, plus
+  `scripts/run_ibkr_paper.py`, `scripts/sync_ibkr_paper.py`,
+  `scripts/record_ibkr_ticks.py` and `scripts/run_gtm_paper.py`. A literal
+  `REQUIRED_SCOPE` list in `tests/test_architecture/test_llm_boundary.py`
+  pins that set: widening the configuration needs no edit there, narrowing
+  it does, on purpose. `src/collectors` stays outside (ruling R-R):
+  collectors are where text-to-data processing may legitimately live, which
+  is the LLM's assigned role.
+- **R14. Real-server facts from the live run (2026-10-03).** Section 6's
+  `LLMReply.reasoning` "(from `reasoning_content`)" was wrong for the Spark:
+  its vLLM returns the reasoning text under `message.reasoning`, so the field
+  was None against the real server while every unit test passed on a
+  hand-drawn fixture. The client now reads `reasoning_content` with a
+  fallback to `reasoning`, and its unit tests include byte copies of two
+  captured replies (a schema-constrained completion and the `/v1/models`
+  listing) under `tests/test_llm/fixtures/`, driven through
+  `tests/test_llm/test_real_shapes.py`. The rule: fixtures of server replies
+  are captures, never hand-drawn, and one is replaced only by a new capture,
+  never edited by hand.
