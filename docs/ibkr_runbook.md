@@ -312,10 +312,15 @@ outage, and still coming back when it ends): a lost *recovery* message is sent
 again with the same `[DOWN -> OK] recovered after ...` text (if the system
 fails again before it gets through, the new `[OK -> ...]` alert replaces it).
 A channel that stays broken therefore leaves one `ALERT_FAILED` line per run
-in the log below.
-A missing or corrupt state file reads as "healthy, nothing alerted yet", so
-deleting it (or the first run after this change) re-announces an ongoing
-outage once as `[OK -> ...]`; it never swallows an alert.
+in the log below. The state is saved before each send (marked "not
+delivered") and again after it, so one failed write -- a Defender or OneDrive
+lock -- or a kill between the send and the save costs at most a duplicate
+message and cannot swallow the next alert. A missing or corrupt state file
+reads as "healthy, nothing alerted yet": an unhealthy run alerts again (so
+deleting the file, or the first run after this change, re-announces an
+ongoing outage once as `[OK -> ...]`), and a healthy run stays silent (so a
+lost file also drops the recovery message of an outage that was open when it
+was lost).
 
 `logs\ibkr_health.log` keeps one status line per unhealthy run
 (`<utc> <STATUS> <message>`) and now also one line per send attempt:
@@ -482,7 +487,7 @@ prices off this one number.
   (`src/venues/ibkr/recorder.py:193-196`, `SNAPSHOT_REFRESH_CMD` defined at
   `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
   age, informationally, as `snapshot_age_days=` on its OK message
-  (`scripts/check_ibkr_recorder.py:257-270,351-359`) -- it is never a
+  (`scripts/check_ibkr_recorder.py:262-275,356-364`) -- it is never a
   failure axis, so nothing pages for this; the operator has to notice it.
 - Evidence: as cited above (code review).
 - Date verified: 2026-08-27.

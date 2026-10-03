@@ -1309,6 +1309,11 @@ def test_state_write_failure_never_stops_the_alert_or_changes_the_exit_code(
     err = capsys.readouterr().err
     assert "alert state write failed (OSError)" in err
     assert "disk full" not in err  # class name only
+    # What is true when the state file cannot be written for a while: the stored
+    # state falls behind, so alerts can repeat -- or be missed (a change back to
+    # the pair that is still stored goes unannounced). The note says so.
+    assert "alerts may repeat or be missed until the state file can be written again" in err
+    assert "the next run may repeat this alert" not in err
 
 
 def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path, sent):
@@ -1322,6 +1327,152 @@ def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path
 
     assert len(sent.messages) == 2
     assert all(message.startswith("[OK -> STALE]") for message in sent.messages)
+
+
+# -- one failed write, or a kill, must never swallow the NEXT alert ---------------
+#
+# The state is saved twice per alert: before the send (the successor state, the
+# attempt marked "not delivered") and after it (stamped with the real outcome).
+# Whatever happens to either write, or to the process in between, the stored
+# state still says "not confirmed", so the next run says it again or announces
+# the next change. Saving only after the send let a failed write (or a kill)
+# leave the OLD pair on disk: a one-run outage whose transition was delivered
+# then never got its "recovered" message.
+
+
+def _fail_one_save(monkeypatch, sent, *, when, exc=PermissionError):
+    """Make the next ``save_alert_state`` call that happens ``when`` -- "before_send"
+    or "after_send", relative to the messages ``sent`` has recorded so far --
+    raise ``exc`` once (a transient lock); every other call writes for real.
+    Returns the list that records the failure, so a test can prove it happened."""
+    real = probe.save_alert_state
+    baseline = len(sent.messages)
+    failures: list[str] = []
+
+    def _save(path, state):
+        sent_yet = len(sent.messages) > baseline
+        if not failures and sent_yet == (when == "after_send"):
+            failures.append(when)
+            raise exc("file is locked (simulated)")
+        return real(path, state)
+
+    monkeypatch.setattr(probe, "save_alert_state", _save)
+    return failures
+
+
+def _prefixes(sent) -> list[str]:
+    return [message.split("]")[0] + "]" for message in sent.messages]
+
+
+def test_a_failed_save_after_a_delivered_transition_cannot_swallow_the_recovery(
+    tmp_path, sent, monkeypatch
+):
+    """The review's scenario: [OK -> STALE] is delivered, the write after it hits
+    a lock, and the outage is over by the next run."""
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(OK_PAIR)  # healthy, everything delivered so far
+    failures = _fail_one_save(monkeypatch, sent, when="after_send")
+
+    assert run.run("--quiet") == 1
+    assert failures == ["after_send"]
+    assert _prefixes(sent) == ["[OK -> STALE]"]
+
+    run.make(recorder="OK")  # a one-run blip: healthy again
+    assert run.run("--quiet") == 0
+
+    assert _prefixes(sent) == ["[OK -> STALE]", "[STALE -> OK]"]
+    assert sent.messages[-1].startswith("[STALE -> OK] recovered after")
+    assert run.stored()["last_alert_ok"] is True
+
+
+def test_a_kill_between_the_send_and_the_save_cannot_swallow_the_recovery(
+    tmp_path, sent, monkeypatch
+):
+    """The task has a time cap: the process can die after the message went out
+    and before the state was stamped."""
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(OK_PAIR)
+    failures = _fail_one_save(monkeypatch, sent, when="after_send", exc=KeyboardInterrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        run.run("--quiet")
+    assert failures == ["after_send"]
+    assert _prefixes(sent) == ["[OK -> STALE]"]
+
+    run.make(recorder="OK")
+    assert run.run("--quiet") == 0
+
+    assert sent.messages[-1].startswith("[STALE -> OK] recovered after")
+
+
+def test_a_failed_save_before_the_send_changes_nothing_when_the_save_after_it_works(
+    tmp_path, sent, monkeypatch, capsys
+):
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(OK_PAIR)
+    failures = _fail_one_save(monkeypatch, sent, when="before_send")
+
+    assert run.run() == 1  # NOT quiet: the note is visible
+
+    assert failures == ["before_send"]
+    assert _prefixes(sent) == ["[OK -> STALE]"]  # the alert still went out
+    stored = run.stored()
+    assert (stored["recorder_status"], stored["last_alert_ok"]) == ("STALE", True)
+    assert "alert state write failed (PermissionError)" in capsys.readouterr().err
+    assert run.run("--quiet") == 1  # as before: an unchanged outage inside 24 h is silent
+    assert len(sent.messages) == 1
+
+
+def test_a_failed_save_after_a_change_of_kind_cannot_hide_the_change_back(
+    tmp_path, sent, monkeypatch
+):
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(("STALE", "OK"))  # an announced STALE outage
+    run.make(recorder="STALE", sync="SYNC_STALE")
+    failures = _fail_one_save(monkeypatch, sent, when="after_send")
+
+    assert run.run("--quiet") == 1  # [STALE -> STALE+SYNC_STALE] delivered, the save fails
+    assert failures == ["after_send"]
+
+    run.make(recorder="STALE", sync="OK")  # the sync axis recovers
+    assert run.run("--quiet") == 1
+
+    assert _prefixes(sent) == ["[STALE -> STALE+SYNC_STALE]", "[STALE+SYNC_STALE -> STALE]"]
+
+
+def test_the_successor_state_is_on_disk_before_the_send_marked_as_not_delivered(
+    tmp_path, monkeypatch
+):
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(OK_PAIR)
+    seen: list[dict] = []
+
+    def _spy(message, method=None):
+        seen.append(run.stored())  # what a kill at this very moment would leave behind
+        return True
+
+    monkeypatch.setattr(probe, "send_alert", _spy)
+
+    assert run.run("--quiet") == 1
+
+    ((at_send,),) = [seen]
+    assert (at_send["recorder_status"], at_send["last_alert_ok"]) == ("STALE", False)
+    assert at_send["since_utc"] == at_send["last_alert_utc"] == at_send["outage_since_utc"]
+    assert run.stored()["last_alert_ok"] is True  # stamped with the real outcome afterwards
+
+
+def test_a_kill_before_the_send_completes_is_retried_by_the_next_run(tmp_path, sent):
+    run = _Run(tmp_path).make(recorder="STALE")
+    sent.outcome = KeyboardInterrupt()  # killed during the send: it may or may not have gone out
+
+    with pytest.raises(KeyboardInterrupt):
+        run.run("--quiet")
+    sent.outcome = True
+    assert run.run("--quiet") == 1
+
+    (line,) = run.alert_lines()  # the killed run never reached its log line
+    assert SENT_LINE.match(line)["kind"] == "retry"
+    assert run.stored()["last_alert_ok"] is True
 
 
 def test_state_read_failure_never_stops_the_alert(tmp_path, sent, monkeypatch):

@@ -67,13 +67,18 @@ when, and only when:
                 ALERT_FAILED line per run in the durable log.
 
 An unchanged healthy run sends nothing and writes nothing, unless its last
-attempt failed (the retry above). A missing, unreadable or corrupt state file
-reads as "healthy, nothing alerted yet": an unhealthy run then alerts and a
-healthy run stays silent -- the failure mode is a repeated alert, never a
-missing one. A failure writing the state file or the log never changes the
-exit code or stops the alert attempt. All of this follows from
-decide_alert(), a pure function of (previous state, current pair, now); a run
-reads the clock once.
+attempt failed (the retry above). The state is saved BEFORE each send (the
+attempt marked "not delivered") and again after it with the real outcome, so
+one failed write, or a kill between the send and the save, costs at most a
+duplicate message and cannot swallow the next alert; only a state file that
+can never be written lets the stored state fall behind for good (alerts then
+repeat, and a change back to the pair still stored goes unannounced). A
+missing, unreadable or corrupt file reads as "healthy, nothing alerted yet":
+an unhealthy run alerts again and a healthy run stays silent, so a lost file
+also drops the recovery message of an outage that was open when it was lost.
+A failure writing the state file or the log never changes the exit code or
+stops the alert attempt. All of this follows from decide_alert(), a pure
+function of (previous state, current pair, now); a run reads the clock once.
 
 Durable sink (H3): every non-OK combined result appends one line
 ("<utc-iso> <STATUS> <message>") to --health-log-path (default
@@ -726,9 +731,10 @@ def load_alert_state(path: Path | str) -> AlertState:
     """The persisted alert state, or ``NO_ALERT_STATE``. Never raises.
 
     A missing, unreadable or corrupt file all read as "healthy, nothing
-    alerted yet": the next unhealthy run alerts, the next healthy run stays
-    silent. The cost of a bad file is at most one repeated alert, never a
-    swallowed one and never a crash of the probe.
+    alerted yet": the next unhealthy run alerts again, the next healthy run
+    stays silent. So a bad file costs a repeated alert -- and drops the
+    recovery message of an outage that was open (or whose recovery message was
+    pending) when the file was lost. It never crashes the probe.
     """
     try:
         with Path(path).open("r", encoding="utf-8") as f:
@@ -806,6 +812,25 @@ def _deliver_alert(text: str, *, quiet: bool) -> AlertOutcome:
     return AlertOutcome(False, _NOT_DELIVERED, method)
 
 
+def _save_attempt(
+    args: argparse.Namespace,
+    state_path: Path,
+    state: AlertState,
+    now: datetime,
+    delivered: bool,
+) -> None:
+    """Persist ``state`` stamped with an attempt that was (not) delivered.
+    Best-effort: a failed write prints a note (exception CLASS NAME only) and
+    never raises."""
+    try:
+        save_alert_state(state_path, record_alert_attempt(state, now, delivered))
+    except Exception as exc:  # noqa: BLE001 - exit code must survive a state-file failure
+        if not args.quiet:
+            print(f"alert state write failed ({type(exc).__name__}); "
+                  "alerts may repeat or be missed until the state file can be written again",
+                  file=sys.stderr)
+
+
 def _alert_on_change(
     args: argparse.Namespace,
     pair: tuple[str, str],
@@ -817,11 +842,21 @@ def _alert_on_change(
     lasts, retry what did not get through (see ``decide_alert``), and record
     the attempt durably and in the alert state file.
 
+    The successor state is saved BEFORE the send, with the attempt marked "not
+    delivered", and stamped with the real outcome AFTER it. So whatever goes
+    wrong around the send -- one failed write (a Defender or OneDrive lock), or
+    a kill between the send and the save (the task has a time cap) -- the stored
+    state still says "not confirmed": the next run says it again, or announces
+    the next change. One failure costs at most a duplicate message and cannot
+    swallow the next alert; saving only after the send could, because the OLD
+    pair stayed on disk. Only a state file that can never be written lets the
+    stored state fall behind for good: alerts then repeat, and a change back to
+    the pair that is still stored goes unannounced.
+
     Every step is independently best-effort, like the status-line sink in
     ``main``: a state-file problem must never stop the alert, and a failing
-    log or state write must never change the exit code. The worst a broken
-    state file costs is a repeated alert. Notes go to stderr by exception CLASS
-    NAME only.
+    log or state write must never change the exit code. Notes go to stderr by
+    exception CLASS NAME only.
     """
     state_path = Path(args.alert_state_path)
     try:
@@ -832,6 +867,7 @@ def _alert_on_change(
     if decision.kind is None:
         return
 
+    _save_attempt(args, state_path, decision.state, now, delivered=False)
     outcome = _deliver_alert(f"{decision.prefix} {message}", quiet=args.quiet)
     try:
         _append_alert_log(args.health_log_path, decision.kind, status, outcome, now)
@@ -839,12 +875,7 @@ def _alert_on_change(
         if not args.quiet:
             print(f"alert log write failed ({type(exc).__name__}); "
                   "the send outcome may be unrecorded", file=sys.stderr)
-    try:
-        save_alert_state(state_path, record_alert_attempt(decision.state, now, outcome.delivered))
-    except Exception as exc:  # noqa: BLE001 - exit code must survive a state-file failure
-        if not args.quiet:
-            print(f"alert state write failed ({type(exc).__name__}); "
-                  "the next run may repeat this alert", file=sys.stderr)
+    _save_attempt(args, state_path, decision.state, now, delivered=outcome.delivered)
 
 
 def _describe_test_alert(outcome: AlertOutcome) -> str:
