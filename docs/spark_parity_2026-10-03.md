@@ -407,3 +407,43 @@ plus the gated live test, the one skip), 23 more in `tests/test_architecture/tes
 and 31 more in `tests/test_analysis` (the `--differ` gate and `subtree`). The warning is the
 pre-existing one of section 8. The ruff baseline total is 112 on both machines and every file
 this branch touches lints clean on both.
+
+## 12. After landing the side branches
+
+Two finished side branches were merged into this branch before it went to `main`, each after
+its own review: the ruff baseline cleanup (7 commits, every hunk shown behaviour-neutral by
+AST diff, consumer scans and base-versus-head differential runs; merge 026b4a6) and the
+test-home isolation (commit 7b052c5 plus two review-fix commits; merge 97012f4). They change
+two things the sections above state as of their own dates:
+- The ruff total is 0 on both machines. Sections 1, 8 and 11 record the 112-finding baseline
+  that held when they were written; the lint gate is now a clean `ruff check .`.
+- The suite no longer needs an outer throwaway home (ruling R-C). `tests/conftest.py`
+  redirects the home at `pytest_configure`, and the guard in
+  `tests/test_architecture/test_no_home_writes.py`, proven end to end by child sessions in
+  `test_home_guard_end_to_end.py`, fails the run if anything appears under the redirected
+  `quant_data`. The runs below still used an outer throwaway home, to show it stays empty.
+
+Final tree d5045fc, both machines at the same SHA, 2026-10-03 14:00 local.
+
+Zenbook:
+```
+1252 passed, 1 skipped, 1 warning in 49.88s
+pytest_exit=0
+outer home entries: 0
+All checks passed!   (ruff check . --no-cache)
+```
+Spark:
+```
+1252 passed, 1 skipped, 1 warning in 31.43s
+pytest_exit=0
+outer home entries: 0
+All checks passed!   (ruff check . --no-cache)
+```
+The 1243 of section 11 plus 9: three tests from the isolation commit and six from its review
+fixes (five child-session cases, one user-site test).
+
+Gateway reachability, checked the same day with the Gateway running (runbook, section 1): the
+API socket listens on `[::]:4002`, Windows Firewall holds inbound Block rules for IB Gateway on
+the Public profile with no Allow rule, the Gateway's `TrustedIPs` is `127.0.0.1`, and a TCP
+connect from the Spark to the Zenbook's 4002 timed out (`rc=124`). Design invariant 1's "bound
+to localhost" is corrected in amendment R15.

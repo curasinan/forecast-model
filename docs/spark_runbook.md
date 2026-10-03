@@ -122,11 +122,15 @@ Never run on the Spark (all under `scripts/`):
   batch first, then stop the vLLM service on the Spark:
   `cd ~/stack && docker compose stop qwenflash`.
 - Tests, from the Zenbook:
-  `"$SSH" spark 'cd ~/work/forecast-model && HOME=$(mktemp -d) .venv/bin/python -m pytest -q'`.
-  The throwaway `HOME` matters: parts of the suite write under
-  `~/quant_data/polymarket_weather` of whatever home they see, which on the
-  Spark is the mirror root (the Zenbook runs use a throwaway `USERPROFILE` /
-  `HOME` for the same reason; parity report, section 1).
+  `"$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python -m pytest -q'`.
+  The suite isolates the home itself: `tests/conftest.py` points the home at
+  a throwaway directory before anything is collected, and
+  `tests/test_architecture/test_no_home_writes.py` fails the run if anything
+  appears under that directory's `quant_data`. Before 2026-10-03 parts of the
+  suite wrote under `~/quant_data/polymarket_weather` of whatever home they
+  saw, which on the Spark is the mirror root, so every run needed an outer
+  `HOME=$(mktemp -d)`; the parity report's runs were made that way (its
+  section 12 records the change).
 
 ## 3. Pushing data (Zenbook -> Spark, never back)
 
