@@ -17,7 +17,7 @@ Quick facts:
 | Data root | `~/quant_data/ibkr_ticks` (outside OneDrive AND outside AppData -- see MIGRATION_CHECKPOINT section 3) |
 | Heartbeat | `~/quant_data/ibkr_ticks/state/recorder_state.json` |
 | Recorder log | `logs\ibkr_recorder.log` (structured), `logs\ibkr_recorder_task.log` (task launcher capture) |
-| Scheduled tasks | `\IBKR\IBKR Recorder` (logon + 5-min keep-alive, clientId 2), `\IBKR\IBKR Recorder Health` (hourly via `run_ibkr_health.ps1`), `\IBKR\IBKR Paper Sync` (daily 17:30 via `run_ibkr_sync.ps1`, clientId 4) -- all three registered by `register_ibkr_tasks.ps1` (section 1). Elsewhere on this machine, outside `\IBKR\` and outside this runbook's scope: `\Climate\Climate Labels` (daily 16:30) and `\Polymarket\backup_db` (daily 21:00, kept deliberately even though the Polymarket runtime itself is gated off). |
+| Scheduled tasks | `\IBKR\IBKR Recorder` (logon + 5-min keep-alive, clientId 2), `\IBKR\IBKR Recorder Health` (hourly via `run_ibkr_health.ps1`; alerts on health state changes, not on every unhealthy run -- section 7), `\IBKR\IBKR Paper Sync` (daily 17:30 via `run_ibkr_sync.ps1`, clientId 4) -- all three registered by `register_ibkr_tasks.ps1` (section 1). Elsewhere on this machine, outside `\IBKR\` and outside this runbook's scope: `\Climate\Climate Labels` (daily 16:30) and `\Polymarket\backup_db` (daily 21:00, kept deliberately even though the Polymarket runtime itself is gated off). |
 
 ## 1. What runs where
 
@@ -39,7 +39,9 @@ Quick facts:
   a bare `python.exe` action with no log-rotation/launch-marker wrapper).
   The launcher tees `python -u
   scripts\check_ibkr_recorder.py` to `logs\ibkr_health_task.log`; the probe
-  alerts via Telegram and appends its own durable line to
+  alerts via Telegram when the health state CHANGES (plus one reminder per
+  24 h of an unchanged outage, and a retry after a failed send) -- not on
+  every unhealthy run -- and appends its own durable lines to
   `logs\ibkr_health.log` (section 7, section 10.3).
 - `\IBKR\IBKR Paper Sync` runs `scripts\scheduling\run_ibkr_sync.ps1` daily
   at 17:30, sets `IBKR_PORT=4002` / `IBKR_TRADING_MODE=paper` (only if
@@ -240,7 +242,14 @@ Three layers, cheapest first:
 2. Parquet: today's UTC `date=` directory should gain roughly 3 files per
    hour (one per 20-min sweep).
 3. `python scripts\check_ibkr_recorder.py` -- the same check the hourly
-   task runs; run it by hand to see exactly what the alerting sees.
+   task runs; run it by hand to see exactly what the alerting sees. A hand
+   run is a REAL run of the alert state machine (section 7): it can send a
+   transition or recovery message and it updates the alert state, so the next
+   hourly run stays quiet about it. Run it from a shell that has the three
+   alert variables (section 10.3; HKCU variables reach only shells opened
+   after they were set): without them the alert degrades to `log_only`, which
+   counts as delivered, and the Telegram message that run would have sent is
+   never sent. To test the alert channel use `--test-alert` instead.
 
 One-liners (from the repo root):
 
@@ -280,6 +289,37 @@ thresholds):
   keep-alive ticks and has not caught up yet.
 - DOWN: no readable heartbeat at all, or the check itself cannot run --
   collection is definitely not happening.
+
+**When a message is sent (since 2026-10-03).** The probe used to message you
+on every unhealthy run -- about 15 identical DOWN messages a day during the
+2026-09-29..10-03 outage -- and said nothing on recovery. It now alerts on
+state changes. The state is the pair (recorder status, sync status), kept in
+`logs\ibkr_health_alert_state.json` (statuses, UTC times and one flag; never a
+token or chat id). Each message starts with a short prefix:
+
+| Prefix | Meaning |
+| --- | --- |
+| `[OK -> DOWN]`, `[DOWN+SYNC_STALE -> SYNC_STALE]` | the pair changed: an outage began or changed kind |
+| `[DOWN -> OK] recovered after 4d 12h:` | the pair is all-OK again (the recovery message) |
+| `[still DOWN, 2d 3h]` | unchanged and still unhealthy, sent either as the daily reminder (24 h after the last DELIVERED message) or as the retry after a send that failed; the duration runs from the start of the outage |
+
+An unchanged healthy run sends nothing. A failed send is retried on every
+hourly run until one gets through (the network is often down exactly during an
+outage); a failed *recovery* message is not retried, because the state is
+healthy by then -- if you never saw one, look for `ALERT_FAILED` in the log
+below. A missing or corrupt state file reads as "healthy, nothing alerted yet",
+so deleting it (or the first run after this change) re-announces an ongoing
+outage once as `[OK -> ...]`; it never swallows an alert.
+
+`logs\ibkr_health.log` keeps one status line per unhealthy run
+(`<utc> <STATUS> <message>`) and now also one line per send attempt:
+`<utc> ALERT_SENT <kind> <STATUS>` or
+`<utc> ALERT_FAILED <kind> <STATUS> <reason>`, with kind `transition`,
+`reminder`, `retry` or `test`, and reason a fixed phrase or an exception class
+name (never exception text, which can quote the bot token). A recovery appends
+only its ALERT line. So a successful send is no longer invisible, and
+`Select-String ALERT_ logs\ibkr_health.log` shows every message the probe
+tried to send.
 
 Triage in this order; each layer depends on the one above it, so fix the
 first broken layer and re-check before touching the next:
@@ -434,7 +474,7 @@ prices off this one number.
   (`src/venues/ibkr/recorder.py:193-196`, `SNAPSHOT_REFRESH_CMD` defined at
   `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
   age, informationally, as `snapshot_age_days=` on its OK message
-  (`scripts/check_ibkr_recorder.py:201-214,295-303`) -- it is never a
+  (`scripts/check_ibkr_recorder.py:246-259,340-348`) -- it is never a
   failure axis, so nothing pages for this; the operator has to notice it.
 - Evidence: as cited above (code review).
 - Date verified: 2026-08-27.
@@ -469,22 +509,30 @@ need to confirm the CURRENT state rather than trusting this note.
 How:
 
 ```powershell
-python scripts/check_ibkr_recorder.py --state-path C:\nonexistent.json
+python scripts/check_ibkr_recorder.py --test-alert
 ```
 
-This hits the "state file missing" branch
-(`scripts/check_ibkr_recorder.py:236-240`), which returns `CRITICAL`. Any
-non-`OK` status triggers both alert channels: the durable log sink
-(`_append_health_log`, appends to `logs\ibkr_health.log` by default --
-`scripts/check_ibkr_recorder.py:79,397-416`) and `send_alert`
-(`monitoring/heartbeat.py:79-113`, imported at
-`scripts/check_ibkr_recorder.py:74`). If `ALERT_METHOD` is unset (a fresh
-machine, or these vars cleared), `send_alert` silently degrades to
-`log_only` (`monitoring/heartbeat.py:83,112-113`) -- only the
-`logs\ibkr_health.log` line appears, which is expected in that state, not a
-failure; set the three HKCU vars below first, then re-run the test and
-expect both. When the vars are set, expect **both**: a new line in
-`logs\ibkr_health.log`, and a Telegram message.
+This sends one clearly labelled message (`TEST ibkr health alert, sent <utc>
+-- no action needed`) through the same `send_alert` path a real alert takes
+(`_run_test_alert` in `scripts/check_ibkr_recorder.py`, which calls
+`send_alert` in `monitoring/heartbeat.py`), appends `ALERT_SENT test -` (or
+`ALERT_FAILED test - <reason>`) to `logs\ibkr_health.log`, prints `test alert
+delivered` or `test alert NOT delivered (<reason>)`, and exits 0 or 1. It runs
+no health check and never reads or writes `logs\ibkr_health_alert_state.json`,
+so it is safe at any time, mid-outage included: no phantom transition, no
+reset reminder clock. When the three vars are set, expect **both**: a new
+`ALERT_SENT test -` line in `logs\ibkr_health.log`, and a Telegram message.
+If `ALERT_METHOD` is unset (a fresh machine, or these vars cleared),
+`send_alert` degrades to `log_only`: the test still exits 0 and logs
+`ALERT_SENT` (that method's "delivery" is its log line, which appears on
+stderr), but nothing reaches the phone. That is expected in that state, and
+it is NOT proof the Telegram path works; set the three HKCU vars below first,
+then re-run and expect the message.
+
+Do not use the old recipe (`--state-path C:\nonexistent.json`) as an alert
+test any more: it is a real unhealthy run, so it drives the alert state -- a
+`[OK -> CRITICAL]` message now and a "recovered" message on the next hourly
+run.
 
 If neither arrives, re-check the user-level environment variables
 `ALERT_METHOD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` -- set with

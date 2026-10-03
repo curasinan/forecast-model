@@ -64,14 +64,30 @@ def _argv(data_root: Path, *, extra: list[str] | None = None,
         "--events-path", str(data_root / "ibkr_events.jsonl"),
         "--sync-runs-path", str(data_root / "paper" / "ibkr_sync_runs.jsonl"),
         "--health-log-path", str(health_log or (data_root / "ibkr_health.log")),
+        # Never the real logs/ibkr_health_alert_state.json: every run writes it.
+        "--alert-state-path", str(data_root / "ibkr_health_alert_state.json"),
         "--quiet",
     ] + (extra or [])
 
 
+def _status_lines(health_log: Path) -> list[str]:
+    """The durable log's per-run status lines. Each send attempt also appends
+    an ALERT_SENT / ALERT_FAILED line (tests/test_monitoring/
+    test_health_alert_transitions.py pins those); this file pins the sink."""
+    lines = health_log.read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if " ALERT_" not in line]
+
+
 @pytest.fixture
 def alerts(monkeypatch) -> list[str]:
+    """Record send_alert calls; answers True like a delivered alert."""
     calls: list[str] = []
-    monkeypatch.setattr(probe, "send_alert", lambda message, method=None: calls.append(message))
+
+    def _record(message, method=None):
+        calls.append(message)
+        return True
+
+    monkeypatch.setattr(probe, "send_alert", _record)
     return calls
 
 
@@ -80,7 +96,7 @@ def alerts(monkeypatch) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def test_stale_appends_exactly_one_line_to_health_log(tmp_path, alerts):
+def test_stale_appends_exactly_one_status_line_to_health_log(tmp_path, alerts):
     _write_state(tmp_path, age_minutes=120)  # STALE (default threshold 60 min)
     _healthy_sync_runs(tmp_path)
     health_log = tmp_path / "ibkr_health.log"
@@ -89,13 +105,16 @@ def test_stale_appends_exactly_one_line_to_health_log(tmp_path, alerts):
 
     assert rc == 1
     assert health_log.exists()
-    lines = health_log.read_text(encoding="utf-8").splitlines()
+    lines = _status_lines(health_log)
     assert len(lines) == 1
     ts, status, rest = lines[0].split(" ", 2)
     assert status == "STALE"
     assert "STALE" in rest
     # Timestamp parses and is UTC-ISO.
     datetime.fromisoformat(ts)
+    # Beside it, the one alert attempt of this run (first unhealthy run ->
+    # transition alert) left its own line.
+    assert len(health_log.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_ok_appends_nothing_to_health_log(tmp_path, alerts):
@@ -110,8 +129,9 @@ def test_ok_appends_nothing_to_health_log(tmp_path, alerts):
     assert not health_log.exists()
 
 
-def test_two_consecutive_failures_append_two_lines(tmp_path, alerts):
-    """The sink accumulates -- it is a durable log, not a single-slot marker."""
+def test_two_consecutive_failures_append_two_status_lines(tmp_path, alerts):
+    """The sink accumulates -- it is a durable log, not a single-slot marker --
+    even though the second run of an unchanged outage sends no second alert."""
     _write_state(tmp_path, age_minutes=120)
     _healthy_sync_runs(tmp_path)
     health_log = tmp_path / "ibkr_health.log"
@@ -119,8 +139,8 @@ def test_two_consecutive_failures_append_two_lines(tmp_path, alerts):
     probe.main(_argv(tmp_path, health_log=health_log))
     probe.main(_argv(tmp_path, health_log=health_log))
 
-    lines = health_log.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
+    assert len(_status_lines(health_log)) == 2
+    assert len(alerts) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +170,7 @@ def test_sink_raising_does_not_prevent_send_alert(tmp_path, alerts, monkeypatch,
         "--events-path", str(tmp_path / "ibkr_events.jsonl"),
         "--sync-runs-path", str(tmp_path / "paper" / "ibkr_sync_runs.jsonl"),
         "--health-log-path", str(tmp_path / "ibkr_health.log"),
+        "--alert-state-path", str(tmp_path / "ibkr_health_alert_state.json"),
     ]
 
     rc = probe.main(argv)
@@ -177,7 +198,7 @@ def test_send_alert_raising_still_writes_sink_line(tmp_path, monkeypatch):
 
     assert rc == 1  # unhealthy exit preserved, no exception escapes
     assert health_log.exists()
-    lines = health_log.read_text(encoding="utf-8").splitlines()
+    lines = _status_lines(health_log)
     assert len(lines) == 1
     _, status, rest = lines[0].split(" ", 2)
     assert status == "STALE"
@@ -351,10 +372,12 @@ def test_both_axes_failing_recorder_leads_message_mentions_both(tmp_path, alerts
     message = alerts[0]
     assert "STALE" in message
     assert "SYNC_STALE" in message
-    # Recorder status leads (comes first) in the combined message.
-    assert message.index("ibkr recorder STALE") < message.index("SYNC_STALE")
+    # Recorder status leads (comes first) in the combined message. (Anchored on
+    # the sync axis's own sentence: the alert prefix, "[OK -> STALE+SYNC_STALE]",
+    # names both failing axes ahead of the message.)
+    assert message.index("ibkr recorder STALE") < message.index("ibkr paper sync SYNC_STALE")
     # The durable sink's status field is the recorder status, not SYNC_STALE.
-    line = health_log.read_text(encoding="utf-8").strip()
+    (line,) = _status_lines(health_log)
     _, status, _ = line.split(" ", 2)
     assert status == "STALE"
 

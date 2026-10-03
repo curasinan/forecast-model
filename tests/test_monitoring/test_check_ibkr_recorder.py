@@ -69,15 +69,23 @@ def _argv(state: Path, events: Path, extra: list[str] | None = None) -> list[str
         "--events-path", str(events),
         "--sync-runs-path", str(sync_runs),
         "--health-log-path", str(data_root / "ibkr_health.log"),
+        # Never the real logs/ibkr_health_alert_state.json: every run writes it.
+        "--alert-state-path", str(data_root / "ibkr_health_alert_state.json"),
     ]
     return argv + (extra or [])
 
 
 @pytest.fixture
 def alerts(monkeypatch) -> list[str]:
-    """Record send_alert calls made by the probe module."""
+    """Record send_alert calls made by the probe module. Answers True like the
+    real send_alert does for a delivered alert."""
     calls: list[str] = []
-    monkeypatch.setattr(probe, "send_alert", lambda message, method=None: calls.append(message))
+
+    def _record(message, method=None):
+        calls.append(message)
+        return True
+
+    monkeypatch.setattr(probe, "send_alert", _record)
     return calls
 
 

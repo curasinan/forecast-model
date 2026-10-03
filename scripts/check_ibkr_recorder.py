@@ -10,9 +10,7 @@ seconds.
 
 Two independent axes are checked and combined into one status/message:
 
-Recorder-heartbeat axis (the message is a single ASCII line; every non-OK
-status is also dispatched through monitoring.heartbeat.send_alert, which
-honors the ALERT_METHOD / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars):
+Recorder-heartbeat axis (the message is a single ASCII line):
 
     OK        exit 0  heartbeat fresh, data flow healthy; reports age,
                        rows/universe, today's parquet count, and the
@@ -41,13 +39,55 @@ Recorder-axis statuses (CRITICAL/DOWN/STALE/DEGRADED) outrank SYNC_STALE in
 the combined status, but ANY failing axis exits 1, and when both axes fail
 the message mentions both.
 
-Durable sink (H3): every non-OK combined result also appends one line
+Alerting -- on state changes, not on every unhealthy run (2026-10-03: the
+2026-09-29..10-03 outage produced ~15 identical DOWN messages a day until the
+operator stopped reading them). The alert state is the pair
+(recorder_status, sync_status), remembered between runs in --alert-state-path
+(default logs/ibkr_health_alert_state.json; written atomically; statuses, UTC
+timestamps and one bool only -- never a token, a chat id or any environment
+value). A run sends one alert through monitoring.heartbeat.send_alert (which
+honors the ALERT_METHOD / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars)
+when, and only when:
+
+    transition  the pair differs from the stored one: an outage starts,
+                recovers or changes kind. "[OK -> DOWN] ...",
+                "[DOWN+SYNC_STALE -> SYNC_STALE] ...", and for a recovery
+                "[DOWN -> OK] recovered after 4d 12h: ..."
+    reminder    the pair is unchanged and still unhealthy, and the last
+                DELIVERED alert is at least 24 hours old.
+                "[still DOWN, 2d 3h] ..." (time since the outage began)
+    retry       the pair is unchanged and unhealthy, and the previous send
+                attempt was not delivered: tried again on this run whatever
+                its age, because the network is often down exactly during an
+                outage
+
+An unchanged healthy run sends nothing and writes nothing. A missing,
+unreadable or corrupt state file reads as "healthy, nothing alerted yet": an
+unhealthy run then alerts and a healthy run stays silent -- the failure mode
+is a repeated alert, never a missing one. A failure writing the state file or
+the log never changes the exit code or stops the alert attempt. All of this
+follows from decide_alert(), a pure function of (previous state, current
+pair, now); a run reads the clock once.
+
+Durable sink (H3): every non-OK combined result appends one line
 ("<utc-iso> <STATUS> <message>") to --health-log-path (default
 logs/ibkr_health.log) via a direct file append independent of logging
 configuration -- a handlerless logger silently dropping the alert to a
-discarded stderr must never be the only trace a failure left behind. OK
-results append nothing. The token used by send_alert's Telegram path is
-never written to this file or to any log line (see monitoring.heartbeat).
+discarded stderr must never be the only trace a failure left behind. A
+healthy result appends no such line. In addition every send attempt appends
+one line, "<utc-iso> ALERT_SENT <kind> <STATUS>" or "<utc-iso> ALERT_FAILED
+<kind> <STATUS> <reason>" (kind: transition | reminder | retry | test;
+reason: a fixed phrase or an exception CLASS NAME, never exception text), so
+a successful send leaves a trace too, and a recovery -- the one healthy run
+that sends -- is recorded. The token used by send_alert's Telegram path is
+never written to this file, to the alert state file or to any log line (see
+monitoring.heartbeat).
+
+--test-alert sends one clearly labelled test message through the same
+send_alert path, appends its ALERT_SENT / ALERT_FAILED line (kind test),
+prints the outcome and exits 0 if it was delivered, 1 if not. It runs no
+health check and neither reads nor writes the alert state file, so a test
+never disturbs a live outage's bookkeeping.
 
 Motivating incident (2026-08-16): Gateway's nightly auto-logoff silently
 stalled collection for 15 hours while the recorder retried every 60s. A
@@ -57,6 +97,7 @@ Usage:
     python scripts/check_ibkr_recorder.py
     python scripts/check_ibkr_recorder.py --max-age-minutes 90 --quiet
     python scripts/check_ibkr_recorder.py --max-sync-age-hours 30
+    python scripts/check_ibkr_recorder.py --test-alert
 """
 
 from __future__ import annotations
@@ -64,9 +105,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
 from collections import deque
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -77,6 +121,7 @@ from src.utils.dates import parse_iso8601  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EVENTS_PATH = REPO_ROOT / "logs" / "ibkr_events.jsonl"
 DEFAULT_HEALTH_LOG_PATH = REPO_ROOT / "logs" / "ibkr_health.log"
+DEFAULT_ALERT_STATE_PATH = REPO_ROOT / "logs" / "ibkr_health_alert_state.json"
 # H6: same file the recorder seeds from (src/venues/ibkr/recorder.py); this
 # probe only surfaces its age informationally, it never fails on it.
 DEFAULT_SNAPSHOT_PATH = REPO_ROOT / "data" / "ibkr_universe_live.json"
@@ -416,6 +461,336 @@ def _append_health_log(
         f.write(f"{now.isoformat()} {status} {message}\n")
 
 
+def _append_alert_log(
+    log_path: Path | str,
+    kind: str,
+    status: str,
+    delivered: bool,
+    reason: str | None,
+    now: datetime,
+) -> None:
+    """Durable record of one send attempt, beside the per-run status lines:
+
+        <utc-iso> ALERT_SENT <kind> <status>
+        <utc-iso> ALERT_FAILED <kind> <status> <reason>
+
+    ``kind`` is transition | reminder | retry | test. ``reason`` is a fixed
+    phrase or an exception CLASS NAME -- never exception text, which can quote
+    the Telegram URL and with it the bot token. A successful send used to leave
+    no durable trace at all; a recovery (the one healthy run that sends) is
+    recorded here too.
+    """
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    line = f"{now.isoformat()} {'ALERT_SENT' if delivered else 'ALERT_FAILED'} {kind} {status}"
+    if not delivered:
+        line += f" {reason}"
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+# --------------------------------------------------------------------------- #
+# Alert state: alert on state changes, not on every unhealthy run
+# --------------------------------------------------------------------------- #
+
+# The alert state is the (recorder_status, sync_status) pair; all-OK is healthy.
+OK_PAIR = ("OK", "OK")
+# While an outage lasts unchanged, the operator is reminded once per this
+# interval, counted from the last alert that was actually delivered.
+ALERT_REMINDER_INTERVAL = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class AlertState:
+    """What the previous runs told the operator: the persisted alert state.
+
+    ``since`` is when the pair last changed; ``outage_since`` when it last
+    left OK/OK (None while healthy). ``last_alert`` / ``last_alert_ok`` are the
+    time and outcome of the most recent send attempt. Only statuses, UTC
+    timestamps and one bool live here -- never an environment value.
+    """
+
+    recorder_status: str = "OK"
+    sync_status: str = "OK"
+    since: datetime | None = None
+    last_alert: datetime | None = None
+    last_alert_ok: bool | None = None
+    outage_since: datetime | None = None
+
+    @property
+    def pair(self) -> tuple[str, str]:
+        return (self.recorder_status, self.sync_status)
+
+
+# No state file, or an unreadable one: healthy, and nothing alerted yet. This
+# fails toward alerting -- an unhealthy run alerts, a healthy run stays silent.
+NO_ALERT_STATE = AlertState()
+
+
+@dataclass(frozen=True)
+class AlertDecision:
+    """``kind`` is "transition", "reminder" or "retry" (None: stay silent).
+    ``prefix`` leads the alert text. ``state`` is the successor state before
+    the send attempt is recorded (see ``record_alert_attempt``)."""
+
+    kind: str | None
+    prefix: str
+    state: AlertState
+
+
+def _pair_label(pair: tuple[str, str]) -> str:
+    """Every failing axis, joined: "OK", "DOWN", "SYNC_STALE", "DOWN+SYNC_STALE"."""
+    failing = [status for status in pair if status != "OK"]
+    return "+".join(failing) if failing else "OK"
+
+
+def _format_duration(delta: timedelta) -> str:
+    """Two units, floored: "4d 12h", "3h 20m", "7m". Negative reads as "0m"."""
+    minutes = max(int(delta.total_seconds() // 60), 0)
+    days, minutes = divmod(minutes, 24 * 60)
+    hours, minutes = divmod(minutes, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def decide_alert(previous: AlertState, pair: tuple[str, str], now: datetime) -> AlertDecision:
+    """Whether this run should alert, and what the successor state looks like.
+
+    A pure function of (previous state, current pair, now): the 24 h
+    boundary and every branch are testable without a clock.
+
+    - the pair differs from the stored one -> "transition" (an outage starts,
+      recovers, or changes kind)
+    - unchanged and all-OK -> silent
+    - unchanged, unhealthy, and the last send attempt was not delivered (or
+      nothing was ever recorded) -> "retry", whatever its age: the network is
+      often down exactly during an outage
+    - unchanged, unhealthy, and the last DELIVERED alert is at least
+      ``ALERT_REMINDER_INTERVAL`` old -> "reminder"
+    - otherwise silent
+    """
+    if pair != previous.pair:
+        kind = "transition"
+    elif pair == OK_PAIR:
+        return AlertDecision(None, "", previous)
+    elif previous.last_alert_ok is not True or previous.last_alert is None:
+        kind = "retry"
+    elif now - previous.last_alert >= ALERT_REMINDER_INTERVAL:
+        kind = "reminder"
+    else:
+        return AlertDecision(None, "", previous)
+
+    # When the current outage began: carried over while the pair stays
+    # unhealthy, now when it starts (or when the state did not say).
+    outage_start = (previous.outage_since if previous.pair != OK_PAIR else None) or now
+    elapsed = _format_duration(now - outage_start)
+    if kind != "transition":
+        return AlertDecision(kind, f"[still {_pair_label(pair)}, {elapsed}]", previous)
+
+    # Nothing has been sent for the new pair yet: last_alert / last_alert_ok
+    # stay unset until record_alert_attempt stamps the outcome.
+    successor = AlertState(
+        pair[0], pair[1], since=now, outage_since=None if pair == OK_PAIR else outage_start
+    )
+    before = _pair_label(previous.pair)
+    if pair == OK_PAIR:
+        prefix = f"[{before} -> OK] recovered after {elapsed}:"
+    else:
+        prefix = f"[{before} -> {_pair_label(pair)}]"
+    return AlertDecision(kind, prefix, successor)
+
+
+def record_alert_attempt(state: AlertState, now: datetime, delivered: bool) -> AlertState:
+    """``state`` with the send attempt just made stamped on it."""
+    return replace(state, last_alert=now, last_alert_ok=delivered)
+
+
+# Statuses are upper-case identifiers (OK, STALE, SYNC_STALE, ...). A stored
+# status that is anything else makes the file corrupt: it would otherwise reach
+# the alert text and the durable log, where an embedded newline forges a line.
+_STATUS_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,31}")
+
+
+def _alert_state_from_json(raw: object) -> AlertState | None:
+    """The state a decoded JSON document describes, or None when it is not a
+    well-formed one (wrong shape, wrong types, an unparseable timestamp, or an
+    unhealthy pair that does not say when its outage began)."""
+    if not isinstance(raw, dict):
+        return None
+    recorder_status, sync_status = raw.get("recorder_status"), raw.get("sync_status")
+    for status in (recorder_status, sync_status):
+        if not isinstance(status, str) or not _STATUS_PATTERN.fullmatch(status):
+            return None
+    last_alert_ok = raw.get("last_alert_ok")
+    if last_alert_ok is not None and not isinstance(last_alert_ok, bool):
+        return None
+    stamps: dict[str, datetime | None] = {}
+    for key in ("since_utc", "last_alert_utc", "outage_since_utc"):
+        value = raw.get(key)
+        stamp = parse_iso8601(value) if isinstance(value, str) else None
+        if value is not None and stamp is None:
+            return None
+        stamps[key] = stamp
+    state = AlertState(
+        recorder_status,
+        sync_status,
+        since=stamps["since_utc"],
+        last_alert=stamps["last_alert_utc"],
+        last_alert_ok=last_alert_ok,
+        outage_since=stamps["outage_since_utc"],
+    )
+    if state.pair != OK_PAIR and state.outage_since is None:
+        return None
+    return state
+
+
+def load_alert_state(path: Path | str) -> AlertState:
+    """The persisted alert state, or ``NO_ALERT_STATE``. Never raises.
+
+    A missing, unreadable or corrupt file all read as "healthy, nothing
+    alerted yet": the next unhealthy run alerts, the next healthy run stays
+    silent. The cost of a bad file is at most one repeated alert, never a
+    swallowed one and never a crash of the probe.
+    """
+    try:
+        with Path(path).open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        # ValueError covers JSONDecodeError and UnicodeDecodeError;
+        # RecursionError is what json raises for a pathologically nested file.
+        return NO_ALERT_STATE
+    return _alert_state_from_json(raw) or NO_ALERT_STATE
+
+
+def _iso(stamp: datetime | None) -> str | None:
+    return None if stamp is None else stamp.isoformat()
+
+
+def save_alert_state(path: Path | str, state: AlertState) -> None:
+    """Persist ``state`` atomically: a complete temp file in the same
+    directory, then ``os.replace`` over the target, so a reader (or a crash)
+    never sees a half-written file. The temp file is removed if anything
+    fails; the error propagates (the caller treats it as best-effort).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "recorder_status": state.recorder_status,
+        "sync_status": state.sync_status,
+        "since_utc": _iso(state.since),
+        "last_alert_utc": _iso(state.last_alert),
+        "last_alert_ok": state.last_alert_ok,
+        "outage_since_utc": _iso(state.outage_since),
+    }
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+# Reason recorded in the durable log when send_alert answers "not delivered"
+# (it already logged the specifics, scrubbed; its answer is just a bool).
+_NOT_DELIVERED = "not_delivered"
+
+
+def _deliver_alert(text: str, *, quiet: bool) -> tuple[bool, str | None]:
+    """Send ``text`` through send_alert. Returns (delivered, reason): reason is
+    None when delivered, else a fixed phrase or an exception CLASS NAME.
+
+    Never raises. Only an explicit True counts as delivered: any other answer
+    (None from an old stand-in, an unexpected object) is treated as undelivered
+    and so retried -- an alert may be repeated, never lost.
+    """
+    try:
+        delivered = send_alert(text) is True
+    except Exception as exc:  # noqa: BLE001 - the exit code must survive any alert failure
+        if not quiet:
+            # Class name only (final-review C-2): this stderr is appended to
+            # logs/ibkr_health_task.log, and an exception from the Telegram
+            # path can quote the request URL -- bot token included.
+            print(f"send_alert failed ({type(exc).__name__}); alert may be lost",
+                  file=sys.stderr)
+        return False, type(exc).__name__
+    return (True, None) if delivered else (False, _NOT_DELIVERED)
+
+
+def _alert_on_change(
+    args: argparse.Namespace,
+    pair: tuple[str, str],
+    status: str,
+    message: str,
+    now: datetime,
+) -> None:
+    """Alert when the (recorder, sync) pair changed, remind while an outage
+    lasts, retry what did not get through (see ``decide_alert``), and record
+    the attempt durably and in the alert state file.
+
+    Every step is independently best-effort, like the status-line sink in
+    ``main``: a state-file problem must never stop the alert, and a failing
+    log or state write must never change the exit code. The worst a broken
+    state file costs is a repeated alert. Notes go to stderr by exception CLASS
+    NAME only.
+    """
+    state_path = Path(args.alert_state_path)
+    try:
+        previous = load_alert_state(state_path)
+    except Exception:  # noqa: BLE001 - it should not raise; if it does, still alert
+        previous = NO_ALERT_STATE
+    decision = decide_alert(previous, pair, now)
+    if decision.kind is None:
+        return
+
+    delivered, reason = _deliver_alert(f"{decision.prefix} {message}", quiet=args.quiet)
+    try:
+        _append_alert_log(args.health_log_path, decision.kind, status, delivered, reason, now)
+    except Exception as exc:  # noqa: BLE001 - the state update below must still run
+        if not args.quiet:
+            print(f"alert log write failed ({type(exc).__name__}); "
+                  "the send outcome may be unrecorded", file=sys.stderr)
+    try:
+        save_alert_state(state_path, record_alert_attempt(decision.state, now, delivered))
+    except Exception as exc:  # noqa: BLE001 - exit code must survive a state-file failure
+        if not args.quiet:
+            print(f"alert state write failed ({type(exc).__name__}); "
+                  "the next run may repeat this alert", file=sys.stderr)
+
+
+def _run_test_alert(args: argparse.Namespace, now: datetime) -> int:
+    """``--test-alert``: send a clearly labelled test message through the same
+    path a real alert takes, record the attempt in the durable log (kind
+    ``test``) and report the outcome: exit 0 when delivered, 1 when not.
+
+    No health check runs and the alert state file is neither read nor written,
+    so a test never disturbs a live outage's bookkeeping (no phantom
+    transition, no reset reminder clock).
+    """
+    text = f"TEST ibkr health alert, sent {now:%Y-%m-%dT%H:%M:%SZ} -- no action needed"
+    delivered, reason = _deliver_alert(text, quiet=args.quiet)
+    try:
+        # There is no health status to report: "-" keeps the field count fixed.
+        _append_alert_log(args.health_log_path, "test", "-", delivered, reason, now)
+    except Exception as exc:  # noqa: BLE001 - the outcome below must still be reported
+        if not args.quiet:
+            print(f"alert log write failed ({type(exc).__name__}); "
+                  "the send outcome may be unrecorded", file=sys.stderr)
+    if not args.quiet:
+        print("test alert delivered" if delivered else f"test alert NOT delivered ({reason})")
+    return 0 if delivered else 1
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -436,15 +811,29 @@ def main(argv: list[str] | None = None) -> int:
                     help="age of the last successful paper sync beyond which it is "
                          "SYNC_STALE (default: %(default)s = one daily cadence + 2h slack)")
     ap.add_argument("--health-log-path", default=str(DEFAULT_HEALTH_LOG_PATH),
-                    help="durable append-only sink for non-OK results (default: %(default)s)")
+                    help="durable append-only log: one status line per non-OK result plus one "
+                         "ALERT_SENT / ALERT_FAILED line per alert attempt "
+                         "(default: %(default)s)")
     ap.add_argument("--snapshot-path", default=str(DEFAULT_SNAPSHOT_PATH),
                     help="contract-universe snapshot file (H6): its age is reported "
                          "informationally as snapshot_age_days= on the OK message, never "
                          "a failure axis (default: %(default)s)")
+    ap.add_argument("--alert-state-path", default=str(DEFAULT_ALERT_STATE_PATH),
+                    help="JSON file remembering the last (recorder, sync) status pair and "
+                         "when it was last alerted: alerts fire when the pair changes, "
+                         "once a day while an outage lasts unchanged, and again after a "
+                         "failed send (default: %(default)s)")
+    ap.add_argument("--test-alert", action="store_true",
+                    help="send one clearly labelled test message through the normal alert "
+                         "channel and exit: 0 if delivered, 1 if not. Runs no health check "
+                         "and neither reads nor writes the alert state file")
     ap.add_argument("--quiet", action="store_true", help="suppress stdout (alerts still fire)")
     args = ap.parse_args(argv)
 
     now = datetime.now(timezone.utc)
+    if args.test_alert:
+        return _run_test_alert(args, now)
+
     recorder_status, recorder_message = run_check(
         args.state_path, args.events_path, args.max_age_minutes, now=now,
         snapshot_path=args.snapshot_path,
@@ -456,35 +845,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.quiet:
         print(message)
-    if status == "OK":
-        return 0
-    # The two channels are independently best-effort: a sink write failure
+    # The channels are independently best-effort: a sink write failure
     # (permission-denied logs/, full disk, an AV file lock -- all plausible
-    # over 365 unattended days) must never prevent the Telegram attempt, and
-    # a Telegram failure must never prevent the sink write. Each is wrapped
-    # in its own try/except so one channel's exception can't propagate out
-    # of main() and skip the other -- an uncaught exception here would still
-    # exit 1 (CPython's default), but only by accident, and only after
+    # over 365 unattended days) must never prevent the alert attempt, and an
+    # alert or alert-state failure must never prevent the sink write. Each is
+    # wrapped in its own try/except so one channel's exception can't propagate
+    # out of main() and skip the next -- an uncaught exception here would
+    # still exit 1 (CPython's default), but only by accident, and only after
     # silently dropping whichever channel came second. The exit code stays
-    # a deliberate 1 either way.
-    try:
-        _append_health_log(args.health_log_path, status, message, now=now)
-    except Exception as exc:  # noqa: BLE001 - the alert attempt below must still run
-        if not args.quiet:
-            print(f"_append_health_log failed ({exc}); durable record may be lost",
-                  file=sys.stderr)
-    # send_alert already degrades Telegram failures to a CRITICAL log line,
-    # but nothing it could ever raise may mask the unhealthy exit code.
-    try:
-        send_alert(message)
-    except Exception as exc:  # noqa: BLE001 - exit code must survive any alert failure
-        if not args.quiet:
-            # Class name only (final-review C-2): this stderr is appended to
-            # logs/ibkr_health_task.log, and an exception from the Telegram
-            # path can quote the request URL -- bot token included.
-            print(f"send_alert failed ({type(exc).__name__}); alert may be lost",
-                  file=sys.stderr)
-    return 1
+    # deliberate: 0 only when everything is healthy.
+    if status != "OK":
+        try:
+            _append_health_log(args.health_log_path, status, message, now=now)
+        except Exception as exc:  # noqa: BLE001 - the alert attempt below must still run
+            if not args.quiet:
+                print(f"_append_health_log failed ({exc}); durable record may be lost",
+                      file=sys.stderr)
+    # Alert on a state change (including the recovery of a healthy run), not on
+    # every unhealthy run; nothing in here can change the exit code.
+    _alert_on_change(args, (recorder_status, sync_status), status, message, now)
+    return 0 if status == "OK" else 1
 
 
 if __name__ == "__main__":

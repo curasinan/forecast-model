@@ -90,12 +90,20 @@ account holder; no commit in this repo enables it.
       `logs/ibkr_events.jsonl`, expected nightly-restart window.
 - [x] Task Scheduler: `\IBKR\IBKR Recorder` (Interactive logon, AtLogOn +
       5-min keep-alive, IgnoreNew, 3650-day limit) and
-      `\IBKR\IBKR Recorder Health` (hourly). Registered by the USER from an
+      `\IBKR\IBKR Recorder Health` (hourly; alerts on state changes, not on
+      every unhealthy run). Registered by the USER from an
       ELEVATED PowerShell via `scripts/scheduling/register_ibkr_tasks.ps1`.
       (S4U logon type was tried first and produced phantom runs -- do not
       go back to it.)
 - [x] `scripts/check_ibkr_recorder.py` health probe -> `monitoring/heartbeat.py`
-      (Telegram if ALERT_METHOD configured, else log-only).
+      (Telegram if ALERT_METHOD configured, else log-only). Alerts on health
+      STATE CHANGES (the recorder/sync status pair changes: outage starts,
+      recovers, changes kind), one reminder per 24 h of an unchanged outage,
+      and a retry after a failed send -- not on every unhealthy run
+      (2026-10-03; state in `logs/ibkr_health_alert_state.json`, every send
+      attempt logged as ALERT_SENT / ALERT_FAILED in `logs/ibkr_health.log`).
+      `--test-alert` sends a labelled test message without touching that
+      state.
 - [ ] Headless Gateway auto-login (IBC) deliberately NOT configured -- it
       stores credentials on disk; user decision. Gateway is set to Auto
       restart at **23:45 local** and needs a manual re-login weekly.
@@ -320,8 +328,10 @@ account holder; no commit in this repo enables it.
 python scripts/verify_ibkr_entitlements.py --port 4002 [--snapshot f.json] [--compare f.json]
 # Recorder (normally Task Scheduler does this)
 $env:IBKR_PORT='4002'; $env:IBKR_TRADING_MODE='paper'; python scripts/record_ibkr_ticks.py --interval-minutes 20
-# Recorder health
+# Recorder health (alerts only when the state changes; docs/ibkr_runbook.md section 7)
 python scripts/check_ibkr_recorder.py
+# Alert-channel test: one labelled message, no health check, alert state untouched
+python scripts/check_ibkr_recorder.py --test-alert
 # Backfill hourly bars for days the recorder missed (plan first, then run)
 python scripts/backfill_ibkr_hourly.py --dry-run
 python scripts/backfill_ibkr_hourly.py --port 4002 --mode paper
