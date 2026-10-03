@@ -42,6 +42,15 @@ class LLMConfigError(LLMError):
     """LLM_MODEL does not match what the server serves."""
 
 
+def _bad_shape(method: str, path: str, expected: str, got: object) -> LLMError:
+    """The LLMError for an HTTP-200 payload of the wrong shape.
+
+    Names the request and the offending type only: never the base URL, the api key
+    or the payload itself.
+    """
+    return LLMError(f"{method} {path}: expected {expected}, got {type(got).__name__}")
+
+
 @dataclass
 class LLMReply:
     content: str
@@ -62,6 +71,10 @@ class LocalLLMClient:
             headers={"Authorization": f"Bearer {settings.api_key}"},
             timeout=httpx.Timeout(settings.read_timeout_s, connect=settings.connect_timeout_s),
             transport=transport,
+            # Never read the proxy environment (HTTP_PROXY, ALL_PROXY, ...): this client talks
+            # only to settings.base_url, usually a loopback tunnel, and a proxy would receive
+            # the prompts and the bearer. (Also ignores SSL_CERT_FILE / SSL_CERT_DIR.)
+            trust_env=False,
         )
 
     # -- lifecycle --------------------------------------------------------- #
@@ -89,7 +102,7 @@ class LocalLLMClient:
         except ValueError as exc:
             raise LLMError(f"{method} {path}: non-JSON body: {response.text[:200]}") from exc
         if not isinstance(data, dict):
-            raise LLMError(f"{method} {path}: expected a JSON object, got {type(data).__name__}")
+            raise _bad_shape(method, path, "a JSON object", data)
         return data
 
     # -- API ------------------------------------------------------------------ #
@@ -97,7 +110,20 @@ class LocalLLMClient:
     def models(self) -> list[str]:
         """Ids the server lists under /models."""
         data = self._request("GET", "/models")
-        return [str(item["id"]) for item in data.get("data", []) if item.get("id")]
+        entries = data.get("data", [])
+        if not isinstance(entries, list):
+            raise _bad_shape("GET", "/models", "'data' to be a list", entries)
+        ids: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise _bad_shape("GET", "/models", "each 'data' entry to be an object", entry)
+            model_id = entry.get("id")
+            if not isinstance(model_id, str):
+                raise _bad_shape(
+                    "GET", "/models", "each 'data' entry to have a string 'id'", model_id
+                )
+            ids.append(model_id)
+        return ids
 
     def assert_model_served(self) -> None:
         """Config over hardcode, made checkable: LLM_MODEL must be a served id."""
@@ -118,7 +144,7 @@ class LocalLLMClient:
         body: dict[str, Any] = {
             "model": self.settings.model,
             "messages": [dict(m) for m in messages],
-            "max_tokens": max_tokens or self.settings.max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else self.settings.max_tokens,
             "reasoning_effort": self.settings.reasoning_effort,
         }
         if self.settings.temperature is not None:
@@ -135,9 +161,21 @@ class LocalLLMClient:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"malformed completion: {json.dumps(data)[:300]}") from exc
-        content = message.get("content") or ""
+        if not isinstance(message, dict):
+            raise _bad_shape("POST", "/chat/completions", "'message' to be an object", message)
+        content = message.get("content")
+        if content is None:
+            content = ""  # null is legal in the OpenAI shape (e.g. the budget ran out in reasoning)
+        elif not isinstance(content, str):
+            raise _bad_shape(
+                "POST", "/chat/completions", "'content' to be a string or null", content
+            )
         reasoning = message.get("reasoning_content")
-        usage_raw = data.get("usage") or {}
+        usage_raw = data.get("usage")
+        if usage_raw is None:
+            usage_raw = {}
+        elif not isinstance(usage_raw, dict):
+            raise _bad_shape("POST", "/chat/completions", "'usage' to be an object", usage_raw)
         usage = {k: int(v) for k, v in usage_raw.items() if isinstance(v, (int, float))}
         details = usage_raw.get("completion_tokens_details") or {}
         if isinstance(details, dict) and isinstance(details.get("reasoning_tokens"), (int, float)):
