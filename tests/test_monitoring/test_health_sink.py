@@ -178,10 +178,11 @@ def test_sink_raising_does_not_prevent_send_alert(tmp_path, alerts, monkeypatch,
     assert rc == 1  # exit code stays deliberate, not an accidental uncaught-exception 1
     assert len(alerts) == 1
     assert "STALE" in alerts[0]
-    # The failure is noted, but nothing secret (there is nothing secret to
-    # leak here in the first place -- this just pins the error path).
+    # The failure is noted, by the exception's class name only like every other
+    # note this probe prints (its stderr lands in logs/ibkr_health_task.log).
     err = capsys.readouterr().err
-    assert "_append_health_log failed" in err
+    assert "_append_health_log failed (OSError)" in err
+    assert "permission denied" not in err
 
 
 def test_send_alert_raising_still_writes_sink_line(tmp_path, monkeypatch):

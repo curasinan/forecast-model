@@ -91,11 +91,10 @@ ALERT_FAILED <kind> <STATUS> <method> <reason>" (kind: transition | reminder |
 retry | test; method: telegram | log_only, from monitoring.heartbeat's
 delivery_method(); reason: a fixed phrase or an exception CLASS NAME, never
 exception text), so a successful send leaves a trace too, and a recovery --
-the one healthy run that sends -- is recorded. The method matters because
-send_alert answers True for a log_only run as well (its line was written):
-only the method says that nothing reached Telegram. The token used by
-send_alert's Telegram path is never written to this file, to the alert state
-file or to any log line (see monitoring.heartbeat).
+the one healthy run that sends -- is recorded (why the method is there: see
+monitoring.heartbeat.delivery_method). The token used by send_alert's
+Telegram path is never written to this file, to the alert state file or to
+any log line (see monitoring.heartbeat).
 
 --test-alert sends one clearly labelled test message through the same
 send_alert path, appends its ALERT_SENT / ALERT_FAILED line (kind test),
@@ -111,9 +110,21 @@ scheduled run of this probe turns that silence into an alert.
 
 Usage:
     python scripts/check_ibkr_recorder.py
-    python scripts/check_ibkr_recorder.py --max-age-minutes 90 --quiet
-    python scripts/check_ibkr_recorder.py --max-sync-age-hours 30
     python scripts/check_ibkr_recorder.py --test-alert
+
+A hand run is a REAL run of the alert state machine: it can send a transition
+or recovery message and it updates the alert state. A non-default option can
+disagree with the hourly task -- --max-age-minutes 90 sees a 70-minute STALE
+outage as OK, announces a false recovery, and the next hourly run announces
+"[OK -> STALE]" with the outage clock reset. To explore options
+(--max-age-minutes, --max-sync-age-hours, ...) point the run at scratch files
+and set ALERT_METHOD=log_only, so that it neither drives the live state nor
+messages the phone (a fresh state file announces the current outage):
+
+    python scripts/check_ibkr_recorder.py --max-age-minutes 90
+        --alert-state-path scratch.json --health-log-path scratch.log
+
+(one command, shown on two lines; ALERT_METHOD=log_only in the environment).
 """
 
 from __future__ import annotations
@@ -481,10 +492,10 @@ def _append_health_log(
 class AlertOutcome:
     """How one send attempt went.
 
-    ``method`` is the channel it used: "telegram" or "log_only" (send_alert
-    answers True for a log_only run too -- its line was written -- so the
-    method is what tells the two apart). ``reason`` is None when delivered,
-    else a fixed phrase or an exception CLASS NAME, never exception text.
+    ``method`` is the channel it used, "telegram" or "log_only" (see
+    ``monitoring.heartbeat.delivery_method`` for why it is recorded).
+    ``reason`` is None when delivered, else a fixed phrase or an exception
+    CLASS NAME, never exception text.
     """
 
     delivered: bool
@@ -505,13 +516,12 @@ def _append_alert_log(
         <utc-iso> ALERT_FAILED <kind> <status> <method> <reason>
 
     ``kind`` is transition | reminder | retry | test. ``method`` is the channel
-    the attempt used, ``telegram`` or ``log_only``: a log_only run is reported
-    as delivered (its line was written) but nothing reached Telegram, and this
-    field is what keeps the two apart. ``reason`` is a fixed phrase or an
-    exception CLASS NAME -- never exception text, which can quote the Telegram
-    URL and with it the bot token. A successful send used to leave no durable
-    trace at all; a recovery (the one healthy run that sends) is recorded here
-    too.
+    the attempt used, ``telegram`` or ``log_only`` (see
+    ``monitoring.heartbeat.delivery_method``). ``reason`` is a fixed phrase or
+    an exception CLASS NAME -- never exception text, which can quote the
+    Telegram URL and with it the bot token. A successful send used to leave no
+    durable trace at all; a recovery (the one healthy run that sends) is
+    recorded here too.
     """
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -615,7 +625,9 @@ def decide_alert(previous: AlertState, pair: tuple[str, str], now: datetime) -> 
     - unhealthy, and nothing recorded proves the operator was ever told (no
       outcome, or no time) -> "retry"
     - unhealthy, and the last DELIVERED alert is at least
-      ``ALERT_REMINDER_INTERVAL`` old -> "reminder"
+      ``ALERT_REMINDER_INTERVAL`` old -- or lies in the FUTURE (the clock was
+      stepped back after the write: such a stamp could never age into a
+      reminder on its own, and the reminder's own stamp heals it) -> "reminder"
     - otherwise silent
     """
     if pair != previous.pair:
@@ -626,7 +638,7 @@ def decide_alert(previous: AlertState, pair: tuple[str, str], now: datetime) -> 
         return AlertDecision(None, "", previous)
     elif previous.last_alert_ok is None or previous.last_alert is None:
         kind = "retry"
-    elif now - previous.last_alert >= ALERT_REMINDER_INTERVAL:
+    elif previous.last_alert > now or now - previous.last_alert >= ALERT_REMINDER_INTERVAL:
         kind = "reminder"
     else:
         return AlertDecision(None, "", previous)
@@ -739,11 +751,14 @@ def load_alert_state(path: Path | str) -> AlertState:
     try:
         with Path(path).open("r", encoding="utf-8") as f:
             raw = json.load(f)
-    except (OSError, ValueError, RecursionError):
+        state = _alert_state_from_json(raw)
+    except (OSError, ValueError, RecursionError, OverflowError):
         # ValueError covers JSONDecodeError and UnicodeDecodeError;
-        # RecursionError is what json raises for a pathologically nested file.
+        # RecursionError is what json raises for a pathologically nested file;
+        # OverflowError comes from a timestamp at the edge of the datetime range
+        # (parse_iso8601 converts it to UTC).
         return NO_ALERT_STATE
-    return _alert_state_from_json(raw) or NO_ALERT_STATE
+    return state or NO_ALERT_STATE
 
 
 def _iso(stamp: datetime | None) -> str | None:
@@ -793,8 +808,8 @@ def _deliver_alert(text: str, *, quiet: bool) -> AlertOutcome:
 
     Never raises. Only an explicit True counts as delivered: any other answer
     (None from an old stand-in, an unexpected object) is treated as undelivered
-    and so retried -- an alert may be repeated, never lost. The method is read
-    from ``delivery_method()``, the same resolver send_alert branches on.
+    and so retried -- a repeat beats a lost alert. The method is read from
+    ``delivery_method()``, the same resolver send_alert branches on.
     """
     method = delivery_method()
     try:
@@ -880,8 +895,8 @@ def _alert_on_change(
 
 def _describe_test_alert(outcome: AlertOutcome) -> str:
     """The line ``--test-alert`` prints: the outcome and the method it used. A
-    log_only run is a success (send_alert wrote its line, the configured path
-    worked: exit 0) but must not read like a Telegram delivery."""
+    log_only run is still a success (exit 0) but says plainly that nothing was
+    sent to Telegram (see ``monitoring.heartbeat.delivery_method``)."""
     if not outcome.delivered:
         return f"test alert NOT delivered via {outcome.method} ({outcome.reason})"
     if outcome.method == METHOD_TELEGRAM:
@@ -985,11 +1000,17 @@ def main(argv: list[str] | None = None) -> int:
             _append_health_log(args.health_log_path, status, message, now=now)
         except Exception as exc:  # noqa: BLE001 - the alert attempt below must still run
             if not args.quiet:
-                print(f"_append_health_log failed ({exc}); durable record may be lost",
-                      file=sys.stderr)
+                print(f"_append_health_log failed ({type(exc).__name__}); "
+                      "durable record may be lost", file=sys.stderr)
     # Alert on a state change (including the recovery of a healthy run), not on
-    # every unhealthy run; nothing in here can change the exit code.
-    _alert_on_change(args, (recorder_status, sync_status), status, message, now)
+    # every unhealthy run. Guarded like every other step: whatever goes wrong in
+    # there, the exit code stays the health verdict.
+    try:
+        _alert_on_change(args, (recorder_status, sync_status), status, message, now)
+    except Exception as exc:  # noqa: BLE001 - the exit code must survive the alert path
+        if not args.quiet:
+            print(f"alert handling failed ({type(exc).__name__}); "
+                  "the alert may not have been sent", file=sys.stderr)
     return 0 if status == "OK" else 1
 
 

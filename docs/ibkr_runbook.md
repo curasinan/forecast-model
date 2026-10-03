@@ -253,6 +253,22 @@ Three layers, cheapest first:
    leaves in `logs\ibkr_health.log` is how you can tell. To test the alert
    channel use `--test-alert` instead.
 
+   Do not explore options on the live state: a hand run with a non-default
+   threshold can disagree with the hourly task. `--max-age-minutes 90` during
+   a 70-minute STALE outage sees OK, sends a false `[STALE -> OK] recovered`,
+   and the next hourly run sends `[OK -> STALE]` with the outage clock reset.
+   For exploratory runs, in a throwaway shell, point the run at scratch files
+   and the log_only method, so that it neither drives the live state nor
+   messages the phone (a fresh state file would announce the current outage
+   as `[OK -> ...]`):
+
+   ```powershell
+   $env:ALERT_METHOD = 'log_only'
+   python scripts\check_ibkr_recorder.py --max-age-minutes 90 `
+       --alert-state-path $env:TEMP\scratch_state.json `
+       --health-log-path $env:TEMP\scratch_health.log
+   ```
+
 One-liners (from the repo root):
 
 ```powershell
@@ -321,6 +337,19 @@ deleting the file, or the first run after this change, re-announces an
 ongoing outage once as `[OK -> ...]`), and a healthy run stays silent (so a
 lost file also drops the recovery message of an outage that was open when it
 was lost).
+
+**If the same message arrives every hour**, and `logs\ibkr_health_task.log`
+shows `alert state write failed (PermissionError)` twice per run, the alert
+state file can be read but not replaced (a handle held by an antivirus scan or
+the OneDrive client, or a read-only flag), so the stored pair stops advancing.
+Measured here with a handle held open on the file: every healthy run after an
+outage re-sent `[STALE -> OK] recovered ...` (4 runs, 4 messages), and one
+more when the handle was released. The save before each send covers ONE
+failed write; a lock that lasts through both saves of a transition run still
+leaves the old pair on disk, so if the outage has ended by the next run its
+recovery message is not sent (and if it is still on, the transition is
+announced a second time). Release the lock or clear the flag; deleting the
+file also works (it re-announces an ongoing outage once as `[OK -> ...]`).
 
 `logs\ibkr_health.log` keeps one status line per unhealthy run
 (`<utc> <STATUS> <message>`) and now also one line per send attempt:
@@ -487,7 +516,7 @@ prices off this one number.
   (`src/venues/ibkr/recorder.py:193-196`, `SNAPSHOT_REFRESH_CMD` defined at
   `src/venues/ibkr/recorder.py:59-62`). The health probe surfaces the same
   age, informationally, as `snapshot_age_days=` on its OK message
-  (`scripts/check_ibkr_recorder.py:262-275,356-364`) -- it is never a
+  (`scripts/check_ibkr_recorder.py:273-286,367-375`) -- it is never a
   failure axis, so nothing pages for this; the operator has to notice it.
 - Evidence: as cited above (code review).
 - Date verified: 2026-08-27.
@@ -556,12 +585,13 @@ they land in HKCU and are visible to Task-Scheduler-launched processes
 without any shell that sources `.env`.
 
 **These three must NEVER go in `.env`.** `send_alert` reads `os.environ`
-directly (`monitoring/heartbeat.py:83,86-87`) and, unlike `IBKRSettings`
+directly (`monitoring/heartbeat.py:115,144-145`) and, unlike `IBKRSettings`
 (which loads `.env` via pydantic-settings' `env_file=".env"`,
 `src/venues/ibkr/settings.py:28`), neither `monitoring/heartbeat.py` nor
 `scripts/check_ibkr_recorder.py` ever reads `.env` at all -- putting the
 alert vars there would silently do nothing; they have to be real process
 environment variables. And never paste the bot token into logs, docs, or
-chat: `send_alert` itself is careful never to log it
-(`monitoring/heartbeat.py:103-107`, "Never log the token; just the
-status.") -- follow the same rule everywhere else.
+chat: `send_alert` itself never logs it (`monitoring/heartbeat.py:131-141`, the
+SECRET HYGIENE docstring: only the exception's class name is ever logged, and
+every line on the Telegram path is scrubbed) -- follow the same rule
+everywhere else.

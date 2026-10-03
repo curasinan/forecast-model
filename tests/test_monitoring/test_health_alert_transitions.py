@@ -182,6 +182,25 @@ def test_reminder_clock_runs_from_the_last_alert_not_from_the_start_of_the_outag
 
 
 @pytest.mark.parametrize(
+    ("ahead", "expected_kind"),
+    [
+        (timedelta(0), None),  # exactly now is not the future
+        (timedelta(seconds=1), "reminder"),
+        (timedelta(days=1), "reminder"),
+        (timedelta(days=365), "reminder"),
+    ],
+    ids=["now", "1s-ahead", "1d-ahead", "1y-ahead"],
+)
+def test_a_last_alert_in_the_future_counts_as_due(ahead, expected_kind):
+    """The clock was stepped back after the write: a timestamp ahead of now can
+    never age into a reminder on its own (one a year ahead would silence a year
+    of reminders). It counts as due, and the reminder's own stamp heals it."""
+    prev = _prev(("DOWN", "OK"), last_alert=T0 + ahead, last_alert_ok=True)
+
+    assert probe.decide_alert(prev, ("DOWN", "OK"), T0).kind == expected_kind
+
+
+@pytest.mark.parametrize(
     "age",
     [
         timedelta(seconds=1),
@@ -597,6 +616,10 @@ _CORRUPT_CONTENTS = {
     "timestamp-garbage": json.dumps(_on_disk(since_utc="yesterday")).encode(),
     "timestamp-blank": json.dumps(_on_disk(last_alert_utc="  ")).encode(),
     "timestamp-not-a-string": json.dumps(_on_disk(outage_since_utc=12345)).encode(),
+    # parse_iso8601 converts to UTC; at the edge of the datetime range that raises
+    # OverflowError, which load_alert_state must absorb like every other bad file.
+    "timestamp-overflow-high": json.dumps(_on_disk(since_utc="9999-12-31T23:30:00-01:00")).encode(),
+    "timestamp-overflow-low": json.dumps(_on_disk(since_utc="0001-01-01T00:30:00+01:00")).encode(),
     "last-alert-ok-a-string": json.dumps(_on_disk(last_alert_ok="yes")).encode(),
     "last-alert-ok-an-int": json.dumps(_on_disk(last_alert_ok=1)).encode(),
     "unhealthy-without-outage-start": json.dumps(_on_disk(outage_since_utc=None)).encode(),
@@ -875,6 +898,22 @@ def test_reminder_is_sent_once_the_last_delivered_alert_is_24_hours_old(tmp_path
     assert (kind, status) == ("reminder", "STALE")
 
     # The reminder restarted the 24 h clock: the next hourly run is silent again.
+    assert run.run("--quiet") == 1
+    assert len(sent.messages) == 1
+
+
+def test_a_future_dated_last_alert_costs_one_reminder_and_heals(tmp_path, sent):
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(("STALE", "OK"), last_alert_utc=(run.now() + timedelta(days=365)).isoformat())
+
+    assert run.run("--quiet") == 1
+
+    assert len(sent.messages) == 1
+    (line,) = run.alert_lines()
+    assert SENT_LINE.match(line)["kind"] == "reminder"
+    # Re-stamped with the real time, so the year-ahead value is gone ...
+    assert _ts(run.stored()["last_alert_utc"]) < run.now() + timedelta(minutes=1)
+    # ... and the next run is silent again.
     assert run.run("--quiet") == 1
     assert len(sent.messages) == 1
 
@@ -1317,8 +1356,10 @@ def test_state_write_failure_never_stops_the_alert_or_changes_the_exit_code(
 
 
 def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path, sent):
-    """The cost of a state file that can never be written is the old behaviour
-    (an alert per unhealthy run), not a crash and not silence."""
+    """A state path that can be neither read nor written (here: a directory where
+    the file should be) is the old behaviour: an alert per unhealthy run, not a
+    crash and not silence. A file that can be READ but not replaced behaves
+    differently -- see the next two tests."""
     run = _Run(tmp_path).make(recorder="STALE")
     run.alert_state.mkdir(parents=True)  # a directory where the file should be
 
@@ -1327,6 +1368,67 @@ def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path
 
     assert len(sent.messages) == 2
     assert all(message.startswith("[OK -> STALE]") for message in sent.messages)
+
+
+def test_a_state_file_that_can_be_read_but_not_replaced_repeats_the_recovery_every_run(
+    tmp_path, sent, monkeypatch, capsys
+):
+    """MEASURED behaviour (a handle held open on Windows, modelled here by a
+    replace that always fails; documented in the runbook, section 7): the stored
+    pair never advances, so every healthy run announces the recovery again, and
+    each run says so on stderr twice -- the save before the send and the one
+    after it both fail."""
+    run = _Run(tmp_path).make(recorder="OK")
+    _seed_unhealthy_outage_of_4d12h(run)  # STALE for 4 d 12 h, announced
+
+    def _locked(src, dst):
+        raise PermissionError("file is locked (simulated)")
+
+    monkeypatch.setattr(probe.os, "replace", _locked)
+
+    for _ in range(4):
+        assert run.run() == 0
+
+    assert len(sent.messages) == 4
+    assert all(message.startswith(RECOVERY_TEXT) for message in sent.messages)
+    assert run.stored()["recorder_status"] == "STALE"  # the file never moved
+    err = capsys.readouterr().err
+    assert err.count("alert state write failed (PermissionError)") == 8
+
+
+def test_a_lock_that_spans_both_saves_of_a_run_still_leaves_the_old_pair_on_disk(
+    tmp_path, sent, monkeypatch
+):
+    """MEASURED limit of the save-before-send fix (documented in the runbook): it
+    covers ONE failed write. A lock that lasts through both saves of a transition
+    run leaves the old pair on disk, so if the outage has ended by the next run
+    its recovery is not announced (if it is still on, the transition is
+    announced a second time)."""
+    run = _Run(tmp_path).make(recorder="STALE")
+    run.store(OK_PAIR)
+    real_replace = probe.os.replace
+
+    def _locked(src, dst):
+        raise PermissionError("file is locked (simulated)")
+
+    monkeypatch.setattr(probe.os, "replace", _locked)
+    assert run.run("--quiet") == 1  # [OK -> STALE] is delivered; both saves fail
+    monkeypatch.setattr(probe.os, "replace", real_replace)
+    assert run.stored()["recorder_status"] == "OK"  # still the old pair
+
+    run.make(recorder="OK")  # the outage is over by the next run
+    assert run.run("--quiet") == 0
+
+    assert _prefixes(sent) == ["[OK -> STALE]"]  # no recovery message
+
+    run2 = _Run(tmp_path / "second").make(recorder="STALE")  # the same, outage still on
+    run2.store(OK_PAIR)
+    monkeypatch.setattr(probe.os, "replace", _locked)
+    assert run2.run("--quiet") == 1
+    monkeypatch.setattr(probe.os, "replace", real_replace)
+    before = len(sent.messages)
+    assert run2.run("--quiet") == 1
+    assert _prefixes(sent)[before:] == ["[OK -> STALE]"]  # announced a second time
 
 
 # -- one failed write, or a kill, must never swallow the NEXT alert ---------------
@@ -1423,6 +1525,27 @@ def test_a_failed_save_before_the_send_changes_nothing_when_the_save_after_it_wo
     assert len(sent.messages) == 1
 
 
+def test_an_undelivered_send_is_still_recorded_when_the_save_before_it_failed(
+    tmp_path, sent, monkeypatch
+):
+    """The save after the send is not redundant: when the one before it failed,
+    it is the only record that this attempt did not get through (found by a
+    surviving mutant: skipping it for an undelivered attempt)."""
+    run = _Run(tmp_path).make(recorder="STALE")
+    sent.outcome = False
+    failures = _fail_one_save(monkeypatch, sent, when="before_send")
+
+    assert run.run("--quiet") == 1
+
+    assert failures == ["before_send"]
+    assert run.stored()["last_alert_ok"] is False  # recorded by the save after the send
+    sent.outcome = True
+    assert run.run("--quiet") == 1  # so the next run retries it ...
+    failed_line, sent_line = run.alert_lines()
+    assert FAILED_LINE.match(failed_line)["kind"] == "transition"
+    assert SENT_LINE.match(sent_line)["kind"] == "retry"  # ... as a retry, not a fresh transition
+
+
 def test_a_failed_save_after_a_change_of_kind_cannot_hide_the_change_back(
     tmp_path, sent, monkeypatch
 ):
@@ -1486,6 +1609,47 @@ def test_state_read_failure_never_stops_the_alert(tmp_path, sent, monkeypatch):
 
     assert len(sent.messages) == 1
     assert sent.messages[0].startswith("[OK -> STALE]")
+
+
+@pytest.mark.parametrize(
+    ("recorder", "expected_rc"), [("STALE", 1), ("OK", 0)], ids=["unhealthy", "healthy"]
+)
+def test_an_exception_anywhere_in_the_alert_path_never_changes_the_exit_code(
+    tmp_path, sent, monkeypatch, capsys, recorder, expected_rc
+):
+    """The decision is a pure function that cannot raise on a loaded state --
+    today. Nothing in the alert path may change the exit code whatever happens:
+    the durable status line (written first) stays, and the note names only the
+    exception's class."""
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError(f"a bug in the decision (simulated) /bot{FAKE_TOKEN}/")
+
+    monkeypatch.setattr(probe, "decide_alert", _boom)
+    run = _Run(tmp_path).make(recorder=recorder)
+
+    assert run.run() == expected_rc  # NOT quiet: the note is visible
+
+    err = capsys.readouterr().err
+    assert "alert handling failed (RuntimeError)" in err
+    assert FAKE_TOKEN not in err
+    assert "a bug in the decision" not in err
+    assert sent.messages == []
+    assert len(run.status_lines()) == (1 if recorder == "STALE" else 0)
+
+
+def test_the_alert_handling_failure_note_is_silent_under_quiet(
+    tmp_path, sent, monkeypatch, capsys
+):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("a bug in the decision (simulated)")
+
+    monkeypatch.setattr(probe, "decide_alert", _boom)
+    run = _Run(tmp_path).make(recorder="STALE")
+
+    assert run.run("--quiet") == 1
+
+    assert capsys.readouterr() == ("", "")
 
 
 def test_alert_log_failure_never_stops_the_state_update_or_changes_the_exit_code(

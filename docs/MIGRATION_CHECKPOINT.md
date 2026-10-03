@@ -417,7 +417,11 @@ rewiring, hourly-gap backfill, first paper orders.
 
 Nothing is half-built. The useful moves, in order:
 
-1. `python scripts/check_ibkr_recorder.py` -- is collection healthy?
+1. `python scripts/check_ibkr_recorder.py` -- is collection healthy? (A hand
+   run is a real run of the alert state machine: it can send a message and
+   updates the alert state. To explore options such as `--max-age-minutes`,
+   use scratch `--alert-state-path` / `--health-log-path` files and
+   `ALERT_METHOD=log_only`; see `docs/ibkr_runbook.md` section 6.)
 2. `python scripts/run_gtm_paper.py` then
    `python scripts/run_ibkr_paper.py --mode approve` -- refresh signals and
    add to the paper book. Orders rest as GTC, so re-running does not cancel
