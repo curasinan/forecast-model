@@ -72,7 +72,10 @@ attempt marked "not delivered") and again after it with the real outcome, so
 one failed write, or a kill between the send and the save, costs at most a
 duplicate message and cannot swallow the next alert; only a state file that
 can never be written lets the stored state fall behind for good (alerts then
-repeat, and a change back to the pair still stored goes unannounced). A
+repeat, and a change back to the pair still stored goes unannounced). Two
+failed writes in ONE run (a lock that outlasts the send) do the same for that
+run: its recovery can go unsent or its transition be announced twice
+(docs/ibkr_runbook.md, section 7). A
 missing, unreadable or corrupt file reads as "healthy, nothing alerted yet":
 an unhealthy run alerts again and a healthy run stays silent, so a lost file
 also drops the recovery message of an outage that was open when it was lost.
@@ -866,7 +869,9 @@ def _alert_on_change(
     swallow the next alert; saving only after the send could, because the OLD
     pair stayed on disk. Only a state file that can never be written lets the
     stored state fall behind for good: alerts then repeat, and a change back to
-    the pair that is still stored goes unannounced.
+    the pair that is still stored goes unannounced. Both saves of one run
+    failing (a lock that outlasts the send) has that effect for the one run;
+    docs/ibkr_runbook.md, section 7, describes what the operator then sees.
 
     Every step is independently best-effort, like the status-line sink in
     ``main``: a state-file problem must never stop the alert, and a failing

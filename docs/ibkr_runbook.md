@@ -348,8 +348,10 @@ more when the handle was released. The save before each send covers ONE
 failed write; a lock that lasts through both saves of a transition run still
 leaves the old pair on disk, so if the outage has ended by the next run its
 recovery message is not sent (and if it is still on, the transition is
-announced a second time). Release the lock or clear the flag; deleting the
-file also works (it re-announces an ongoing outage once as `[OK -> ...]`).
+announced a second time). Release the lock or clear the read-only flag.
+Deleting the file is not a way around it: while the file is locked or
+read-only the delete fails for the same reason the replace does (once the
+file really is gone, an ongoing outage is re-announced once as `[OK -> ...]`).
 
 `logs\ibkr_health.log` keeps one status line per unhealthy run
 (`<utc> <STATUS> <message>`) and now also one line per send attempt:
