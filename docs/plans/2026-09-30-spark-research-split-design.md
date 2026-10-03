@@ -442,15 +442,31 @@ noise on a copy of the real snapshot. What that changed in this design:
   pins that set: widening the configuration needs no edit there, narrowing
   it does, on purpose. `src/collectors` stays outside (ruling R-R):
   collectors are where text-to-data processing may legitimately live, which
-  is the LLM's assigned role.
+  is the LLM's assigned role. The cost of that carve-out: two guarded
+  modules, `src/venues/polymarket.py` and `src/edge/market_selector.py`,
+  import `src/collectors/polymarket.py`, so an `src.llm` import added there
+  would reach guarded code by a path the scan cannot see.
 - **R14. Real-server facts from the live run (2026-10-03).** Section 6's
-  `LLMReply.reasoning` "(from `reasoning_content`)" was wrong for the Spark:
-  its vLLM returns the reasoning text under `message.reasoning`, so the field
-  was None against the real server while every unit test passed on a
-  hand-drawn fixture. The client now reads `reasoning_content` with a
-  fallback to `reasoning`, and its unit tests include byte copies of two
-  captured replies (a schema-constrained completion and the `/v1/models`
-  listing) under `tests/test_llm/fixtures/`, driven through
-  `tests/test_llm/test_real_shapes.py`. The rule: fixtures of server replies
-  are captures, never hand-drawn, and one is replaced only by a new capture,
-  never edited by hand.
+  `LLMReply.reasoning` "(from `reasoning_content`, may be None)" was wrong
+  for the Spark: its vLLM returns the reasoning text under
+  `message.reasoning`, so the field was None against the real server while
+  every unit test passed on a hand-drawn fixture. The client now reads
+  `reasoning_content` with a fallback to `reasoning`, and its unit tests
+  include byte copies of two captured replies (a schema-constrained
+  completion and the `/v1/models` listing) under `tests/test_llm/fixtures/`,
+  driven through `tests/test_llm/test_real_shapes.py`. The rule: a fixture
+  that stands for the real server's reply is a capture, never hand-drawn,
+  and is replaced only by a new capture, never edited by hand (tests of
+  malformed replies build their own bodies by necessity).
+- **R15. Invariant 1's mechanism, corrected (2026-10-03).** Section 2's
+  invariant 1 says every Gateway-touching entrypoint fails at startup with
+  the pydantic `ValidationError`; that is true only of the entrypoints that
+  build `IBKRSettings`: `record_ibkr_ticks.py`, `run_ibkr_paper.py`,
+  `sync_ibkr_paper.py`, and `backfill_ibkr_hourly.py` unless it is given both
+  `--port` and `--mode`. `verify_ibkr_entitlements.py` and
+  `probe_ibkr_history.py` build no settings: they dial `127.0.0.1` directly
+  (the first by default) and simply fail to connect on the Spark. The
+  mechanism is therefore two facts, the Spark has no `IBKR_*` environment and
+  the Gateway API is bound to the Zenbook's localhost, plus the never-run
+  list in the runbook (`docs/spark_runbook.md`, section 1), which is the
+  guard for everything else. Section 2 is left as written.

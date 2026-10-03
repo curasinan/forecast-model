@@ -3,8 +3,10 @@
 No retries (callers decide), no streaming (not needed for text -> structured
 data). Structured output uses the server's ``response_format`` json_schema
 mode; the decoded object is returned as ``LLMReply.parsed``. Reasoning text
-(``reasoning_content``, produced by vLLM's qwen3 reasoning parser) is kept
-separate from ``content`` so callers never accidentally parse it.
+(vLLM's reasoning parser sends it as ``reasoning_content`` in older builds and
+as ``reasoning`` on newer ones, the Spark's included; the client reads the
+first, falling back to the second) is kept separate from ``content`` so
+callers never accidentally parse it.
 """
 
 from __future__ import annotations

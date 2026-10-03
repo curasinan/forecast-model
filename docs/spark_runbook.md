@@ -6,8 +6,8 @@ payloads. This page is the operator's view.
 
 Git Bash commands on this page assume `source scripts/spark/env.sh` from the
 repo root. It defines `SSH` and `SCP` (the Windows OpenSSH `ssh.exe` and
-`scp.exe`, which read the `Host spark` entry of `~/.ssh/config`), `REPO_WSL`
-and `RUN_DATE` (today's date).
+`scp.exe`, which read the `Host spark` entry of `~/.ssh/config`) and
+`REPO_WSL` (this checkout's path as WSL sees it; section 3).
 
 ## 1. What the Spark is, and is not
 
@@ -63,33 +63,54 @@ Never run on the Spark (all under `scripts/`):
   On the Zenbook the remote `spark` is `spark:work/forecast-model` and the
   repo-local `core.sshCommand` is `C:/Windows/System32/OpenSSH/ssh.exe`, so
   the push uses the same ssh client, key and `Host spark` entry as every
-  other command here, from Git Bash and the Bash tool alike. `git push` to
-  GitHub remains the separate, normal step. The checkout followed
-  `spark-research-split` while that branch was in flight; after its merge,
-  switch it once: `git push spark main`, then
-  `"$SSH" spark 'cd ~/work/forecast-model && git checkout main'`. From then
-  on every `git push spark main` updates `main` in place.
+  other command here and works from Git Bash. Both settings live only in the
+  Zenbook's `.git/config`, so a fresh clone needs them again:
+
+      git remote add spark spark:work/forecast-model
+      git config core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe
+
+  `git push` to GitHub remains the separate, normal step. While the work was
+  in flight the Spark's checkout followed its branch
+  (`git push spark spark-research-split`). After the merge, switch it once.
+  First bring the Zenbook's local `main` up to date (in the main checkout),
+  because that is the `main` the push delivers: with the pre-merge one, the
+  `git checkout main` on the Spark would take away `scripts/spark/` and
+  `src/llm/`.
+
+      git checkout main && git pull
+      git push spark main
+      "$SSH" spark 'cd ~/work/forecast-model && git checkout main'
+
+  From then on every `git push spark main` updates `main` in place.
 - venv: `.venv` (uv-managed Python 3.14.2, pinned by the newest
-  `constraints/zenbook-*.txt`). To rebuild it, on the Spark:
-  `~/.local/bin/uv venv .venv --python 3.14.2`, then
-  `~/.local/bin/uv pip install -e ".[dev,ibkr,climate,mcp,web,trading]" -c constraints/zenbook-2026-10-03.txt`
-  (swap in a newer constraints file when one exists; `~/.local/bin` is not
-  on the PATH of a non-interactive ssh command).
+  `constraints/zenbook-*.txt`). To rebuild it, in a shell on the Spark
+  (`ssh spark`; uv lives in `~/.local/bin`, which a non-interactive ssh
+  command does not have on its PATH, hence the full path):
+
+      cd ~/work/forecast-model && rm -rf .venv && ~/.local/bin/uv venv .venv --python 3.14.2
+      ~/.local/bin/uv pip install -e ".[dev,ibkr,climate,mcp,web,trading]" -c constraints/zenbook-2026-10-03.txt
+
+  uv 0.12.22 has no `--clear` for an existing `.venv` (only
+  `--allow-existing`), hence the `rm -rf`; swap in a newer constraints file
+  when one exists.
 - Data: `~/quant_data` -- a MIRROR pushed from the Zenbook (section 3). Same
   default root as the Zenbook on purpose; no `IBKR_DATA_ROOT` /
   `CLIMATE_DATA_ROOT` overrides anywhere.
 - `.env`: exactly one line, `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` (mode 600).
   No API keys.
-- LLM stack: `~/stack/docker-compose.yml` (repo `curasinan/spark-llm-stack`);
-  vLLM on `127.0.0.1:8000`, Open WebUI 8080, Portainer 9000, Phoenix 6006/4317,
-  all loopback-only behind ufw (22/tcp is the only open port). Images are
-  pinned by digest: never `docker compose pull`, never edit the compose file
-  without the operator. NVIDIA driver packages are on `apt-mark hold`: no
-  `apt upgrade`.
+- LLM stack: `~/stack/docker-compose.yml` (repo `curasinan/spark-llm-stack`;
+  services `qwenflash` (vLLM), `openwebui`, `portainer`, `phoenix`); vLLM on
+  `127.0.0.1:8000`, Open WebUI 8080, Portainer 9000, Phoenix 6006/4317, all
+  bound to loopback (checked 2026-10-03: the only socket listening on all
+  interfaces is 22/tcp) and behind ufw (22/tcp is the only open port). Images
+  are pinned by digest: never `docker compose pull`, never edit the compose
+  file without the operator. NVIDIA driver packages are on `apt-mark hold`:
+  no `apt upgrade`.
 - Memory: with vLLM loaded 22-24 GiB is available and the realistic budget
   for forecast work is about 15 GiB. Read it with `free -h` (`docker stats`
   does not show vLLM's CUDA memory). For anything larger, finish the LLM
-  batch first, then `docker compose stop qwenflash` (from `~/stack`).
+  batch first, then stop the vLLM service on the Spark:
+  `cd ~/stack && docker compose stop qwenflash`.
 - Tests, from the Zenbook:
   `"$SSH" spark 'cd ~/work/forecast-model && HOME=$(mktemp -d) .venv/bin/python -m pytest -q'`.
   The throwaway `HOME` matters: parts of the suite write under
@@ -110,14 +131,12 @@ Git Bash (MSYS would rewrite a bare `/mnt/...` argument into a Windows path;
     source scripts/spark/env.sh
     wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/push_snapshot.sh"
 
-`env.sh` pins `REPO_WSL` to the one checkout it was written in (the
-`spark-research-split` worktree); from any other checkout, reassign it right
-after sourcing, in the same form, for example
-`REPO_WSL=//mnt/c/Users/asus/OneDrive/Desktop/new_work` for the main
-checkout. Both forms take `--include-raw`, and `--help` prints the script's
-usage header. The scripts under `scripts/spark/*.sh` must stay LF
-(`.gitattributes` enforces it on checkout): an editor that saves CRLF breaks
-them under WSL's bash with `$'\r': command not found`.
+`env.sh` derives `REPO_WSL` from the checkout it is sourced from, so these
+two lines work from the main checkout and from any worktree. Both forms take
+`--include-raw`, and `--help` prints the script's usage header. The scripts
+under `scripts/spark/*.sh` must stay LF (`.gitattributes` enforces it on
+checkout): an editor that saves CRLF breaks them under WSL's bash with
+`$'\r': command not found`.
 
 The script, in four steps:
 
@@ -134,15 +153,18 @@ The script, in four steps:
 3. Verify on the Spark: `scripts/spark/verify_mirror.py` runs from the
    Spark's checkout, so deliver the code first (section 2). It exits 1
    naming every unreadable file. A push that lands inside the recorder's
-   sub-second parquet write copies a torn sweep: just run it again.
-4. Print the Spark's snapshot identity and save it as
-   `~/quant_data_snapshot/identity_spark.json` (written only after a
-   successful verify, so a failed one never leaves an empty identity).
+   sub-second parquet write copies a torn sweep: just run it again. On
+   success the identity it prints is saved as
+   `~/quant_data_snapshot/identity_spark.json`, through a temp file moved
+   into place only then, so a failed verify never leaves an empty identity
+   and the previous one stays.
+4. Print that saved identity.
 
 To prove a push left the live root alone, bracket it with
 `live_manifest.py` (read-only; it is the one tool here meant for the live
 root) and `diff` the two files (parity report, section 3):
 
+    # Git Bash, from the repo root (in PowerShell, diff is Compare-Object)
     python scripts/spark/live_manifest.py --root ~/quant_data --out ~/quant_data_snapshot/parity/manifest_before_push.json
     # ... the push ...
     python scripts/spark/live_manifest.py --root ~/quant_data --out ~/quant_data_snapshot/parity/manifest_after_push.json
@@ -175,14 +197,16 @@ numeric leaves, max relative difference 3.8e-10); the `identity.snapshot`
 block, which is not ignored, proves both machines scored the same bytes at
 the same commit. `--min-numeric 1000` is a floor on the numeric leaves
 compared (the real payload has about 1500): an accidentally empty signals
-list must not pass as parity. The compare ignores `identity.machine`,
-`git_dirty` included, so look at it yourself: both payloads should say
-`"git_dirty": false` (`grep git_dirty` on the two files), because a dirty
-tracked tree means the code that scored is not the commit the identity
-names. The tolerance is not 1e-15 because the frame's ERA5->NOAA bridge is
-refit with LAPACK on each machine and reduction order differs by CPU kernel
-(measured x86 kernel-to-kernel noise: 3e-10 relative); 1e-8 is still six
-orders below the smallest price step that matters.
+list must not pass as parity, and a legitimately smaller ladder fails it
+loudly, which is the cue to lower the floor with a note (ruling R-L). The
+compare ignores `identity.machine`, `git_dirty` included, so look at it
+yourself: both payloads should say `"git_dirty": false` (`grep git_dirty` on
+the two files), because a dirty tracked tree means the code that scored is
+not the commit the identity names. The tolerance is not 1e-15 because the
+frame's ERA5->NOAA bridge is refit with LAPACK on each machine and reduction
+order differs by CPU kernel (measured x86 kernel-to-kernel noise: 3e-10
+relative); 1e-8 is still six orders below the smallest price step that
+matters.
 
 `verify_mirror.py` and `parity_score.py` are for mirrors and frozen roots.
 On the Zenbook score `~/quant_data_snapshot`, which the push script has just
@@ -194,19 +218,28 @@ one movement it can see. It also refuses an identity whose code SHA is
 unknown, which is what a checkout without git gives, so score from a git
 checkout on both machines.
 
-A refit comparison is report-only. Run `scripts/fit_gtm_emos.py --trend` with
-`--root ~/quant_data_snapshot/climate_data` on the Zenbook (always pass the
-snapshot root: without `--root` the fit rewrites the live root's operational
-`models/gtm_emos.json`) and with `--root ~/quant_data/climate_data` on the
-Spark, then compare the two `models/gtm_emos.json` files with
-`compare_json.py --rtol 1e-6 --atol 1e-9 --ignore fingerprint` (the two
-`reports/gtm_emos_diagnostics.json` files also need `fitted_at_utc` and
-`artifact_paths` ignored). The optimiser amplifies the same kernel
-differences, and fresh artifacts carry a `fingerprint` string that changes
-with any last bit: on 2026-10-03 one coefficient of 50 differed by 1.2e-6
-relative and the compare printed `PARITY FAILED`; the design asks for an
-investigation only above 1e-4. A refit overwrites the model and diagnostics
-under the root it ran on, so push again before the next scoring parity run.
+A refit comparison is report-only. Fit on both sides, the Zenbook on the
+snapshot root (always pass it: without `--root` the fit rewrites the live
+root's operational `models/gtm_emos.json`), fetch the Spark's two artifacts
+into the snapshot's evidence directory, and compare each pair files-first
+(`--ignore` takes a list, so it goes last; the diagnostics also need
+`fitted_at_utc` and `artifact_paths` ignored):
+
+    # Zenbook, Git Bash, after the scoring parity run
+    python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data
+    "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/fit_gtm_emos.py --trend --root ~/quant_data/climate_data'
+    "$SCP" spark:quant_data/climate_data/models/gtm_emos.json ~/quant_data_snapshot/parity/gtm_emos_spark.json
+    "$SCP" spark:quant_data/climate_data/reports/gtm_emos_diagnostics.json ~/quant_data_snapshot/parity/diagnostics_spark.json
+    python scripts/spark/compare_json.py ~/quant_data_snapshot/climate_data/models/gtm_emos.json ~/quant_data_snapshot/parity/gtm_emos_spark.json --rtol 1e-6 --atol 1e-9 --ignore fingerprint
+    python scripts/spark/compare_json.py ~/quant_data_snapshot/climate_data/reports/gtm_emos_diagnostics.json ~/quant_data_snapshot/parity/diagnostics_spark.json --rtol 1e-6 --atol 1e-9 --ignore fitted_at_utc artifact_paths fingerprint
+
+The optimiser amplifies the same kernel differences, and fresh artifacts
+carry a `fingerprint` string that changes with any last bit: on 2026-10-03
+one of the model's 50 coefficients (lead 2, `d`) differed by 1.2e-6
+relative, and both compares printed `PARITY FAILED` (exit 1, expected
+here); the design asks for an investigation only above 1e-4. A refit
+overwrites the model and diagnostics under the root it ran on, so push again
+before the next scoring parity run.
 
 ## 5. Using the local model
 
@@ -217,10 +250,10 @@ under the root it ran on, so push again before the next scoring parity run.
   `.env`). The Spark's `.env` holds only that one line; `.env.example`
   documents every `LLM_` setting, `LLM_CONNECT_TIMEOUT_S` and
   `LLM_READ_TIMEOUT_S` included.
-- The client only ever talks to that loopback tunnel. It ignores proxy
-  environment variables (`trust_env=False`) and therefore also
-  `SSL_CERT_FILE` / `SSL_CERT_DIR`, so an `https://` base URL with a private
-  CA is unsupported by design. The test that pins this
+- The client talks only to `LLM_BASE_URL` (the loopback tunnel by default).
+  It ignores proxy environment variables (`trust_env=False`) and therefore
+  also `SSL_CERT_FILE` / `SSL_CERT_DIR`, so an `https://` base URL with a
+  private CA is unsupported by design. The test that pins this
   (`test_client_without_a_transport_ignores_the_proxy_environment` in
   `tests/test_llm/test_client_request.py`) reads httpx internals, so an
   httpx upgrade past the 0.28.1 pinned in `constraints/` may fail it loudly:
@@ -233,7 +266,7 @@ under the root it ran on, so push again before the next scoring parity run.
   11.7-16.4 tok/s single-stream, about 7 s end to end.
 - After a reboot the stack comes up by itself in about 10 minutes
   (`ple-warm.service` warms the sidecar before docker; every service has
-  `restart: always`). It is ready when
+  `restart: always`). It is ready when, on the Spark,
   `docker inspect -f '{{.State.Health.Status}}' qwenflash` prints `healthy`.
   The served model name is `Qwen3.8-Flash-Next-NVFP4`.
 - The server returns the reasoning text under `message.reasoning`, not
@@ -248,7 +281,8 @@ under the root it ran on, so push again before the next scoring parity run.
   `LLM_MODEL` is what the server serves and that a schema-constrained
   extraction round-trips; it exits 0 only then, and prints latency, tokens/s
   and the reasoning-token count. The live test is skipped unless
-  `LLM_LIVE=1`:
+  `LLM_LIVE=1`, and it reads `LLM_MODEL` only from `.env` (the test
+  conftest clears every other `LLM_*` variable from its environment):
 
       "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/llm_smoke.py'
       "$SSH" spark 'cd ~/work/forecast-model && LLM_LIVE=1 .venv/bin/python -m pytest tests/test_llm/test_live.py -q'

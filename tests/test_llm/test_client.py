@@ -1,7 +1,10 @@
 """LocalLLMClient against an httpx.MockTransport: request shape, parsing, errors.
 
 No network. The handler records the request the client sent and answers
-with the vLLM/OpenAI chat-completions shape (content + reasoning_content).
+with a hand-drawn OpenAI-style chat-completions shape (content +
+reasoning_content). The client reads reasoning_content and falls back to
+reasoning, the key the Spark's vLLM actually sends; test_real_shapes.py covers
+that against replies captured from it.
 """
 
 from __future__ import annotations
