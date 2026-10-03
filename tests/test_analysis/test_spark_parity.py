@@ -334,6 +334,49 @@ def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
         assert not sp.compare_json({"i": 800_000_000}, {"i": 800_000_000 + delta}, **gate).ok
 
 
+def test_subtree_walks_dotted_dict_keys():
+    doc = {"identity": {"machine": {"python": "3.14.2"}, "snapshot": {"n": 1}, "list": [1, 2]}}
+    assert sp.subtree(doc, "identity.machine") == {"python": "3.14.2"}
+    assert sp.subtree(doc, "identity.machine.python") == "3.14.2"
+    assert sp.subtree(doc, "identity.list") == [1, 2]  # a list is a value; it is not walked
+    assert sp.subtree(doc, "identity") is doc["identity"]
+
+
+def test_subtree_returns_null_and_falsy_values_as_present():
+    """Absent is a KeyError, so a present null (or 0, False, {}, []) is never mistaken for it."""
+    doc = {"a": None, "b": 0, "c": False, "d": {}, "e": []}
+    assert sp.subtree(doc, "a") is None
+    assert sp.subtree(doc, "b") == 0 and sp.subtree(doc, "b") is not False
+    assert sp.subtree(doc, "c") is False
+    assert sp.subtree(doc, "d") == {}
+    assert sp.subtree(doc, "e") == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "x",  # absent at the top
+        "identity.x",  # absent one level down
+        "identity.machine.x",  # absent at the leaf
+        "identity.machine.python.x",  # through a string
+        "identity.machine.python.x.y",
+        "identity.list.0",  # through a list: only dict keys are walked
+        "identity..machine",  # an empty segment names no key
+        "",  # nor does an empty path
+    ],
+)
+def test_subtree_raises_keyerror_for_an_absent_path(path):
+    doc = {"identity": {"machine": {"python": "3.14.2"}, "list": [1, 2]}}
+    with pytest.raises(KeyError):
+        sp.subtree(doc, path)
+
+
+@pytest.mark.parametrize("payload", [None, [1], "text", 5], ids=["null", "list", "str", "int"])
+def test_subtree_of_a_payload_that_is_not_an_object_is_absent(payload):
+    with pytest.raises(KeyError):
+        sp.subtree(payload, "identity")
+
+
 # --------------------------------------------------------------------------- #
 # machine_info / score_snapshot
 # --------------------------------------------------------------------------- #

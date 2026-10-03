@@ -190,19 +190,27 @@ which writes nothing under `paper/`.
     python scripts/spark/parity_score.py --root ~/quant_data_snapshot --out ~/quant_data_snapshot/parity/zenbook.json
     "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json'
     "$SCP" spark:parity_spark.json ~/quant_data_snapshot/parity/spark.json
-    python scripts/spark/compare_json.py ~/quant_data_snapshot/parity/zenbook.json ~/quant_data_snapshot/parity/spark.json --ignore identity.machine --rtol 1e-8 --atol 1e-10 --min-numeric 1000
+    python scripts/spark/compare_json.py ~/quant_data_snapshot/parity/zenbook.json ~/quant_data_snapshot/parity/spark.json --ignore identity.machine --differ identity.machine --rtol 1e-8 --atol 1e-10 --min-numeric 1000
 
 `PARITY OK` at the registered tolerance is the gate (2026-10-03: 1536
 numeric leaves, max relative difference 3.8e-10); the `identity.snapshot`
 block, which is not ignored, proves both machines scored the same bytes at
-the same commit. `--min-numeric 1000` is a floor on the numeric leaves
-compared (the real payload has about 1500): an accidentally empty signals
-list must not pass as parity, and a legitimately smaller ladder fails it
-loudly, which is the cue to lower the floor with a note (ruling R-L). The
-compare ignores `identity.machine`, `git_dirty` included, so look at it
-yourself: both payloads should say `"git_dirty": false` (`grep git_dirty` on
-the two files), because a dirty tracked tree means the code that scored is
-not the commit the identity names. The tolerance is not 1e-15 because the
+the same commit. `--ignore identity.machine` keeps the machine blocks out of
+the numbers (they differ by design) and `--differ identity.machine` closes
+the gap that leaves: it fails unless both payloads have the block and the two
+blocks are not identical, so two copies of one machine's payload (the wrong
+file in the `spark.json` slot) cannot pass as cross-machine parity. The
+`machines:` line names both sides (2026-10-03: `AMD64/Windows/py3.14.2`
+against `aarch64/Linux/py3.14.2`). `--min-numeric 1000` is a floor on the
+numeric leaves compared (the real payload has about 1500): an accidentally
+empty signals list must not pass as parity, and a legitimately smaller
+ladder fails it loudly, which is the cue to lower the floor with a note
+(ruling R-L). The compare ignores `identity.machine`, `git_dirty` included,
+so the CLI prints `WARNING: <side> payload has git_dirty=true` for any side
+that says so (a warning, not a failure; no warning means nothing to grep
+for). Treat it as a stop: a dirty tracked tree means the code that scored is
+not the commit the identity names, so commit or discard the change and score
+again. The tolerance is not 1e-15 because the
 frame's ERA5->NOAA bridge is refit with LAPACK on each machine and reduction
 order differs by CPU kernel (measured x86 kernel-to-kernel noise: 3e-10
 relative); 1e-8 is still six orders below the smallest price step that

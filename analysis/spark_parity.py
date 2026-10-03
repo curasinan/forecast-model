@@ -426,6 +426,25 @@ def compare_json(
     return result
 
 
+def subtree(payload: Any, path: str) -> Any:
+    """The value at the dotted ``path`` of a parsed JSON ``payload``.
+
+    The same dotted paths ``compare_json`` takes for ``ignore``
+    (``identity.machine``), walked through dict keys only: a list is a value,
+    never descended into, and a key that itself contains a dot cannot be
+    addressed. Raises ``KeyError(path)`` when any step is absent or passes
+    through something that is not an object, so an absent subtree stays
+    distinguishable from a present ``null`` (or 0, False, {}, []). The CLI's
+    ``--differ`` uses it on the raw payloads, before any ``--ignore``.
+    """
+    node = payload
+    for key in path.split("."):
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(path)
+        node = node[key]
+    return node
+
+
 # --------------------------------------------------------------------------- #
 # Machine info and the scoring probe
 # --------------------------------------------------------------------------- #
