@@ -1,4 +1,4 @@
-"""Architecture guard: the LLM never enters the pricing or ordering path.
+"""Architecture guard: the LLM never enters the pricing, ordering, fitting or labelling path.
 
 Role decision 2026-09-29 (docs/plans/2026-09-30-spark-research-split-design.md,
 section 6): the LLM is a data processor, the numeric model predicts. Pure-AST
@@ -45,6 +45,11 @@ GUARDED_FILES = (
     ("scripts", "sync_ibkr_paper.py"),
     ("scripts", "record_ibkr_ticks.py"),
     ("scripts", "run_gtm_paper.py"),
+    # Thin CLIs over climate/, yet outside it: the fit writes the operational model and the
+    # labels script writes the training labels, so an src.llm import in either would feed
+    # the model or its labels unseen (final review, ruling R-Z; design section 11, R16).
+    ("scripts", "fit_gtm_emos.py"),
+    ("scripts", "collect_climate_labels.py"),
 )
 LLM_PACKAGE = "src.llm"
 
@@ -64,6 +69,8 @@ REQUIRED_SCOPE = (
     "scripts/sync_ibkr_paper.py",
     "scripts/record_ibkr_ticks.py",
     "scripts/run_gtm_paper.py",
+    "scripts/fit_gtm_emos.py",
+    "scripts/collect_climate_labels.py",
 )
 
 

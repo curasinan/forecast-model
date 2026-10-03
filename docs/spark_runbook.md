@@ -298,14 +298,16 @@ before the next scoring parity run.
 - Boundary: `src.llm` is never imported under `climate/`, `src/trading/`,
   `src/venues/`, `src/edge/`, `src/domain/`, `src/math/`, `src/models/`,
   `monitoring/`, nor in `scripts/run_ibkr_paper.py`,
-  `scripts/sync_ibkr_paper.py`, `scripts/record_ibkr_ticks.py` or
-  `scripts/run_gtm_paper.py` (`tests/test_architecture/test_llm_boundary.py`;
+  `scripts/sync_ibkr_paper.py`, `scripts/record_ibkr_ticks.py`,
+  `scripts/run_gtm_paper.py`, `scripts/fit_gtm_emos.py` or
+  `scripts/collect_climate_labels.py` (`tests/test_architecture/test_llm_boundary.py`;
   a literal `REQUIRED_SCOPE` list in that file pins the set, so narrowing it
-  takes an edit to the list). `src/collectors/` is deliberately outside: it
-  is where text-to-data processing may live. The scan reads imports only: it
-  cannot see transitive imports, `importlib` / string-named imports or
-  `from src import *`. The LLM turns text into data; the numeric model
-  prices.
+  takes an edit to the list). The last two are guarded because they produce
+  the operational model and its training labels. `src/collectors/` is
+  deliberately outside: it is where text-to-data processing may live. The
+  scan reads imports only: it cannot see transitive imports, `importlib` /
+  string-named imports or `from src import *`. The LLM turns text into data;
+  the numeric model prices.
 
 ## 6. When the network changes
 

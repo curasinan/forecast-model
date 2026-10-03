@@ -7,7 +7,9 @@ SCP=/c/Windows/System32/OpenSSH/scp.exe
 # sourced from (the main checkout or any worktree) and cannot go stale: C:/a/b -> //mnt/c/a/b.
 # Double slash on purpose: Git Bash (MSYS) rewrites a standalone /mnt/... argument into
 # C:/Program Files/Git/mnt/... before wsl.exe sees it; //mnt/... arrives intact (verified).
-_spark_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -W)
+# CDPATH= and >/dev/null: with CDPATH set (CDPATH=. in a login profile is enough) `cd` echoes
+# the directory it entered, which would be glued into the path and add a second line.
+_spark_root=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null && pwd -W)
 _spark_drive=$(printf '%s' "${_spark_root%%:*}" | tr 'A-Z' 'a-z')
 REPO_WSL="//mnt/$_spark_drive${_spark_root#?:}"
 unset _spark_root _spark_drive

@@ -36,7 +36,7 @@ INCLUDE_RAW=0
 for arg in "$@"; do
   case "$arg" in
     --include-raw) INCLUDE_RAW=1 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "push_snapshot: unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -78,7 +78,7 @@ if "$SSH" spark "cd $REMOTE_REPO && $REMOTE_PY scripts/spark/verify_mirror.py --
 else
   rc=$?
   rm -f "$TMP_ID"
-  echo "push_snapshot: verify_mirror failed on the Spark (exit $rc); the previous identity is untouched" >&2
+  echo "push_snapshot: the verify step on the Spark failed (ssh exit $rc; see its output above); the previous identity is untouched" >&2
   exit "$rc"
 fi
 
