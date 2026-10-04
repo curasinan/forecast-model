@@ -94,6 +94,22 @@ class TestGapDetection:
         # All days are missing, including 2026-08-18 (empty partition)
         assert date(2026, 8, 18) in gaps
 
+    def test_refetch_dates_count_as_missing_even_when_they_hold_files(self, tmp_path):
+        make_backfilled_dirs(tmp_path, ["2026-09-03"])  # three bars of a first day
+        make_sweep_dirs(tmp_path, ["2026-09-04"])
+        window = (date(2026, 9, 2), date(2026, 9, 5))
+
+        assert missing_dates(tmp_path, *window) == [date(2026, 9, 2), date(2026, 9, 5)]
+        assert missing_dates(tmp_path, *window,
+                             refetch=[date(2026, 9, 3), date(2026, 9, 4)]) == [
+            date(2026, 9, 2), date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 5)]
+
+    def test_refetch_dates_outside_the_window_are_not_added(self, tmp_path):
+        make_backfilled_dirs(tmp_path, ["2026-09-03", "2026-09-04"])
+        gaps = missing_dates(tmp_path, date(2026, 9, 4), date(2026, 9, 4),
+                             refetch=[date(2026, 9, 3)])
+        assert gaps == []
+
     def test_missing_dates_with_missing_backfill_tree(self, tmp_path):
         # If quotes_hourly/ doesn't exist at all, behavior is unchanged
         gaps = missing_dates(tmp_path, date(2026, 8, 16), date(2026, 8, 20))
@@ -108,10 +124,26 @@ class TestPlanning:
         reqs, skipped = plan_requests([1, 2], date(2026, 8, 18), date(2026, 8, 25),
                                       what_to_show=("BID_ASK", "MIDPOINT"))
         assert skipped == 0 and len(reqs) == 4
-        assert {r.duration_str for r in reqs} == {"8 D"}
+        # 8 gap days plus the session that opens the evening before the first one
+        assert {r.duration_str for r in reqs} == {"9 D"}
         # endDateTime is the exclusive right edge: midnight AFTER the last gap day
         assert {r.end_date_time for r in reqs} == {"20260826-00:00:00"}
         assert [r.con_id for r in reqs] == [1, 1, 2, 2]
+
+    def test_one_gap_day_needs_the_session_that_opens_the_evening_before(self):
+        # IB counts "N D" in sessions, and a FORECASTX session opens at 21:16 UTC
+        # the evening before its date: the 30 D run of 2026-10-04, ending
+        # 2026-10-03 00:00, came back from 2026-09-03 21:16 -- three bars into
+        # the first day it was meant to fill.
+        reqs, _ = plan_requests([1], date(2026, 9, 3), date(2026, 9, 3))
+        assert reqs[0].duration_str == "2 D"
+        assert reqs[0].end_date_time == "20260904-00:00:00"
+
+    def test_the_ceiling_counts_the_extra_session(self):
+        reqs, _ = plan_requests([1], date(2026, 9, 4), date(2026, 10, 2))  # 29 gap days
+        assert reqs[0].duration_str == "30 D"
+        with pytest.raises(ValueError, match="ceiling"):
+            plan_requests([1], date(2026, 9, 3), date(2026, 10, 2))  # 30 gap days
 
     def test_max_requests_drops_whole_contracts_and_reports(self):
         reqs, skipped = plan_requests([1, 2, 3], date(2026, 8, 18), date(2026, 8, 19),
@@ -197,6 +229,20 @@ def _bars(day: int, count: int = 2):
             for i in range(count)]
 
 
+def _bar(day: int, hour: int, minute: int = 0):
+    return SimpleNamespace(date=datetime(2026, 8, day, hour, minute, tzinfo=timezone.utc),
+                           open=0.4, high=0.5, low=0.3, close=0.45, volume=0)
+
+
+def _stamps_on_disk(root, day: str) -> list[tuple[int, str, str]]:
+    """Every (con_id, ts_utc, what_to_show) stored for one date, sorted."""
+    keys = []
+    for path in (root / "quotes_hourly" / f"date={day}").glob("*.parquet"):
+        table = pq.read_table(path, columns=["con_id", "ts_utc", "what_to_show"])
+        keys.extend(zip(*(table.column(name).to_pylist() for name in table.column_names)))
+    return sorted(keys)
+
+
 class TestRun:
     def test_writes_bars_and_reports_empty_and_failed(self, tmp_path):
         reqs, _ = plan_requests([11, 12, 13], date(2026, 8, 18), date(2026, 8, 18))
@@ -213,13 +259,101 @@ class TestRun:
         assert (tmp_path / "quotes_hourly" / "date=2026-08-18"
                 / "hourly-runX-000.parquet").exists()
 
+    def test_bars_from_before_the_first_gap_day_are_not_written(self, tmp_path):
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        lead_session = [_bar(17, 21, 16), _bar(17, 22), _bar(17, 23)]
+        ib = FakeIB({(11, "BID_ASK"): lead_session + [_bar(18, 0), _bar(18, 1)]})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runL")
+
+        assert result.bars == 2 and result.dates_written == {"2026-08-18": 2}
+        # a file under date=2026-08-17 would mark that day as backfilled
+        assert not (tmp_path / "quotes_hourly" / "date=2026-08-17").exists()
+
+    def test_a_contract_with_bars_only_before_the_gap_counts_as_empty(self, tmp_path):
+        reqs, _ = plan_requests([11, 12], date(2026, 8, 18), date(2026, 8, 18))
+        ib = FakeIB({(11, "BID_ASK"): [_bar(18, 10)], (12, "BID_ASK"): [_bar(17, 22)]})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runE")
+
+        assert result.contracts_with_bars == 1 and result.empty_con_ids == [12]
+
+    def test_bars_already_on_disk_are_not_written_twice(self, tmp_path):
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 21, 16)]}),
+                             FakeResolver({}), tmp_path).run(reqs, "old")
+        ib = FakeIB({(11, "BID_ASK"): [_bar(18, 20), _bar(18, 21, 16)]})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert result.bars == 1 and result.skipped_existing == 1
+        assert result.dates_written == {"2026-08-18": 1}
+        assert _stamps_on_disk(tmp_path, "2026-08-18") == [
+            (11, "2026-08-18T20:00:00+00:00", "BID_ASK"),
+            (11, "2026-08-18T21:16:00+00:00", "BID_ASK"),
+        ]
+
+    def test_a_stored_bar_is_recognised_whatever_its_utc_suffix(self, tmp_path):
+        # same instant, written with a Z instead of +00:00: still one bar
+        stored = {"ts_utc": "2026-08-18T21:16:00Z", "con_id": 11, "symbol": "GTM",
+                  "expiry": "20261231", "strike": 1.2, "right": "C",
+                  "what_to_show": "BID_ASK", "bar_size": BAR_SIZE, "open": 0.4,
+                  "high": 0.5, "low": 0.3, "close": 0.45, "volume": 0.0,
+                  "source": "reqHistoricalData"}
+        write_backfill_rows([stored], tmp_path, "old")
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        ib = FakeIB({(11, "BID_ASK"): [_bar(18, 21, 16)]})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert result.bars == 0 and result.skipped_existing == 1
+
+    def test_the_same_hour_of_another_tick_type_is_not_a_duplicate(self, tmp_path):
+        first, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
+                             FakeResolver({}), tmp_path).run(first, "old")
+        second, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18),
+                                  what_to_show=("MIDPOINT",))
+        result = HistoricalBackfiller(FakeIB({(11, "MIDPOINT"): [_bar(18, 10)]}),
+                                      FakeResolver({}), tmp_path).run(second, "new")
+
+        assert result.bars == 1 and result.skipped_existing == 0
+
+    def test_a_rerun_that_finds_everything_on_disk_writes_no_file(self, tmp_path):
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        bars = {(11, "BID_ASK"): [_bar(18, 10), _bar(18, 11)]}
+        HistoricalBackfiller(FakeIB(bars), FakeResolver({}), tmp_path).run(reqs, "old")
+        result = HistoricalBackfiller(FakeIB(bars), FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert result.bars == 0 and result.skipped_existing == 2 and result.files == []
+        # the venue did answer with history, so the contract is not "empty"
+        assert result.contracts_with_bars == 1 and result.empty_con_ids == []
+
+    def test_a_bar_returned_twice_in_one_run_is_written_once(self, tmp_path):
+        # `--what BID_ASK BID_ASK` plans the same request twice
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18),
+                                what_to_show=("BID_ASK", "BID_ASK"))
+        now = [0.0]
+        pacer = HistoricalPacer(clock=lambda: now[0],
+                                sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds))
+        ib = FakeIB({(11, "BID_ASK"): [_bar(18, 10)]})
+        result = HistoricalBackfiller(ib, FakeResolver({}), tmp_path, pacer=pacer).run(reqs, "runD")
+
+        assert len(ib.calls) == 2
+        assert result.bars == 1 and result.skipped_existing == 1
+
+    def test_an_unreadable_file_in_the_window_stops_the_run_before_any_request(self, tmp_path):
+        make_backfilled_dirs(tmp_path, ["2026-08-18"])  # a stub that is not parquet
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        ib = FakeIB({(11, "BID_ASK"): [_bar(18, 10)]})
+
+        with pytest.raises(RuntimeError, match="hourly-run1.parquet"):
+            HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runU")
+        assert ib.calls == []
+
     def test_requests_carry_utc_end_and_no_rth_filter(self, tmp_path):
         reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 19))
         ib = FakeIB({})
         HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runY")
         call = ib.calls[0]
         assert call["endDateTime"] == "20260820-00:00:00"
-        assert call["durationStr"] == "2 D" and call["barSizeSetting"] == BAR_SIZE
+        assert call["durationStr"] == "3 D" and call["barSizeSetting"] == BAR_SIZE
         assert call["useRTH"] is False and call["formatDate"] == 2
 
     def test_every_request_goes_through_the_pacer(self, tmp_path):

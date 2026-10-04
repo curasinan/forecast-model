@@ -166,7 +166,22 @@ account holder; no commit in this repo enables it.
       GTTA 18,640 / GTTM 12,888. The other 46 contracts have no history at
       all (same set that never quotes; consistent with the Stage-5 probe).
       Prices span 0.01..0.99 with no nulls. Deeper history (back to
-      2026-01-17) needs ~8 more 30-day chunks at ~75 min each.
+      2026-01-17) needs 7 more chunks of at most 29 days, about 2 h each.
+      (The "~75 min" above was an estimate; the run ledger shows 114 min.)
+- [x] **Backfill RUN 2026-10-04** (run_id 20261004T172227Z, 111 min): 338
+      requests, 0 failures, 231,504 hourly BID_ASK bars over 2026-09-03..10-02
+      for 318 of 338 climate-lane contracts (the other 20 answered "no data").
+      Two things the August run had hidden: a run's length is set by pacing,
+      about 20 s per BID_ASK request; and IB counts a duration in sessions
+      that open at 21:16 UTC the evening before, so the first day of both
+      runs (2026-07-26, 2026-09-03) holds only its last three bars.
+- [x] **Backfill first-day fix 2026-10-04**: a request now reaches one session
+      further back and only bars on or after the first gap day are written, so
+      the longest gap one request fills is 29 days. `--refetch DATE...`
+      fetches a day again although it holds files, and a bar -- identified by
+      (contract, instant, tick type) -- is never written twice, which makes
+      `--refetch` the way to finish a cut run. The two short first days are
+      still to be refetched.
 - [x] `docs/operating_costs.md` filled (delayed free, $0.01 commission, ~100
       line budget); only the live-feed subscription PRICE stays UNKNOWN.
 
@@ -334,7 +349,9 @@ $env:IBKR_PORT='4002'; $env:IBKR_TRADING_MODE='paper'; python scripts/record_ibk
 python scripts/check_ibkr_recorder.py
 # Alert-channel test: one labelled message, no health check, alert state untouched
 python scripts/check_ibkr_recorder.py --test-alert
-# Backfill hourly bars for days the recorder missed (plan first, then run)
+# Backfill hourly bars for days the recorder missed (plan first, then run).
+# A day that holds files is skipped; --refetch DATE fetches it again without
+# doubling stored bars (finish a cut run, complete a short first day).
 python scripts/backfill_ibkr_hourly.py --dry-run
 python scripts/backfill_ibkr_hourly.py --port 4002 --mode paper
 # Paper trading: dress rehearsal, then real paper orders one by one
@@ -428,8 +445,9 @@ Nothing is half-built. The useful moves, in order:
    anything; check for duplicates against `get_open_orders()` first.
 3. `python scripts/backfill_ibkr_hourly.py --dry-run` -- if the recorder was
    down, this shows the hole and the real run fills it.
-4. Deeper quote history (back to 2026-01-17) is available in ~8 more 30-day
-   `--start/--end` chunks at ~75 min each, if the model ever needs it.
+4. Deeper quote history (back to 2026-01-17) is available in 7 more
+   `--start/--end` chunks of at most 29 days, about 2 h each, if the model
+   ever needs it. Only contracts that have not expired are requested.
 
 ## 9. History rewrite and rename (2026-10-02)
 

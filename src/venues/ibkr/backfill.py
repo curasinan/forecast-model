@@ -19,6 +19,13 @@ Provenance is kept explicit rather than merged into the sweep store:
 
 Pacing is mandatory: violations can lock the session out, so every request
 goes through HistoricalPacer, which blocks rather than dropping.
+
+Two facts about the store that the planner and the writer rely on:
+
+* a request reaches one session further back than the gap (LEAD_SESSIONS),
+  and only bars on or after the first gap day are written;
+* a bar is identified by (contract, instant, tick type) and is never written
+  twice, so a plan can be run again over days that already hold files.
 """
 
 from __future__ import annotations
@@ -43,9 +50,15 @@ HISTORY_STARTS = date(2026, 1, 17)
 # IB caps a single 1-hour-bar request; one month per request is the documented
 # ceiling and also the largest gap worth recovering in one pass.
 MAX_DURATION_DAYS = 30
+# IB counts a duration of "N D" in sessions, and a FORECASTX session opens the
+# evening before its date (21:16 UTC, observed 2026-08-25 and 2026-10-04): N
+# sessions ending at midnight start at that open, so the first calendar day
+# comes back three bars long. One more session makes the first gap day whole.
+LEAD_SESSIONS = 1
+MAX_GAP_DAYS = MAX_DURATION_DAYS - LEAD_SESSIONS
 
 BACKFILL_SCHEMA = pa.schema([
-    ("ts_utc", pa.string()),        # bar END timestamp, UTC ISO-8601
+    ("ts_utc", pa.string()),        # bar START timestamp (IB's bar.date), UTC ISO-8601
     ("con_id", pa.int64()),
     ("symbol", pa.string()),
     ("expiry", pa.string()),
@@ -76,10 +89,17 @@ class BackfillRequest:
     what_to_show: str
     end_dt: datetime          # UTC, exclusive right edge of the window
     duration_days: int
+    # First UTC date whose bars are wanted. The request itself reaches one
+    # session further back (LEAD_SESSIONS); None keeps every bar that returns.
+    first_date: date | None = None
 
     @property
     def duration_str(self) -> str:
         return f"{self.duration_days} D"
+
+    def covers(self, day: str) -> bool:
+        """True when a bar stamped on ``day`` ('YYYY-MM-DD') belongs to the gap."""
+        return self.first_date is None or day >= self.first_date.isoformat()
 
     @property
     def end_date_time(self) -> str:
@@ -105,6 +125,7 @@ class BackfillResult:
     files: list[Path] = field(default_factory=list)
     skipped_con_ids: int = 0          # dropped by --max-requests, reported loudly
     dates_written: dict[str, int] = field(default_factory=dict)
+    skipped_existing: int = 0         # bars the venue returned that were already stored
 
 
 def recorded_dates(data_root: str | Path) -> set[date]:
@@ -153,7 +174,8 @@ def backfilled_dates(data_root: str | Path) -> set[date]:
     return found
 
 
-def missing_dates(data_root: str | Path, start: date, end: date) -> list[date]:
+def missing_dates(data_root: str | Path, start: date, end: date,
+                  refetch: Iterable[date] = ()) -> list[date]:
     """Dates in [start, end] with no sweep file and not already backfilled, clipped to available history.
 
     A date is considered complete if it either:
@@ -162,13 +184,18 @@ def missing_dates(data_root: str | Path, start: date, end: date) -> list[date]:
 
     Empty partitions (directories with no parquet files) are not considered complete
     and will be re-fetched. The day-granularity contract: a day with ANY hourly parquet
-    counts as done; partial days are not re-fetched.
+    counts as done; partial days are not re-fetched on their own.
+
+    ``refetch`` is the way around that contract: a date named there counts as
+    missing whatever it holds, as long as it lies inside the window. It is for
+    a day a cut run left with some contracts only, and for the first day of a
+    run made before the lead session was requested (three bars per contract).
     """
     if end < start:
         raise ValueError(f"end {end} is before start {start}")
     have = recorded_dates(data_root)
     backfilled = backfilled_dates(data_root)
-    have = have | backfilled  # union: dates from either source count as done
+    have = (have | backfilled) - set(refetch)  # either source counts as done
     start = max(start, HISTORY_STARTS)
     days = (end - start).days
     return [d for i in range(days + 1)
@@ -187,9 +214,9 @@ def plan_requests(con_ids: Sequence[int], gap_start: date, gap_end: date,
     if gap_end < gap_start:
         raise ValueError(f"gap_end {gap_end} is before gap_start {gap_start}")
     span = (gap_end - gap_start).days + 1
-    if span > MAX_DURATION_DAYS:
+    if span > MAX_GAP_DAYS:
         raise ValueError(
-            f"gap of {span} days exceeds the {MAX_DURATION_DAYS}-day single-request "
+            f"gap of {span} days exceeds the {MAX_GAP_DAYS}-day single-request "
             "ceiling for 1-hour bars; backfill it in chunks"
         )
     # End at the start of the day AFTER gap_end so the last day is included
@@ -205,8 +232,8 @@ def plan_requests(con_ids: Sequence[int], gap_start: date, gap_end: date,
         if capacity < len(keep):
             skipped = len(keep) - capacity
             keep = keep[:capacity]
-    requests = [BackfillRequest(con_id=cid, what_to_show=tick,
-                                end_dt=end_dt, duration_days=span)
+    requests = [BackfillRequest(con_id=cid, what_to_show=tick, end_dt=end_dt,
+                                duration_days=span + LEAD_SESSIONS, first_date=gap_start)
                 for cid in keep for tick in ticks]
     return requests, skipped
 
@@ -222,7 +249,7 @@ def _float_or_none(value) -> float | None:
 
 
 def bar_to_row(bar, request: BackfillRequest, meta: dict) -> dict:
-    """Map one ib_async BarData to a BACKFILL_SCHEMA row (UTC bar end time)."""
+    """Map one ib_async BarData to a BACKFILL_SCHEMA row (UTC bar start time)."""
     ts = bar.date
     if isinstance(ts, datetime):
         ts_utc = (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
@@ -250,6 +277,40 @@ def bar_to_row(bar, request: BackfillRequest, meta: dict) -> dict:
 def _row_date(row: dict) -> str:
     text = row["ts_utc"]
     return text[:10] if len(text) >= 10 else "unknown"
+
+
+def _bar_key(con_id, ts_text: str, what_to_show: str) -> tuple:
+    """Identity of one stored bar: contract, instant, tick type.
+
+    The timestamp is compared as an instant, not as text, so the '+00:00' and
+    'Z' spellings of one bar are one key.
+    """
+    try:
+        ts = datetime.fromisoformat(ts_text)
+    except (TypeError, ValueError):
+        return (int(con_id), ts_text, what_to_show)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (int(con_id), ts.astimezone(timezone.utc), what_to_show)
+
+
+def stored_bar_keys(data_root: str | Path, day: str) -> set[tuple]:
+    """Keys of every bar already stored under quotes_hourly/date=<day>/.
+
+    Raises RuntimeError naming the file when one cannot be read: a run that
+    adds to a day must know what that day already holds.
+    """
+    keys: set[tuple] = set()
+    day_dir = Path(data_root) / "quotes_hourly" / f"date={day}"
+    for path in sorted(day_dir.glob("*.parquet")):
+        try:
+            table = pq.read_table(path, columns=["con_id", "ts_utc", "what_to_show"])
+        except Exception as exc:  # noqa: BLE001 -- any reader error is the finding
+            raise RuntimeError(f"cannot read the stored hourly file {path}: {exc}") from exc
+        keys.update(_bar_key(con_id, ts, what) for con_id, ts, what in zip(
+            table.column("con_id").to_pylist(), table.column("ts_utc").to_pylist(),
+            table.column("what_to_show").to_pylist()))
+    return keys
 
 
 def write_backfill_rows(rows: Iterable[dict], data_root: str | Path,
@@ -282,6 +343,38 @@ class HistoricalBackfiller:
         self.resolver = resolver
         self.data_root = Path(data_root)
         self.pacer = pacer or HistoricalPacer()
+        self._stored: dict[str, set[tuple]] = {}  # day -> keys on disk plus keys queued
+
+    def _stored_keys(self, day: str) -> set[tuple]:
+        if day not in self._stored:
+            self._stored[day] = stored_bar_keys(self.data_root, day)
+        return self._stored[day]
+
+    def _read_stored_window(self, requests: Sequence[BackfillRequest]) -> None:
+        """Load the keys of every day the plan can write to.
+
+        Done before the first request on purpose: an unreadable file must stop
+        the run while nothing has been asked of the venue, not at a flush with
+        fetched rows in hand.
+        """
+        windows = {(r.first_date, r.end_dt.astimezone(timezone.utc).date())
+                   for r in requests if r.first_date is not None}
+        for first, end in windows:
+            for offset in range((end - first).days):
+                self._stored_keys((first + timedelta(days=offset)).isoformat())
+
+    def _not_yet_stored(self, kept: list[dict], result: BackfillResult) -> list[dict]:
+        """Rows of ``kept`` that no stored or queued bar already covers."""
+        fresh: list[dict] = []
+        for row in kept:
+            seen = self._stored_keys(_row_date(row))
+            key = _bar_key(row["con_id"], row["ts_utc"], row["what_to_show"])
+            if key in seen:
+                result.skipped_existing += 1
+                continue
+            seen.add(key)  # queued rows count too: a repeated request must not double them
+            fresh.append(row)
+        return fresh
 
     def fetch(self, request: BackfillRequest) -> list:
         """One paced request; raises whatever the API raises (caller records it)."""
@@ -309,8 +402,13 @@ class HistoricalBackfiller:
         requests (and on any exception on the way out) rather than being held
         until the end -- an interrupted run keeps everything it had fetched.
         Each flush writes its own file suffix, so nothing is overwritten.
+
+        Bars already stored for a day are not written again, so the same plan
+        can be run twice: that is how a cut run is finished (``--refetch``)
+        and how a day that holds only part of its bars is completed.
         """
         result = BackfillResult(requested=len(requests), skipped_con_ids=skipped_con_ids)
+        self._read_stored_window(requests)
         rows: list[dict] = []
         with_bars: set[int] = set()
         empty: set[int] = set()
@@ -341,16 +439,21 @@ class HistoricalBackfiller:
                                    request.what_to_show, exc)
                     continue
                 answered += 1
-                if not bars:
+                # The lead session's bars fall on the day before the gap; writing
+                # them would mark that day as backfilled with three bars in it.
+                kept = [row for row in (bar_to_row(bar, request, meta) for bar in bars)
+                        if request.covers(_row_date(row))]
+                if not kept:
                     empty.add(request.con_id)
                     logger.info("backfill %d/%d conId=%s %s: no bars",
                                 index, len(requests), request.con_id, request.what_to_show)
                 else:
                     with_bars.add(request.con_id)
-                    rows.extend(bar_to_row(bar, request, meta) for bar in bars)
-                    logger.info("backfill %d/%d conId=%s %s: %d bars",
+                    fresh = self._not_yet_stored(kept, result)
+                    rows.extend(fresh)
+                    logger.info("backfill %d/%d conId=%s %s: %d bars (%d already stored)",
                                 index, len(requests), request.con_id,
-                                request.what_to_show, len(bars))
+                                request.what_to_show, len(kept), len(kept) - len(fresh))
                 if flush_every and answered % flush_every == 0:
                     flush()
         finally:

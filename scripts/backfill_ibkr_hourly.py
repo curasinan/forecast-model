@@ -14,9 +14,17 @@ Usage (Gateway logged in, e.g. paper on 127.0.0.1:4002):
     python scripts/backfill_ibkr_hourly.py                 # climate lane, BID_ASK
     python scripts/backfill_ibkr_hourly.py --symbols GTM --what BID_ASK MIDPOINT
     python scripts/backfill_ibkr_hourly.py --all-symbols --max-requests 400
+    python scripts/backfill_ibkr_hourly.py --start 2026-09-03 --end 2026-10-02 \
+        --refetch 2026-09-03                               # finish a partly filled day
 
-Exit codes: 0 done (bars written or nothing missing), 3 Gateway offline /
-connection refused, 4 nothing to request (no contracts matched).
+A day that already holds an hourly file counts as done and is skipped. Name it
+with --refetch to fetch it again: bars already stored are not written twice, so
+that is how a cut run is finished and how a day holding only part of its bars
+is completed.
+
+Exit codes: 0 done (bars written or nothing missing), 2 a --refetch date lies
+outside the window, 3 Gateway offline / connection refused, 4 nothing to
+request (no contracts matched, or the gap is longer than one request can fill).
 """
 
 from __future__ import annotations
@@ -45,7 +53,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.venues.ibkr.backfill import (  # noqa: E402
     HISTORY_STARTS,
-    MAX_DURATION_DAYS,
+    MAX_GAP_DAYS,
     HistoricalBackfiller,
     missing_dates,
     plan_requests,
@@ -74,9 +82,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    choices=["BID_ASK", "MIDPOINT", "TRADES"],
                    help="tick types to request (BID_ASK counts double against the budget)")
     p.add_argument("--start", type=date.fromisoformat, default=None,
-                   help="first UTC date to consider (default: 30 days ago)")
+                   help=f"first UTC date to consider (default: {MAX_GAP_DAYS - 1} days "
+                        "before --end, the longest window one request can fill)")
     p.add_argument("--end", type=date.fromisoformat, default=None,
                    help="last UTC date to consider (default: yesterday)")
+    p.add_argument("--refetch", nargs="+", type=date.fromisoformat, default=[],
+                   metavar="DATE",
+                   help="dates inside the window to fetch again although they already "
+                        "hold files; bars already stored are not written twice")
     p.add_argument("--max-requests", type=int, default=None,
                    help="cap on requests; whole contracts are dropped and reported")
     p.add_argument("--dry-run", action="store_true",
@@ -112,11 +125,21 @@ def select_con_ids(resolver: ContractResolver, symbols: list[str],
 
 
 def resolve_window(args: argparse.Namespace, data_root: Path) -> tuple[date, date, list[date]]:
-    """(gap_start, gap_end, missing dates) inside the requested window."""
+    """(gap_start, gap_end, missing dates) inside the requested window.
+
+    Raises ValueError when a ``--refetch`` date lies outside the window: it
+    would be dropped silently, and the operator would believe it was fetched.
+    """
     today = datetime.now(timezone.utc).date()
     end = args.end or today - timedelta(days=1)
-    start = args.start or end - timedelta(days=29)
-    gaps = missing_dates(data_root, start, end)
+    start = args.start or end - timedelta(days=MAX_GAP_DAYS - 1)
+    outside = sorted(d for d in args.refetch if not start <= d <= end)
+    if outside:
+        raise ValueError(
+            f"--refetch {' '.join(d.isoformat() for d in outside)} lies outside the "
+            f"window {start}..{end}; widen --start/--end to include it"
+        )
+    gaps = missing_dates(data_root, start, end, refetch=args.refetch)
     if not gaps:
         return start, end, []
     return gaps[0], gaps[-1], gaps
@@ -155,16 +178,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args)
     data_root = settings.resolved_data_root
 
-    gap_start, gap_end, gaps = resolve_window(args, data_root)
+    try:
+        gap_start, gap_end, gaps = resolve_window(args, data_root)
+    except ValueError as exc:
+        print(f"refusing: {exc}")
+        return 2
     if not gaps:
         print(f"No missing sweep dates between {gap_start} and {gap_end} "
               f"(history available from {HISTORY_STARTS}); nothing to do.")
         return 0
     span = (gap_end - gap_start).days + 1
-    if span > MAX_DURATION_DAYS:
+    if span > MAX_GAP_DAYS:
         print(f"Gap spans {span} days ({gap_start}..{gap_end}), over the "
-              f"{MAX_DURATION_DAYS}-day single-request ceiling. Re-run with "
-              f"--start/--end in chunks of at most {MAX_DURATION_DAYS} days.")
+              f"{MAX_GAP_DAYS}-day single-request ceiling. Re-run with "
+              f"--start/--end in chunks of at most {MAX_GAP_DAYS} days.")
         return 4
 
     resolver = ContractResolver(settings)
@@ -208,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nRequests issued : {result.requested}")
     print(f"Bars written    : {result.bars} "
           f"({result.contracts_with_bars} contracts had history)")
+    print(f"Already stored  : {result.skipped_existing} bars (not written again)")
     print(f"No history      : {len(result.empty_con_ids)} contracts")
     print(f"Failed          : {len(result.failed)}")
     for day, count in sorted(result.dates_written.items()):
@@ -221,10 +249,12 @@ def main(argv: list[str] | None = None) -> int:
         "gap_start": gap_start.isoformat(),
         "gap_end": gap_end.isoformat(),
         "missing_dates": [d.isoformat() for d in gaps],
+        "refetch": [d.isoformat() for d in sorted(set(args.refetch))],
         "symbols": "ALL" if args.all_symbols else args.symbols,
         "what_to_show": args.what,
         "requested": result.requested,
         "bars": result.bars,
+        "skipped_existing": result.skipped_existing,
         "contracts_with_bars": result.contracts_with_bars,
         "contracts_without_history": len(result.empty_con_ids),
         "failed": len(result.failed),
