@@ -25,11 +25,15 @@ of its bars is completed. One request per contract spans the whole window, so
 days inside it that hold sweeps only get hourly bars as well; the dry run
 lists them.
 
-Exit codes: 0 done (bars written or nothing missing), 2 the window or a
---refetch date is invalid, 3 Gateway offline / connection refused, 4 nothing
-to request (no contracts matched, or the gap is longer than one request can
-fill), 5 a stored hourly file cannot be read, 6 another run holds the lock,
-130 interrupted (what was fetched is kept and recorded).
+Exit codes: 0 done (bars written or nothing missing), 1 the run stopped on an
+error (recorded in the ledger with its message; what was fetched is kept),
+2 the window, a --refetch date or the session mode is invalid, 3 no Gateway
+connection (refused, timed out, client id in use, or interrupted before
+connecting), 4 nothing to request (no contracts matched, --max-requests left
+nothing, or the gap is longer than one request can fill), 5 a stored hourly
+file cannot be read, 6 another run holds the lock, 7 done but some requests
+failed (listed in the ledger; re-run with --refetch), 130 interrupted (what
+was fetched is kept and recorded).
 """
 
 from __future__ import annotations
@@ -65,8 +69,8 @@ from src.venues.ibkr.backfill import (  # noqa: E402
     plan_requests,
     read_stored_window,
 )
+from src.venues.ibkr.clients import ClientIdInUseError, connect_ib  # noqa: E402
 from src.venues.ibkr.contracts import ContractResolver  # noqa: E402
-from src.venues.ibkr.gateway import GatewaySession  # noqa: E402
 from src.venues.ibkr.recorder import setup_logging  # noqa: E402
 from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 
@@ -214,7 +218,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     span = (gap_end - gap_start).days + 1
     if span > MAX_GAP_DAYS:
-        cause = " (--refetch widened the span)" if args.refetch else ""
+        cause = ""
+        if args.refetch:
+            plain = [d for d in gaps if d not in set(args.refetch)]
+            widened = not plain or plain[0] != gap_start or plain[-1] != gap_end
+            cause = " (--refetch widened the span)" if widened else ""
         print(f"Gap spans {span} days ({gap_start}..{gap_end}), over the "
               f"{MAX_GAP_DAYS}-day single-request ceiling{cause}. Re-run with "
               f"--start/--end in chunks of at most {MAX_GAP_DAYS} days.")
@@ -235,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Missing dates ({len(gaps)}): {gaps[0]} .. {gaps[-1]}")
         print(f"Scope: {scope} -> {len(con_ids)} contracts x {len(args.what)} tick "
               f"type(s) = {len(requests)} requests, ~{eta_minutes:.0f} min under pacing")
+        if not requests:
+            print(f"--max-requests {args.max_requests} dropped {skipped} contracts entirely; "
+                  "nothing left to request.")
+            return 4
         sample = requests[0]
         print(f"Request per contract: {sample.duration_str} ending "
               f"{sample.end_dt:%Y-%m-%d %H:%M} UTC (bars before {gap_start} are dropped)")
@@ -267,9 +279,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with acquire_db_lock(lock_target, stale_after_min=LOCK_STALE_MIN):
                 return _run_connected(args, settings, resolver, requests, skipped,
-                                      gap_start, gap_end, gaps, data_root)
+                                      gap_start, gap_end, gaps, data_root, stored)
         except LockHeldError as exc:
-            print(f"refusing: another backfill run holds the lock ({exc})")
+            print(f"refusing: another backfill run holds the lock ({exc}). If no run is "
+                  f"active, delete {lock_target}.lock and start again.")
             return 6
     finally:
         resolver.close()
@@ -277,20 +290,37 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
                    requests: list, skipped: int, gap_start: date, gap_end: date,
-                   gaps: list[date], data_root: Path) -> int:
-    """Connect, run the plan, print the outcome and append the run record."""
-    session = GatewaySession(settings, "research",
-                             connect_validator=lambda ib: _check_mode(ib, settings))
+                   gaps: list[date], data_root: Path, stored: dict) -> int:
+    """Connect once, run the plan, print the outcome and append the run record.
+
+    One connection attempt, not the recorder's endless retry loop: a Gateway
+    that is down is an answer here (exit 3), and the lock must not be held
+    by a process waiting for it.
+    """
     try:
-        ib = session.ensure_connected()
+        ib = connect_ib("research", settings)
     except KeyboardInterrupt:
         print("Interrupted before connecting.")
         return 3
+    except ClientIdInUseError as exc:
+        print(f"refusing: {exc}")
+        return 3
+    except Exception as exc:  # noqa: BLE001 -- refused, timed out, unreachable: all "no Gateway"
+        print(f"No Gateway connection ({type(exc).__name__}: {exc}); is IB Gateway running "
+              "and logged in?")
+        return 3
+    try:
+        _check_mode(ib, settings)
+    except RuntimeError as exc:  # the session is not the mode the settings name
+        print(f"refusing: {exc}")
+        ib.disconnect()
+        return 2
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backfiller = HistoricalBackfiller(ib, resolver, data_root)
     interrupted = False
+    error: str | None = None
     try:
-        result = backfiller.run(requests, run_id, skipped_con_ids=skipped)
+        result = backfiller.run(requests, run_id, skipped_con_ids=skipped, stored=stored)
     except RuntimeError as exc:  # a stored file turned unreadable since the plan
         print(f"refusing: {exc}")
         return 5
@@ -299,10 +329,18 @@ def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
         # can finish it with --refetch over the same window.
         interrupted = True
         result = backfiller.last_result
+    except Exception as exc:  # noqa: BLE001 -- recorded in the ledger, never swallowed
+        error = f"{type(exc).__name__}: {exc}"
+        print(f"run stopped: {error}")
+        result = backfiller.last_result
     finally:
-        session.close()
+        ib.disconnect()
+    if result is None:
+        print("Stopped before the first request; nothing to record.")
+        return 130 if interrupted else 1
 
-    print(f"\nRequests issued : {result.requested}" + (" (INTERRUPTED)" if interrupted else ""))
+    status = " (INTERRUPTED)" if interrupted else (" (STOPPED ON ERROR)" if error else "")
+    print(f"\nRequests issued : {result.answered} of {result.requested}{status}")
     print(f"Bars written    : {result.bars} "
           f"({result.contracts_with_bars} contracts had history)")
     print(f"Already stored  : {result.skipped_existing} bars (not written again)")
@@ -323,7 +361,9 @@ def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
         "symbols": "ALL" if args.all_symbols else args.symbols,
         "what_to_show": args.what,
         "requested": result.requested,
+        "answered": result.answered,
         "interrupted": interrupted,
+        "error": error,
         "bars": result.bars,
         "skipped_existing": result.skipped_existing,
         "contracts_with_bars": result.contracts_with_bars,
@@ -336,7 +376,15 @@ def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
         "files": [str(p) for p in result.files],
     }
     print(f"Summary appended to {write_summary(summary, data_root)}")
-    return 130 if interrupted else 0
+    if interrupted:
+        return 130
+    if error:
+        return 1
+    if result.failed:
+        print(f"{len(result.failed)} request(s) failed; re-run the same window with "
+              "--refetch to fetch what they should have brought.")
+        return 7
+    return 0
 
 
 if __name__ == "__main__":

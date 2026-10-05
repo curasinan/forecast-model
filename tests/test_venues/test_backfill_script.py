@@ -54,6 +54,20 @@ class FakeIB:
         self.bars_by_con_id = bars_by_con_id
         self.calls: list[dict] = []
         self.interrupt_on: int | None = None  # conId whose request raises KeyboardInterrupt
+        self.fail_on: int | None = None       # conId whose request raises RuntimeError
+        self.drop_on: int | None = None       # conId whose request loses the connection
+        self.connected = True
+        self.disconnected = False
+
+    def managedAccounts(self):
+        return ["DU000000"]
+
+    def isConnected(self):
+        return self.connected
+
+    def disconnect(self):
+        self.disconnected = True
+        self.connected = False
 
     def qualifyContracts(self, *contracts):
         return list(contracts)
@@ -61,6 +75,11 @@ class FakeIB:
     def reqHistoricalData(self, contract, **kwargs):
         if contract.conId == self.interrupt_on:
             raise KeyboardInterrupt
+        if contract.conId == self.fail_on:
+            raise RuntimeError("HMDS query returned no data")
+        if contract.conId == self.drop_on:
+            self.connected = False
+            raise ConnectionError("Not connected")
         self.calls.append({"conId": contract.conId, **kwargs})
         return self.bars_by_con_id.get(contract.conId, [])
 
@@ -81,15 +100,13 @@ def _stored_days(root, days: list[str]) -> None:
 
 @pytest.fixture
 def gateway(monkeypatch):
-    """Replace the Gateway session; returns the fake ``ib`` the script will use."""
+    """Replace the Gateway connection; returns the fake ``ib`` the script will use."""
     ib = FakeIB({
         # the lead session (evening of the 2nd) and two bars of the gap day
         101: [_bar(9, 2, 21, 16), _bar(9, 2, 22), _bar(9, 3, 0), _bar(9, 3, 1)],
         102: [],
     })
-    session = SimpleNamespace(ensure_connected=lambda: ib, close=lambda: None)
-    monkeypatch.setattr(cli, "GatewaySession",
-                        lambda settings, role, connect_validator=None: session)
+    monkeypatch.setattr(cli, "connect_ib", lambda role, settings: ib)
     return ib
 
 
@@ -223,7 +240,7 @@ def test_a_second_run_is_refused_while_another_holds_the_lock(ticks_root, gatewa
     out = capsys.readouterr().out
 
     assert rc == 6
-    assert "another" in out and gateway.calls == []
+    assert "another" in out and "delete" in out and gateway.calls == []
 
 
 def test_an_interrupted_run_records_itself_as_interrupted(ticks_root, gateway):
@@ -234,6 +251,87 @@ def test_an_interrupted_run_records_itself_as_interrupted(ticks_root, gateway):
     (record,) = _ledger(ticks_root)
     assert record["interrupted"] is True
     assert record["bars"] == 2 and record["gap_start"] == "2026-09-03" and record["refetch"] == []
+    assert record["answered"] == 1 and record["requested"] == 2
+    assert gateway.disconnected
+
+
+def test_a_plan_trimmed_to_nothing_says_so_instead_of_crashing(ticks_root, capsys):
+    rc = cli.main(["--dry-run", *BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03",
+                   "--what", "BID_ASK", "MIDPOINT", "--max-requests", "1"])
+    out = capsys.readouterr().out
+
+    assert rc == 4
+    assert "dropped 2 contracts" in out
+
+
+def test_the_over_ceiling_message_blames_refetch_only_when_it_widened_the_span(ticks_root, capsys):
+    # every day is missing anyway; the refetch date lies inside the gap
+    rc = cli.main(["--dry-run", *BASE_ARGS, "--start", "2026-08-01", "--end", "2026-09-09",
+                   "--refetch", "2026-08-15"])
+    out = capsys.readouterr().out
+
+    assert rc == 4
+    assert "--refetch" not in out
+
+
+def test_a_gateway_that_refuses_the_connection_gives_exit_3_and_releases_the_lock(
+        ticks_root, monkeypatch, capsys):
+    def refuse(role, settings):
+        raise ConnectionRefusedError(10061, "Connect call failed ('127.0.0.1', 4002)")
+    monkeypatch.setattr(cli, "connect_ib", refuse)
+
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+    out = capsys.readouterr().out
+
+    assert rc == 3
+    assert "Gateway" in out
+    assert not (ticks_root / "backfill_runs.jsonl").exists()
+    assert not (ticks_root / "quotes_hourly" / "backfill.lock").exists()
+
+
+def test_a_session_of_the_wrong_mode_is_refused_before_any_request(ticks_root, gateway, capsys):
+    gateway.managedAccounts = lambda: ["U1234567"]  # a live account under --mode paper
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+
+    assert rc == 2
+    assert "refusing" in capsys.readouterr().out
+    assert gateway.calls == [] and gateway.disconnected
+    assert not (ticks_root / "backfill_runs.jsonl").exists()
+
+
+def test_a_run_with_failed_requests_does_not_exit_zero(ticks_root, gateway):
+    gateway.fail_on = 102
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+
+    assert rc == 7
+    (record,) = _ledger(ticks_root)
+    assert record["failed"] == 1 and record["failed_requests"][0][:2] == [102, "BID_ASK"]
+    assert record["bars"] == 2
+
+
+def test_a_lost_connection_is_recorded_as_an_error_and_exits_1(ticks_root, gateway):
+    gateway.drop_on = 102
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+
+    assert rc == 1
+    (record,) = _ledger(ticks_root)
+    assert "connection lost" in record["error"]
+    assert record["bars"] == 2 and record["interrupted"] is False
+    assert gateway.disconnected
+
+
+def test_a_stored_file_that_breaks_after_the_plan_gives_exit_5_and_disconnects(
+        ticks_root, gateway, monkeypatch, capsys):
+    def broken(self, *args, **kwargs):
+        raise RuntimeError("cannot read the stored hourly file hourly-late.parquet: torn")
+    monkeypatch.setattr(cli.HistoricalBackfiller, "run", broken)
+
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+
+    assert rc == 5
+    assert "hourly-late.parquet" in capsys.readouterr().out
+    assert gateway.disconnected
+    assert not (ticks_root / "backfill_runs.jsonl").exists()
 
 
 def test_a_refetch_date_outside_the_window_is_refused(ticks_root, capsys):

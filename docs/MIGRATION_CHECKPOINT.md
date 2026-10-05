@@ -185,8 +185,10 @@ account holder; no commit in this repo enables it.
       again over the window (about 2 h for the lane) and only the missing
       bars land. The plan reads the stored bars of the window before anything
       connects (an unreadable file stops it, exit 5), one run at a time per
-      store (lock, exit 6), an interrupted run still records itself
-      (`interrupted: true`, exit 130), and an empty answer for a contract that
+      store (lock, exit 6), one connection attempt (no Gateway is exit 3, not
+      an endless retry), an interrupted or stopped run still records itself
+      (`interrupted: true` / `error`, exit 130 / 1), a run with failed
+      requests exits 7, and an empty answer for a (contract, tick type) that
       already has bars in the window is recorded as a failure, because a
       timed-out request answers with no bars; the ledger lists the contracts
       without bars and the failed requests. Only unexpired contracts are

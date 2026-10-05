@@ -388,6 +388,78 @@ class TestRun:
         assert "stored" in result.failed[0][2]
         assert result.empty_con_ids == [12]
 
+    def test_the_failure_rule_is_per_tick_type(self, tmp_path):
+        # stored BID_ASK bars say nothing about MIDPOINT: an empty MIDPOINT
+        # answer is honest "no history", not a failure
+        first, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
+                             FakeResolver({}), tmp_path).run(first, "old")
+        second, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18),
+                                  what_to_show=("MIDPOINT",))
+
+        result = HistoricalBackfiller(FakeIB({}), FakeResolver({}), tmp_path).run(second, "new")
+
+        assert result.failed == [] and result.empty_con_ids == [11]
+
+    def test_a_date_only_stored_stamp_does_not_swallow_the_midnight_bar(self, tmp_path):
+        stored = {"ts_utc": "2026-08-18", "con_id": 11, "symbol": "GTM", "expiry": "",
+                  "strike": 1.2, "right": "C", "what_to_show": "BID_ASK",
+                  "bar_size": BAR_SIZE, "open": 0.4, "high": 0.5, "low": 0.3, "close": 0.45,
+                  "volume": 0.0, "source": "reqHistoricalData"}
+        write_backfill_rows([stored], tmp_path, "old")
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+
+        result = HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 0)]}),
+                                      FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert result.bars == 1 and result.skipped_existing == 0
+
+    def test_files_are_written_whole_and_no_temporary_file_is_left(self, tmp_path):
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): _bars(18)}), FakeResolver({}), tmp_path)\
+            .run(reqs, "runT")
+
+        names = sorted(p.name for p in (tmp_path / "quotes_hourly" / "date=2026-08-18").iterdir())
+        assert names == ["hourly-runT-000.parquet"]
+
+    def test_a_lost_connection_ends_the_run_instead_of_failing_every_request(self, tmp_path):
+        reqs, _ = plan_requests([1, 2, 3], date(2026, 8, 18), date(2026, 8, 18))
+
+        class Dropping(FakeIB):
+            connected = True
+
+            def isConnected(self):
+                return self.connected
+
+            def reqHistoricalData(self, contract, **kwargs):
+                if contract.conId == 2:
+                    self.connected = False
+                    raise ConnectionError("Not connected")
+                return super().reqHistoricalData(contract, **kwargs)
+
+        ib = Dropping({(1, "BID_ASK"): _bars(18), (3, "BID_ASK"): _bars(18)})
+        backfiller = HistoricalBackfiller(ib, FakeResolver({}), tmp_path)
+        with pytest.raises(ConnectionError):
+            backfiller.run(reqs, "runC")
+
+        assert [call["conId"] for call in ib.calls] == [1]  # contract 3 was never asked
+        assert backfiller.last_result.bars == 2 and backfiller.last_result.answered == 1
+
+    def test_a_run_can_be_given_the_stored_keys_it_already_read(self, tmp_path):
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
+                             FakeResolver({}), tmp_path).run(reqs, "old")
+        from src.venues.ibkr.backfill import read_stored_window
+        stored = read_stored_window(tmp_path, reqs)
+        # a file that turns unreadable after the plan is not read again
+        make_backfilled_dirs(tmp_path, [], empty=[])
+        (tmp_path / "quotes_hourly" / "date=2026-08-18" / "hourly-late.parquet").write_bytes(b"stub")
+
+        result = HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10), _bar(18, 11)]}),
+                                      FakeResolver({}), tmp_path).run(reqs, "new", stored=stored)
+
+        assert result.bars == 1 and result.skipped_existing == 1
+
     def test_a_stored_row_without_a_contract_id_names_the_file(self, tmp_path):
         stored = {"ts_utc": "2026-08-18T10:00:00+00:00", "con_id": None, "symbol": "GTM",
                   "expiry": "", "strike": None, "right": "C", "what_to_show": "BID_ASK",

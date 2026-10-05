@@ -31,6 +31,7 @@ Two facts about the store that the planner and the writer rely on:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -118,6 +119,7 @@ class BackfillResult:
     """What one run actually did -- reported, never silently summarised away."""
 
     requested: int = 0
+    answered: int = 0                 # requests the venue answered (bars or none)
     bars: int = 0
     contracts_with_bars: int = 0
     empty_con_ids: list[int] = field(default_factory=list)
@@ -353,7 +355,11 @@ def write_backfill_rows(rows: Iterable[dict], data_root: str | Path,
         out_dir = Path(data_root) / "quotes_hourly" / f"date={day}"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"hourly-{run_id}.parquet"
-        pq.write_table(pa.Table.from_pylist(day_rows, schema=BACKFILL_SCHEMA), path)
+        # Written beside the final name and renamed in one step: a reader (a
+        # later plan, the recorder's mirror push) never sees a torn file.
+        partial = path.with_name(path.name + ".tmp")
+        pq.write_table(pa.Table.from_pylist(day_rows, schema=BACKFILL_SCHEMA), partial)
+        os.replace(partial, path)
         written[day] = path
     return written
 
@@ -373,10 +379,10 @@ class HistoricalBackfiller:
         self.data_root = Path(data_root)
         self.pacer = pacer or HistoricalPacer()
         self._stored: dict[str, set[tuple]] = {}  # day -> keys on disk plus keys queued
-        # Contracts that already have bars in the window: an empty answer for
-        # one of them is a failure (ib_async returns [] on a timeout), never
-        # "no history".
-        self._stored_con_ids: set[int] = set()
+        # (contract, tick type) pairs that already have bars in the window: an
+        # empty answer for one of them is a failure (ib_async returns [] on a
+        # timeout), never "no history".
+        self._stored_series: set[tuple[int, str]] = set()
         # The counts of the last run, kept even when run() leaves by exception,
         # so the caller can still record an interrupted run.
         self.last_result: BackfillResult | None = None
@@ -417,8 +423,13 @@ class HistoricalBackfiller:
         ) or [])
 
     def run(self, requests: Sequence[BackfillRequest], run_id: str,
-            skipped_con_ids: int = 0, flush_every: int = 25) -> BackfillResult:
+            skipped_con_ids: int = 0, flush_every: int = 25,
+            stored: dict[str, set[tuple]] | None = None) -> BackfillResult:
         """Execute the plan, writing parquet per covered UTC date as it goes.
+
+        ``stored`` is the window's stored keys as ``read_stored_window``
+        returns them; a caller that read them for its plan passes them in,
+        otherwise they are read here, before the first request.
 
         A full-universe pass is hours long under pacing and the Gateway
         restarts nightly, so rows are flushed every ``flush_every`` answered
@@ -432,8 +443,9 @@ class HistoricalBackfiller:
         """
         result = BackfillResult(requested=len(requests), skipped_con_ids=skipped_con_ids)
         self.last_result = result
-        self._stored = read_stored_window(self.data_root, requests)
-        self._stored_con_ids = {key[0] for keys in self._stored.values() for key in keys}
+        self._stored = (read_stored_window(self.data_root, requests) if stored is None
+                        else stored)
+        self._stored_series = {(key[0], key[2]) for keys in self._stored.values() for key in keys}
         rows: list[dict] = []
         with_bars: set[int] = set()
         empty: set[int] = set()
@@ -462,13 +474,22 @@ class HistoricalBackfiller:
                     logger.warning("backfill %d/%d conId=%s %s failed: %s",
                                    index, len(requests), request.con_id,
                                    request.what_to_show, exc)
+                    is_connected = getattr(self.ib, "isConnected", None)
+                    if is_connected is not None and not is_connected():
+                        # Every further request would fail the same way, one
+                        # pacing wait at a time; stop and let the caller record it.
+                        raise ConnectionError(
+                            f"Gateway connection lost after {answered} answered "
+                            f"request(s); {len(requests) - index} not attempted"
+                        ) from exc
                     continue
                 answered += 1
+                result.answered = answered
                 # The lead session's bars fall on the day before the gap; writing
                 # them would mark that day as backfilled with three bars in it.
                 kept = [row for row in (bar_to_row(bar, request, meta) for bar in bars)
                         if request.covers(_row_date(row))]
-                if not kept and request.con_id in self._stored_con_ids:
+                if not kept and (request.con_id, request.what_to_show) in self._stored_series:
                     reason = ("no bars returned for a contract that has stored bars in "
                               "the window (a timed-out request answers this way)")
                     result.failed.append((request.con_id, request.what_to_show, reason))
