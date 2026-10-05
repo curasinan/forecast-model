@@ -152,7 +152,8 @@ account holder; no commit in this repo enables it.
 - [x] **Gap backfill BUILT 2026-08-25**: `src/venues/ibkr/backfill.py` +
       `scripts/backfill_ibkr_hourly.py`. One paced reqHistoricalData call per
       (contract, tick type) spanning the whole gap; bars land in a SEPARATE
-      tree `%LOCALAPPDATA%\ibkr_ticks\quotes_hourly\date=*\` because hourly
+      tree `quotes_hourly\date=*\` under the ticks root (now
+      `~/quant_data/ibkr_ticks`, see section 5) because hourly
       OHLC aggregates are not point-in-time snapshots, and every row carries
       `what_to_show` + `source='reqHistoricalData'`. For BID_ASK bars IB packs
       open=avg bid, high=max ask, low=min bid, close=avg ask (see
@@ -170,7 +171,7 @@ account holder; no commit in this repo enables it.
       (The "~75 min" above was an estimate; the run ledger shows 114 min.)
 - [x] **Backfill RUN 2026-10-04** (run_id 20261004T172227Z, 111 min): 338
       requests, 0 failures, 231,504 hourly BID_ASK bars over 2026-09-03..10-02
-      for 318 of 338 climate-lane contracts (the other 20 answered "no data").
+      for 318 of 338 climate-lane contracts (the other 20 returned no bars).
       Two things the August run had hidden: a run's length is set by pacing,
       about 20 s per BID_ASK request; and IB counts a duration in sessions
       that open at 21:16 UTC the evening before, so the first day of both
@@ -180,8 +181,18 @@ account holder; no commit in this repo enables it.
       the longest gap one request fills is 29 days. `--refetch DATE...`
       fetches a day again although it holds files, and a bar -- identified by
       (contract, instant, tick type) -- is never written twice, which makes
-      `--refetch` the way to finish a cut run. The two short first days are
-      still to be refetched.
+      `--refetch` the way to finish a cut run: every contract is requested
+      again over the window (about 2 h for the lane) and only the missing
+      bars land. The plan reads the stored bars of the window before anything
+      connects (an unreadable file stops it, exit 5), one run at a time per
+      store (lock, exit 6), an interrupted run still records itself
+      (`interrupted: true`, exit 130), and an empty answer for a contract that
+      already has bars in the window is recorded as a failure, because a
+      timed-out request answers with no bars; the ledger lists the contracts
+      without bars and the failed requests. Only unexpired contracts are
+      requested, so refetching completes 2026-09-03 for all 318 contracts if
+      done before 2026-10-10 (22 of them expire 2026-10-09) and 2026-07-26 for
+      288 of its 310 (22 expired 2026-09-10). Neither has been refetched yet.
 - [x] `docs/operating_costs.md` filled (delayed free, $0.01 commission, ~100
       line budget); only the live-feed subscription PRICE stays UNKNOWN.
 

@@ -286,31 +286,60 @@ def _bar_key(con_id, ts_text: str, what_to_show: str) -> tuple:
     'Z' spellings of one bar are one key.
     """
     try:
-        ts = datetime.fromisoformat(ts_text)
+        # a date-only text is not an instant: keep it as text so it cannot
+        # collide with the bar that starts at midnight
+        ts = datetime.fromisoformat(ts_text) if "T" in ts_text else None
     except (TypeError, ValueError):
+        ts = None
+    if ts is None:
         return (int(con_id), ts_text, what_to_show)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     return (int(con_id), ts.astimezone(timezone.utc), what_to_show)
 
 
-def stored_bar_keys(data_root: str | Path, day: str) -> set[tuple]:
-    """Keys of every bar already stored under quotes_hourly/date=<day>/.
+def stored_bar_keys(data_root: str | Path, day: str,
+                    con_ids: Iterable[int] | None = None) -> set[tuple]:
+    """Keys of the bars already stored under quotes_hourly/date=<day>/.
 
-    Raises RuntimeError naming the file when one cannot be read: a run that
-    adds to a day must know what that day already holds.
+    ``con_ids`` narrows the read to the contracts a run is about to request;
+    None reads every contract. Raises RuntimeError naming the file when one
+    cannot be read or holds a row without a contract id: a run that adds to
+    a day must know what that day already holds.
     """
     keys: set[tuple] = set()
     day_dir = Path(data_root) / "quotes_hourly" / f"date={day}"
+    filters = None if con_ids is None else [("con_id", "in", sorted(set(con_ids)))]
     for path in sorted(day_dir.glob("*.parquet")):
         try:
-            table = pq.read_table(path, columns=["con_id", "ts_utc", "what_to_show"])
+            table = pq.read_table(path, columns=["con_id", "ts_utc", "what_to_show"],
+                                  filters=filters)
+            keys.update(_bar_key(con_id, ts, what) for con_id, ts, what in zip(
+                table.column("con_id").to_pylist(), table.column("ts_utc").to_pylist(),
+                table.column("what_to_show").to_pylist()))
         except Exception as exc:  # noqa: BLE001 -- any reader error is the finding
             raise RuntimeError(f"cannot read the stored hourly file {path}: {exc}") from exc
-        keys.update(_bar_key(con_id, ts, what) for con_id, ts, what in zip(
-            table.column("con_id").to_pylist(), table.column("ts_utc").to_pylist(),
-            table.column("what_to_show").to_pylist()))
     return keys
+
+
+def read_stored_window(data_root: str | Path,
+                       requests: Sequence[BackfillRequest]) -> dict[str, set[tuple]]:
+    """Stored keys of every day a plan can write to, for the contracts it requests.
+
+    Meant to run before the first request: an unreadable file must stop a run
+    while nothing has been asked of the venue, not at a flush with fetched
+    rows in hand. Requests without a ``first_date`` have no window to read.
+    """
+    stored: dict[str, set[tuple]] = {}
+    con_ids = {r.con_id for r in requests}
+    windows = {(r.first_date, r.end_dt.astimezone(timezone.utc).date())
+               for r in requests if r.first_date is not None}
+    for first, end in windows:
+        for offset in range((end - first).days):
+            day = (first + timedelta(days=offset)).isoformat()
+            if day not in stored:
+                stored[day] = stored_bar_keys(data_root, day, con_ids)
+    return stored
 
 
 def write_backfill_rows(rows: Iterable[dict], data_root: str | Path,
@@ -344,24 +373,18 @@ class HistoricalBackfiller:
         self.data_root = Path(data_root)
         self.pacer = pacer or HistoricalPacer()
         self._stored: dict[str, set[tuple]] = {}  # day -> keys on disk plus keys queued
+        # Contracts that already have bars in the window: an empty answer for
+        # one of them is a failure (ib_async returns [] on a timeout), never
+        # "no history".
+        self._stored_con_ids: set[int] = set()
+        # The counts of the last run, kept even when run() leaves by exception,
+        # so the caller can still record an interrupted run.
+        self.last_result: BackfillResult | None = None
 
     def _stored_keys(self, day: str) -> set[tuple]:
         if day not in self._stored:
             self._stored[day] = stored_bar_keys(self.data_root, day)
         return self._stored[day]
-
-    def _read_stored_window(self, requests: Sequence[BackfillRequest]) -> None:
-        """Load the keys of every day the plan can write to.
-
-        Done before the first request on purpose: an unreadable file must stop
-        the run while nothing has been asked of the venue, not at a flush with
-        fetched rows in hand.
-        """
-        windows = {(r.first_date, r.end_dt.astimezone(timezone.utc).date())
-                   for r in requests if r.first_date is not None}
-        for first, end in windows:
-            for offset in range((end - first).days):
-                self._stored_keys((first + timedelta(days=offset)).isoformat())
 
     def _not_yet_stored(self, kept: list[dict], result: BackfillResult) -> list[dict]:
         """Rows of ``kept`` that no stored or queued bar already covers."""
@@ -408,7 +431,9 @@ class HistoricalBackfiller:
         and how a day that holds only part of its bars is completed.
         """
         result = BackfillResult(requested=len(requests), skipped_con_ids=skipped_con_ids)
-        self._read_stored_window(requests)
+        self.last_result = result
+        self._stored = read_stored_window(self.data_root, requests)
+        self._stored_con_ids = {key[0] for keys in self._stored.values() for key in keys}
         rows: list[dict] = []
         with_bars: set[int] = set()
         empty: set[int] = set()
@@ -443,7 +468,14 @@ class HistoricalBackfiller:
                 # them would mark that day as backfilled with three bars in it.
                 kept = [row for row in (bar_to_row(bar, request, meta) for bar in bars)
                         if request.covers(_row_date(row))]
-                if not kept:
+                if not kept and request.con_id in self._stored_con_ids:
+                    reason = ("no bars returned for a contract that has stored bars in "
+                              "the window (a timed-out request answers this way)")
+                    result.failed.append((request.con_id, request.what_to_show, reason))
+                    logger.warning("backfill %d/%d conId=%s %s failed: %s",
+                                   index, len(requests), request.con_id,
+                                   request.what_to_show, reason)
+                elif not kept:
                     empty.add(request.con_id)
                     logger.info("backfill %d/%d conId=%s %s: no bars",
                                 index, len(requests), request.con_id, request.what_to_show)

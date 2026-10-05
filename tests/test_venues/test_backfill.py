@@ -18,6 +18,7 @@ from src.venues.ibkr.backfill import (
     missing_dates,
     plan_requests,
     recorded_dates,
+    stored_bar_keys,
     write_backfill_rows,
 )
 from src.venues.ibkr.pacing import HistoricalPacer
@@ -346,6 +347,75 @@ class TestRun:
         with pytest.raises(RuntimeError, match="hourly-run1.parquet"):
             HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runU")
         assert ib.calls == []
+
+    @pytest.mark.parametrize("bad_day", ["2026-08-18", "2026-08-20"])
+    def test_every_day_of_the_window_is_read_before_the_first_request(self, tmp_path, bad_day):
+        # the first and the last day of a three-day window: an edge left out of
+        # the pre-read would let the run start and then stop at a flush
+        make_backfilled_dirs(tmp_path, [bad_day])
+        reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 20))
+        ib = FakeIB({(11, "BID_ASK"): [_bar(19, 10)]})
+
+        with pytest.raises(RuntimeError, match="hourly-run1.parquet"):
+            HistoricalBackfiller(ib, FakeResolver({}), tmp_path).run(reqs, "runW")
+        assert ib.calls == []
+
+    def test_every_stored_file_of_a_day_counts_not_only_the_first(self, tmp_path):
+        # a live day holds one file per flush; a refetch must see all of them
+        reqs, _ = plan_requests([11, 12], date(2026, 8, 18), date(2026, 8, 18))
+        bars = {(11, "BID_ASK"): [_bar(18, 10), _bar(18, 11)],
+                (12, "BID_ASK"): [_bar(18, 10), _bar(18, 11)]}
+        HistoricalBackfiller(FakeIB(bars), FakeResolver({}), tmp_path)\
+            .run(reqs, "old", flush_every=1)
+        assert len(list((tmp_path / "quotes_hourly" / "date=2026-08-18").glob("*.parquet"))) == 2
+
+        result = HistoricalBackfiller(FakeIB(bars), FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert result.bars == 0 and result.skipped_existing == 4
+        stamps = _stamps_on_disk(tmp_path, "2026-08-18")
+        assert len(stamps) == len(set(stamps)) == 4
+
+    def test_an_empty_answer_for_a_contract_with_stored_bars_is_a_failure(self, tmp_path):
+        # ib_async returns [] on a timeout; for a contract whose history is on
+        # disk that cannot be "no history" and must not be reported as such
+        reqs, _ = plan_requests([11, 12], date(2026, 8, 18), date(2026, 8, 18))
+        HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
+                             FakeResolver({}), tmp_path).run(reqs, "old")
+
+        result = HistoricalBackfiller(FakeIB({}), FakeResolver({}), tmp_path).run(reqs, "new")
+
+        assert [(con_id, what) for con_id, what, _ in result.failed] == [(11, "BID_ASK")]
+        assert "stored" in result.failed[0][2]
+        assert result.empty_con_ids == [12]
+
+    def test_a_stored_row_without_a_contract_id_names_the_file(self, tmp_path):
+        stored = {"ts_utc": "2026-08-18T10:00:00+00:00", "con_id": None, "symbol": "GTM",
+                  "expiry": "", "strike": None, "right": "C", "what_to_show": "BID_ASK",
+                  "bar_size": BAR_SIZE, "open": 0.4, "high": 0.5, "low": 0.3, "close": 0.45,
+                  "volume": 0.0, "source": "reqHistoricalData"}
+        write_backfill_rows([stored], tmp_path, "broken")
+
+        with pytest.raises(RuntimeError, match="hourly-broken.parquet"):
+            stored_bar_keys(tmp_path, "2026-08-18")
+        # narrowed to the contracts a run requests, such a row is simply not one of them
+        assert stored_bar_keys(tmp_path, "2026-08-18", con_ids=[11]) == set()
+
+    def test_an_interrupted_run_leaves_its_counts_on_the_backfiller(self, tmp_path):
+        reqs, _ = plan_requests([1, 2, 3], date(2026, 8, 18), date(2026, 8, 18))
+
+        class Interrupting(FakeIB):
+            def reqHistoricalData(self, contract, **kwargs):
+                if contract.conId == 3:
+                    raise KeyboardInterrupt
+                return super().reqHistoricalData(contract, **kwargs)
+
+        ib = Interrupting({(1, "BID_ASK"): _bars(18), (2, "BID_ASK"): _bars(18)})
+        backfiller = HistoricalBackfiller(ib, FakeResolver({}), tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            backfiller.run(reqs, "runK")
+
+        assert backfiller.last_result is not None
+        assert backfiller.last_result.bars == 4 and backfiller.last_result.requested == 3
 
     def test_requests_carry_utc_end_and_no_rth_filter(self, tmp_path):
         reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 19))
