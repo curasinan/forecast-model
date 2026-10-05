@@ -115,7 +115,9 @@ over `ssh trading@spark`, the way they are run by hand on the Zenbook today.
   that passes the spike is pinned by digest in `~/ibgw/docker-compose.yml`.
   After that the `~/stack` discipline applies: no unattended update, no
   `pull`.
-- **Compose project:** `restart: always`; a 4 GiB memory limit;
+- **Compose project:** `restart: unless-stopped` (it comes back after a
+  crash or a reboot, while a deliberate stop stays in force across a
+  reboot, so the kill switch and a rollback survive one); a 4 GiB memory limit;
   `oom_score_adj: -900` (section 5); a TCP health check on the API port.
   Gateway settings persist in `~/ibgw/jts/`, so the weekly login does not
   redo them.
@@ -247,7 +249,9 @@ The session moves exactly once and is never on both machines:
    - a first sweep file under the live root's `quotes/` with at least 2,000
      rows;
    - the health probe exits 0 and a `--test-alert` from the Spark arrives;
-   - a hand-run paper sync reports the same book as the Zenbook's last run;
+   - a hand-run paper sync reports the same book as the Zenbook's last run
+     (a count that differs because the venue itself filled or cancelled an
+     order in between is recorded with both values and is not a failure);
    - the GTM signal run passes the parity gate of Option B against the
      frozen snapshot.
 6. The outcome is written to a cutover report under `docs/`, in the manner of
@@ -393,7 +397,8 @@ before the Zenbook logs in again. Each check has a pass criterion:
 2. From the Zenbook, over Tailscale, the remote screen opens through an ssh
    tunnel and shows the login dialog of a Gateway started with empty
    credentials.
-3. A manual paper login succeeds; no second factor is asked for.
+3. A manual paper login succeeds; whether a second factor was asked for is
+   recorded (assumption A3).
 4. As `trading`, from the runtime clone's venv, the API answers a
    current-time request.
 5. The recorder runs one sweep into a scratch root: about 2,400 rows.
@@ -401,7 +406,8 @@ before the Zenbook logs in again. Each check has a pass criterion:
    without a new login.
 7. The owner rule: `trading` connects to 4002; `scura` is rejected; a
    process inside an LLM container is rejected.
-8. The kill switch cuts the session; what a restart needs is written down.
+8. The kill switch cuts the session; what a start after it needs is seen
+   (the login dialog, not a resumed session) and written down.
 9. `oom_score_adj` reads -900 for the Gateway's processes and -500 for
    `qwenflash`.
 
@@ -494,7 +500,11 @@ Gateway session is on one machine at a time (section 4).
 - A1. The image runs on the Spark (aarch64, Docker 29.6) with IBC and Xvfb.
   Spike check 1.
 - A2. Empty credentials leave the login dialog up for a manual login. Check 2.
-- A3. The paper login asks for no second factor. Check 3.
+- A3. The paper login asks for no second factor, as web sources say; the
+  Zenbook's re-login of 2026-09-28 did get an IBKR Mobile prompt
+  (`docs/ibkr_runbook.md` section 4). The spike records which is true. With a
+  manual login (D2) either is workable: a prompt only means the phone must be
+  at hand for the weekly login. Check 3.
 - A4. The image's paper API port can be published as `127.0.0.1:4002` with
   the Gateway's "localhost only" on; the exact container port and
   environment variable names are read from the image's documentation during
