@@ -10,6 +10,8 @@
 
 **Spec:** `docs/plans/2026-09-30-spark-research-split-design.md`
 
+**Status:** executed in full and landed on `main` on 2026-10-03; every step below is done. Where the work departed from the letter of a step, the departure is an amendment (R1-R16) in section 11 of the spec or is recorded in `docs/spark_parity_2026-10-03.md`.
+
 ## Global Constraints
 
 - Work on branch `spark-research-split` in the worktree `.claude/worktrees/spark-research-split`. The checkout at the repo root is the live runtime on `main`; never switch its branch or edit files there.
@@ -58,7 +60,7 @@ Modify:
 **Interfaces:**
 - Produces: the facts every later Spark-side step depends on: whether the Bash tool reaches the Spark, which rsync transport works, the clone URL.
 
-- [ ] **Step 1: Create `.gitattributes` and the shell environment file, then reach the Spark**
+- [x] **Step 1: Create `.gitattributes` and the shell environment file, then reach the Spark**
 
 Create `.gitattributes` first, so the two shell files below are never checked out with CRLF (WSL's bash and Git Bash's `source` both choke on `\r`):
 ```
@@ -89,7 +91,7 @@ source scripts/spark/env.sh
 Expected: `aarch64`, a `Python 3.12.x` line, `git`, `rsync` and `sha256sum` present, `uv`/`pipx` likely MISSING, free space in the TB range, one GPU name (the UUID is cut on purpose: the report is committed).
 If the command fails: `Host spark` in `~/.ssh/config` uses an on-disk IdentityFile, so no agent is involved; the cause is network, sandbox egress or `known_hosts`. Record "operator-run mode" in section 0 and from here on hand every `"$SSH" spark '...'` block to the operator.
 
-- [ ] **Step 2: Prove the WSL rsync transport with a dry run**
+- [x] **Step 2: Prove the WSL rsync transport with a dry run**
 
 Run (Git Bash; this is WSL executing rsync with the Windows ssh client as transport; `--dry-run` connects and compares but writes nothing):
 ```bash
@@ -105,7 +107,7 @@ Host spark
 ```
 WSL's default user here is root (verified: `$HOME` = `/root`), so the key lands in `/root/.ssh/`. Adding the public key to the Spark's `authorized_keys` is an account change on the operator's machine: ASK before running `"$SSH" spark 'cat >> ~/.ssh/authorized_keys' < "//wsl$/Ubuntu/root/.ssh/id_ed25519_wsl.pub"`. Re-run the dry run with `-e ssh` instead of the Windows path. Record which transport won; `push_snapshot.sh` (Task 3) reads it from `SPARK_SSH`.
 
-- [ ] **Step 3: Find the clone credential**
+- [x] **Step 3: Find the clone credential**
 
 Run:
 ```bash
@@ -113,7 +115,7 @@ Run:
 ```
 Expected: whichever form prints a `refs/heads/main` line is `CLONE_URL` for Task 1. If neither works, stop and ask the operator to add a read-only deploy key for `forecast-model` on the Spark; do not create credentials yourself.
 
-- [ ] **Step 4: Write the report skeleton**
+- [x] **Step 4: Write the report skeleton**
 
 Create `docs/spark_parity_<date>.md` with the Write tool:
 ```markdown
@@ -156,7 +158,7 @@ No commit yet: Task 1 commits this file together with the constraints file.
 - Consumes: `CLONE_URL` from Task 0.
 - Produces: a Spark clone at `~/work/forecast-model` tracking `spark-research-split`, with `.venv/bin/python` (3.14) and the suite green; the constraints file every later install uses.
 
-- [ ] **Step 1: Record the Zenbook baseline from a fresh run**
+- [x] **Step 1: Record the Zenbook baseline from a fresh run**
 
 Run (from the worktree):
 ```bash
@@ -167,7 +169,7 @@ python -m ruff --version
 ```
 Expected: a `N passed` line, `pytest_exit=0`, a `Found 112 errors.` baseline line (the number may drift if `main` moved; whatever it is today is the baseline), and the ruff version. Paste all of it into the report under `## 1. Zenbook baseline (Task 1)`. The touched-files lint gate (`git diff --name-only origin/main...HEAD -- '*.py' | xargs python -m ruff check`) is trivially green here because the branch touches no Python file yet.
 
-- [ ] **Step 2: Freeze the Zenbook environment**
+- [x] **Step 2: Freeze the Zenbook environment**
 
 Run:
 ```bash
@@ -177,7 +179,7 @@ grep -E '^(numpy|pandas|scipy|scikit-learn|xgboost|lightgbm|pyarrow|netCDF4|ib_a
 ```
 Expected: 12 lines: `numpy==2.4.2`, `pandas==3.0.1`, `scipy==1.17.1`, `scikit-learn==1.8.0`, `xgboost==3.2.0`, `lightgbm==4.6.0`, `pyarrow==25.0.0`, `netCDF4==1.7.4`, `ib_async==2.1.0`, `pydantic==2.12.5`, `pydantic_core==2.41.5`, `httpx==0.28.1`. Any other value means the Zenbook changed since the spec's wheel check; re-run that check (`pip install --dry-run --only-binary=:all: --platform manylinux_2_28_aarch64 --python-version 3.14 --implementation cp --abi cp314 --target /tmp/x <pkg>==<ver>`) for the changed package before continuing.
 
-- [ ] **Step 3: Commit and push the branch (the Spark must be able to clone it)**
+- [x] **Step 3: Commit and push the branch (the Spark must be able to clone it)**
 
 Run:
 ```bash
@@ -187,7 +189,7 @@ git commit -m "Freeze the Zenbook environment and start the Spark parity report"
 git push -u origin spark-research-split
 ```
 
-- [ ] **Step 4: Install uv on the Spark (operator step: needs sudo or the vendor installer)**
+- [x] **Step 4: Install uv on the Spark (operator step: needs sudo or the vendor installer)**
 
 Hand this block to the operator to run in their own Spark session, then continue:
 ```bash
@@ -195,7 +197,7 @@ sudo apt-get install -y pipx && pipx install uv && pipx ensurepath && ~/.local/b
 ```
 Expected: `uv 0.x.y`. (Ubuntu 24.04 is PEP 668 "externally managed", so `pip install uv` into the system Python is refused; pipx is the packaged way.) Never run `apt upgrade` on the Spark: the NVIDIA driver packages are on `apt-mark hold` and the LLM stack depends on the pinned driver.
 
-- [ ] **Step 5: Clone, create the venv, install with the constraints**
+- [x] **Step 5: Clone, create the venv, install with the constraints**
 
 Run (replace `CLONE_URL` with the form Task 0 found; the constraints glob picks the file Step 2 wrote):
 ```bash
@@ -206,7 +208,7 @@ source scripts/spark/env.sh
 ```
 Expected: the branch's latest commit, `Python 3.14.2`, and an `Installed N packages` line with no `No solution found`. If uv reports 3.14.2 unavailable, use `3.14` and record the exact version installed. If a single pin has no aarch64 wheel, edit that one line in the constraints file to the nearest version that resolves, commit it as "Relax <pkg> pin for aarch64 (no cp314 wheel at <ver>)", push, `git pull --ff-only` on the Spark, re-run the install, and record the deviation in the report.
 
-- [ ] **Step 6: Write the Spark `.env` with the served model id**
+- [x] **Step 6: Write the Spark `.env` with the served model id**
 
 Run:
 ```bash
@@ -219,7 +221,7 @@ Expected: JSON whose `data[0].id` is `Qwen3.8-Flash-Next-NVFP4`, the served-mode
 ```
 Expected: exactly one line, `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` unless the server lists a different id. Nothing else ever goes into this file, and its mode is 600.
 
-- [ ] **Step 7: Prove the Spark cannot reach the Gateway (design invariant 1)**
+- [x] **Step 7: Prove the Spark cannot reach the Gateway (design invariant 1)**
 
 Run:
 ```bash
@@ -227,7 +229,7 @@ Run:
 ```
 Expected: `NO_IBKR_ENV`, `NO_IBKR_IN_PROFILES`, and a pydantic `ValidationError` line naming `port` and `trading_mode` (the loud-failure rule). Paste all three under `## 2. Spark environment (Task 1)`; the runbook cites this as the proof. `collect_climate_labels.py` needs neither a credential nor the Gateway, so for it the guard is documentation only; a forked ledger would surface in Task 6 as a `labels_sha256` mismatch in the identity compare.
 
-- [ ] **Step 8: Run the suite and lint on the Spark**
+- [x] **Step 8: Run the suite and lint on the Spark**
 
 Run (an isolated HOME keeps the suite's own `~/quant_data/polymarket_weather` writes out of the mirror):
 ```bash
@@ -235,7 +237,7 @@ Run (an isolated HOME keeps the suite's own `~/quant_data/polymarket_weather` wr
 ```
 Expected: the same `passed` count as Step 1, `pytest_exit=0`, the same `Found N errors.` total as the Zenbook baseline, and `TOUCHED_FILES_LINT_OK`. A test failure is a finding, not something to skip: a test that depends on the operator's `.env`, on Windows path separators, or on `Path.home()` contents gets fixed in the repo (tests only), committed, and re-run on both machines.
 
-- [ ] **Step 9: Record and commit**
+- [x] **Step 9: Record and commit**
 
 Paste `uname -m`, `.venv/bin/python -V`, `uv --version`, the install tail, the invariant proof and the suite/lint output into the report under `## 2. Spark environment (Task 1)`. Then:
 ```bash
@@ -270,7 +272,7 @@ git push
 - Produces (test fixtures in `tests/test_analysis/conftest.py`): `spark_root` (a `SparkRoot` named tuple: `root`, `sweep`, `ledger`, `model`, `seas5`, `era5`), `sweep_writer`, `hourly_writer`, `emos_identity_model`, `dec_2026_frame`, `universe_json`.
 - Produces (`scripts/spark/verify_mirror.py`, `scripts/spark/live_manifest.py`): `main(argv) -> int` each.
 
-- [ ] **Step 1: Write the shared fixtures**
+- [x] **Step 1: Write the shared fixtures**
 
 Create `tests/test_analysis/conftest.py`:
 ```python
@@ -429,7 +431,7 @@ def universe_json(tmp_path: Path) -> Path:
     return path
 ```
 
-- [ ] **Step 2: Write the failing tests for checks, verify, identity**
+- [x] **Step 2: Write the failing tests for checks, verify, identity**
 
 Create `tests/test_analysis/test_spark_parity.py`:
 ```python
@@ -637,12 +639,12 @@ def test_operational_manifest_lists_files_and_tracks_changes(spark_root):
     assert {k for k in manifest if manifest[k] != changed[k]} == {"climate_data/models/gtm_emos.json"}
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q`
 Expected: collection error `ModuleNotFoundError: No module named 'analysis.spark_parity'`.
 
-- [ ] **Step 4: Write the module (part 1)**
+- [x] **Step 4: Write the module (part 1)**
 
 Create `analysis/spark_parity.py`:
 ```python
@@ -948,12 +950,12 @@ def operational_manifest(root: Path) -> dict[str, dict[str, Any] | None]:
     return out
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q`
 Expected: 17 passed.
 
-- [ ] **Step 6: Write the CLI and its test**
+- [x] **Step 6: Write the CLI and its test**
 
 Create `scripts/spark/verify_mirror.py`:
 ```python
@@ -1094,7 +1096,7 @@ def test_verify_mirror_cli_exit_1_lists_failures(spark_root, capsys):
     assert captured.out == ""
 ```
 
-- [ ] **Step 7: Run all new tests, lint, and the architecture tests**
+- [x] **Step 7: Run all new tests, lint, and the architecture tests**
 
 Run:
 ```bash
@@ -1104,7 +1106,7 @@ python -m pytest tests/test_architecture tests/test_analysis -q
 ```
 Expected: `20 passed` (17 + 3) for the two new files, ruff reporting no findings for the three new paths, and the architecture plus pre-existing analysis tests still green (the new files import no venue SDK).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -1124,7 +1126,7 @@ git commit -m "Add mirror integrity checks, the snapshot identity and the live m
 - Consumes: `scripts/spark/verify_mirror.py` and `scripts/spark/live_manifest.py` on the Spark and the Zenbook (Task 2, pulled to the Spark in Step 4); `.gitattributes` (Task 0).
 - Produces: `~/quant_data_snapshot` on the Zenbook (frozen copy) and `~/quant_data` on the Spark (mirror), both verified; the identity JSON at `~/quant_data_snapshot/identity_spark.json`; the evidence directory `~/quant_data_snapshot/parity/`.
 
-- [ ] **Step 1: Confirm the LF attribute is in force**
+- [x] **Step 1: Confirm the LF attribute is in force**
 
 Run:
 ```bash
@@ -1132,7 +1134,7 @@ git check-attr eol scripts/spark/push_snapshot.sh scripts/spark/env.sh
 ```
 Expected: `eol: lf` for both (from the `.gitattributes` committed in Task 1).
 
-- [ ] **Step 2: Write the push script**
+- [x] **Step 2: Write the push script**
 
 Create `scripts/spark/push_snapshot.sh`:
 ```bash
@@ -1225,7 +1227,7 @@ cat "$SNAP/identity_spark.json"
 ```
 If Task 0 chose the WSL-native key, the operator invokes the script with `SPARK_SSH=ssh` in the environment; nothing in the file changes.
 
-- [ ] **Step 3: Syntax-check inside WSL and confirm LF**
+- [x] **Step 3: Syntax-check inside WSL and confirm LF**
 
 Run (Git Bash):
 ```bash
@@ -1236,7 +1238,7 @@ wsl.exe -d Ubuntu -- bash -lc "cd $REPO_WSL && QUANT_DATA_SRC=/tmp/ps_src QUANT_
 ```
 Expected: `SYNTAX_OK`; two `file` lines WITHOUT "with CRLF line terminators"; and a rehearsal on empty temp dirs that prints `== 1/4` and `== 2/4` and then fails at the push with `rehearsal_exit=` non-zero (there is no `/tmp/ps_src`, so the freeze fails first with rsync's exit 23; the point is that the script parses, runs, and stops loudly). If CRLF shows up, strip it in the working tree (`git add --renormalize` fixes only the index, not the file bash reads): `wsl.exe -d Ubuntu -- sed -i 's/\r$//' "$REPO_WSL/scripts/spark/push_snapshot.sh" "$REPO_WSL/scripts/spark/env.sh"`, then re-check.
 
-- [ ] **Step 4: Commit, push, pull on the Spark**
+- [x] **Step 4: Commit, push, pull on the Spark**
 
 ```bash
 source scripts/spark/env.sh
@@ -1247,7 +1249,7 @@ git push
 ```
 Expected: the Spark reports the commit just pushed.
 
-- [ ] **Step 5: Manifest the live root, push (outside 17:25-17:40 local), manifest again**
+- [x] **Step 5: Manifest the live root, push (outside 17:25-17:40 local), manifest again**
 
 Run (Git Bash):
 ```bash
@@ -1260,7 +1262,7 @@ diff ~/quant_data_snapshot/parity/manifest_before_push.json ~/quant_data_snapsho
 ```
 Expected: the four `== n/4` lines, an rsync `--stats` block for step 2, an identity JSON from step 3 whose `newest_sweep` equals the newest partition on the Zenbook (`ls ~/quant_data/ibkr_ticks/quotes | tail -1`), then `LIVE_ROOT_UNTOUCHED`. If step 3 exits 1 naming the newest sweep, the push raced the recorder: run the script again. If the `diff` shows a changed file, a scheduled task wrote it inside the window (16:30 labels, 17:30 paper sync): record which, and bracket a second push to show the pair agrees.
 
-- [ ] **Step 6: Cross-check the bulk transfer with independent hashes**
+- [x] **Step 6: Cross-check the bulk transfer with independent hashes**
 
 Run:
 ```bash
@@ -1272,7 +1274,7 @@ grep -E '"(newest_sweep_sha256|labels_sha256)"' ~/quant_data_snapshot/identity_s
 ```
 Expected: the two `sha256sum` pairs identical, and the identity file's own `newest_sweep_sha256` / `labels_sha256` equal to them (three independent computations of the same bytes: coreutils on each machine, and our code on the Spark).
 
-- [ ] **Step 7: Record and commit**
+- [x] **Step 7: Record and commit**
 
 Paste the whole run, the `LIVE_ROOT_UNTOUCHED` line and the hash pairs into the report under `## 3. First mirror push (Task 3)`, then:
 ```bash
@@ -1294,7 +1296,7 @@ git commit -m "Record the first verified mirror push to the Spark"
 **Interfaces:**
 - Produces: `CompareResult` (fields `mismatches: list[str]`, `n_numeric: int`, `max_abs: float`, `max_rel: float`; property `ok`) and `compare_json(left, right, *, rtol=1e-9, atol=1e-12, ignore=()) -> CompareResult`; CLI `main(argv) -> int`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_analysis/test_spark_parity.py`:
 ```python
@@ -1347,12 +1349,12 @@ def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
     assert sp.compare_json({"t": 1}, {"t": 1.0}).ok
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q -k compare`
 Expected: 7 failed with `AttributeError: module 'analysis.spark_parity' has no attribute 'compare_json'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `analysis/spark_parity.py` (add `import math` and `from dataclasses import dataclass, field` and `from typing import Iterable` to the imports at the top of the file):
 ```python
@@ -1445,12 +1447,12 @@ def compare_json(
     return result
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q`
 Expected: 24 passed.
 
-- [ ] **Step 5: Write the CLI and its test**
+- [x] **Step 5: Write the CLI and its test**
 
 Create `scripts/spark/compare_json.py`:
 ```python
@@ -1534,7 +1536,7 @@ def test_compare_json_cli_exit_codes(tmp_path, capsys):
     assert "floor" in capsys.readouterr().out
 ```
 
-- [ ] **Step 6: Run, lint, commit**
+- [x] **Step 6: Run, lint, commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -1558,7 +1560,7 @@ Expected: `28 passed` (24 + 4), ruff reporting no findings for the three paths.
 **Interfaces:**
 - Produces: `MACHINE_PACKAGES = ("numpy", "scipy", "pandas", "pyarrow")`, `PROBE_MARKER = "spark_parity"`, `machine_info() -> dict[str, Any]` (platform, python, package versions, `git_dirty`), `score_snapshot(frame, model, *, ticks_root, universe_json, identity, summary=None) -> dict[str, Any]` (the `run_paper` payload minus `ts_utc`, plus `probe`, `bridge` and `identity`; raises `FileNotFoundError` for a missing universe file), `score_snapshot_from_root(root, *, universe_json) -> dict[str, Any]`; CLI `main(argv) -> int` writing `--out`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_analysis/test_spark_parity.py` (add `import platform` and `import pytest` to the imports):
 ```python
@@ -1626,12 +1628,12 @@ def test_score_snapshot_from_root_wires_model_identity_frame_and_bridge(
     assert payload["n_ladder"] == 1
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q -k "machine_info or score_snapshot"`
 Expected: 3 failed with `AttributeError`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `analysis/spark_parity.py` (add `import json`, `import platform`, `from importlib import metadata` to the imports, plus `from climate.dataset import build_training_frame` and `from climate.paper import run_paper`):
 ```python
@@ -1721,12 +1723,12 @@ def score_snapshot_from_root(root: Path, *, universe_json: Path | None) -> dict[
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_analysis/test_spark_parity.py -q`
 Expected: 28 passed. If `test_score_snapshot_strips_the_clock...` fails inside `run_paper`, compare the fixture against `tests/test_climate/test_staleness_gates.py::_sweep_rows` (the recorder-shaped rows the entrypoint tests use) and fix the fixture, not the module. (A throwaway probe on 2026-10-01 already drove `run_paper` with this exact fixture to `n_quotes=n_ladder=n_tradeable=1`, `sweep_ts_utc` `2026-09-28T22:08:22Z`, target month `2026-12`, `go_live.passed` False, no `paper/` dir.)
 
-- [ ] **Step 5: Write the CLI and its test**
+- [x] **Step 5: Write the CLI and its test**
 
 Create `scripts/spark/parity_score.py`:
 ```python
@@ -1797,7 +1799,7 @@ def test_parity_score_cli_writes_a_clockless_payload(
     assert not (spark_root.root / "climate_data" / "paper").exists()
 ```
 
-- [ ] **Step 6: Run, lint, commit**
+- [x] **Step 6: Run, lint, commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -1821,7 +1823,7 @@ Expected: `33 passed` (28 + 5), ruff reporting no findings for the three paths.
 - Consumes: Tasks 2-5 on both machines at the same commit; the mirror from Task 3.
 - Produces: the signed-off parity report with its registered tolerance.
 
-- [ ] **Step 0: Register the tolerance from a kernel-variation experiment**
+- [x] **Step 0: Register the tolerance from a kernel-variation experiment**
 
 Why: the design assumed elementwise arithmetic on identical doubles. It is not: `build_training_frame` refits the ERA5->NOAA bridge with `np.linalg.lstsq` on each machine (`climate/bridge.py:142`), and LAPACK reduces sums in a kernel-dependent order. Measured on 2026-10-01 on a copy of the real snapshot (41 ladder rows, 1520 numeric leaves): identical runs agree exactly; Haswell vs Sandybridge/Nehalem OpenBLAS kernels differ by max rel 3.3e-10; a different solver (QR) by 1.0e-9. aarch64 NEON will sit in that band or above. So the gate is a REGISTERED tolerance measured before the cross-machine run, not 1e-12. Run (Zenbook, on the snapshot; the bundled OpenBLAS honours the kernel override):
 ```bash
@@ -1834,7 +1836,7 @@ python scripts/spark/compare_json.py ~/quant_data_snapshot/parity/kernel_HASWELL
 ```
 Expected: three `ladder=...` lines with one fingerprint, then two `numeric leaves compared` lines with `max rel diff` around 1e-10 and two `PARITY OK`. Registered tolerance: `--rtol 1e-8 --atol 1e-10`, roughly 30x above the measured x86 kernel noise and six orders below the smallest price step that matters (tick 0.01, minimum edge 0.02); a threshold-crossing flip would surface as a structural True/False mismatch, never as hidden rounding. If the measured max rel diff exceeds 1e-9, STOP and put the numbers to the operator before registering anything looser. Paste the outputs and the registered values under `## 4. Registered tolerance (Task 6)`.
 
-- [ ] **Step 1: Same commit on both machines, manifest the live root, fresh mirror**
+- [x] **Step 1: Same commit on both machines, manifest the live root, fresh mirror**
 
 Run:
 ```bash
@@ -1847,7 +1849,7 @@ wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/push_snapshot.sh"
 ```
 Expected: `CODE_CLEAN` (uncommitted code would make `code_sha` a lie; commit first), the same SHA on both lines, and the push ending with the identity JSON. The identity compare in Step 3 asserts the SHA equality; nothing here is eyeballed. Record the SHA and the identity JSON under `## 5. Snapshot identity (Task 6)`.
 
-- [ ] **Step 2: Score on both machines (before any refit)**
+- [x] **Step 2: Score on both machines (before any refit)**
 
 Run:
 ```bash
@@ -1858,7 +1860,7 @@ python scripts/spark/parity_score.py --root ~/quant_data_snapshot --out ~/quant_
 ```
 Expected: both print a `ladder=... fingerprint=... sweep=...` line with the same fingerprint and sweep timestamp. (`~/parity_spark.json` on the Spark is scratch; the copy under `parity/` is the evidence, and Step 7 commits it.)
 
-- [ ] **Step 3: Compare (the gate)**
+- [x] **Step 3: Compare (the gate)**
 
 Run (the registered tolerance from Step 0):
 ```bash
@@ -1866,7 +1868,7 @@ python scripts/spark/compare_json.py ~/quant_data_snapshot/parity/zenbook.json ~
 ```
 Expected: `PARITY OK`, with the printed `max rel diff` inside the registered tolerance (record it; 1e-10..1e-9 is the expected band). `identity.snapshot` is NOT ignored, so the same line proves both machines scored the same bytes (`inputs_sha256`, `newest_sweep_sha256`, `labels_sha256`) at the same commit (`code_sha`). Paste the full output under `## 6. Scoring parity (Task 6)`. A mismatch is investigated before anything else happens: a differing `identity.snapshot` means the push raced the recorder or the commits differ (re-push or pull, re-score); a numeric mismatch confined to `bridge.*` and its dependants is the LAPACK fit diverging beyond the registered band; anything else is a real platform divergence. Both go to the operator with the offending paths.
 
-- [ ] **Step 4: Refit on both machines (report-only)**
+- [x] **Step 4: Refit on both machines (report-only)**
 
 Run (the Zenbook writes into the SNAPSHOT copy, never the live root; the first line refuses to continue if the snapshot is missing, so a typo cannot fall back to the live default):
 ```bash
@@ -1881,7 +1883,7 @@ python scripts/spark/compare_json.py ~/quant_data_snapshot/climate_data/reports/
 ```
 Expected: max abs/rel diffs in the 1e-8..1e-6 band (x86 AVX vs aarch64 NEON reduction order through scipy's optimiser; `max_rel` is dominated by near-zero coefficients, so read the per-leaf lines). `fingerprint` is ignored on both compares because `climate.fit.write_artifacts` merges the fit's fingerprint into fresh model and diagnostics files, and any last-bit coefficient difference changes that string; `fitted_at_utc` is a clock and `artifact_paths` are machine paths. Report-only: a `PARITY FAILED` here does not block, but any coefficient differing by more than 1e-4 relative is investigated before sign-off. Paste both outputs under `## 7. Refit parity, report-only (Task 6)`.
 
-- [ ] **Step 5: Suite and lint, same day, both machines**
+- [x] **Step 5: Suite and lint, same day, both machines**
 
 Run (the Spark suite under an isolated HOME so its `polymarket_weather` writes stay out of the mirror):
 ```bash
@@ -1893,7 +1895,7 @@ git diff --name-only origin/main...HEAD -- '*.py' | xargs python -m ruff check &
 ```
 Expected: equal `passed` counts, `pytest_exit=0` twice, the same `Found N errors.` baseline total twice, `TOUCHED_FILES_LINT_OK` twice. Paste under `## 8. Suite and lint (Task 6)`.
 
-- [ ] **Step 6: Prove the live root was untouched by the whole run**
+- [x] **Step 6: Prove the live root was untouched by the whole run**
 
 Run:
 ```bash
@@ -1902,7 +1904,7 @@ diff ~/quant_data_snapshot/parity/manifest_before_run.json ~/quant_data_snapshot
 ```
 Expected: `LIVE_ROOT_UNTOUCHED`. The operational model, the diagnostics, the paper book and the ledgers on the Zenbook have the same bytes as before Step 1; the refit in Step 4 only touched the snapshot. A diff names exactly which file changed and when (a scheduled task in the window is the benign explanation; anything else stops the sign-off).
 
-- [ ] **Step 7: Evidence, verdict, commit**
+- [x] **Step 7: Evidence, verdict, commit**
 
 Copy the two compared payloads next to the report and write the verdict:
 ```bash
@@ -1930,7 +1932,7 @@ git push
 **Interfaces:**
 - Produces: `LocalLLMSettings(BaseSettings)` with fields `model: str` (required), `base_url: str = "http://127.0.0.1:8000/v1"`, `api_key: str = "EMPTY"`, `max_tokens: int = 8192`, `reasoning_effort: Literal["low", "medium", "high"] = "low"`, `temperature: float | None = None`, `connect_timeout_s: float = 10.0`, `read_timeout_s: float = 900.0`; env prefix `LLM_`, env file `.env`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_llm/__init__.py` (empty) and `tests/test_llm/conftest.py` (an exported `LLM_BASE_URL` or `LLM_MAX_TOKENS` in the operator's shell would otherwise silently change the defaults these tests assert):
 ```python
@@ -2004,12 +2006,12 @@ def test_empty_env_values_mean_unset(monkeypatch):
     assert settings.max_tokens == 8192
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_llm/test_settings.py -q`
 Expected: `ModuleNotFoundError: No module named 'src.llm'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/llm/__init__.py`:
 ```python
@@ -2086,12 +2088,12 @@ class LocalLLMSettings(BaseSettings):
     read_timeout_s: float = 900.0
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_llm/test_settings.py -q`
 Expected: 5 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -2113,7 +2115,7 @@ git commit -m "Add LocalLLMSettings with a required, config-driven model name"
 - Consumes: `LocalLLMSettings` (Task 7).
 - Produces: `LocalLLMClient(settings, transport=None)` with `models() -> list[str]`, `assert_model_served() -> None`, `chat(messages, *, json_schema=None, schema_name="reply", max_tokens=None) -> LLMReply`, context-manager `close()`; `LLMReply(content, reasoning, parsed, usage, latency_s, model)`; errors `LLMError`, `LLMHTTPError(status, body)`, `LLMOutputError(message, raw)`, `LLMConfigError`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_llm/test_client.py`:
 ```python
@@ -2247,12 +2249,12 @@ def test_models_lists_served_ids_and_assert_model_served_checks_config():
     assert "other-model" in str(info.value)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_llm/test_client.py -q`
 Expected: `ModuleNotFoundError: No module named 'src.llm.client'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/llm/client.py`:
 ```python
@@ -2417,12 +2419,12 @@ class LocalLLMClient:
 ```
 Then replace `src/llm/__init__.py` with the full export block shown in Task 7 Step 3.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_llm -q`
 Expected: 10 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -2442,7 +2444,7 @@ git commit -m "Add the httpx client for the local vLLM model with schema-constra
 **Interfaces:**
 - Produces: a red test whenever `src.llm` is imported under the guarded paths.
 
-- [ ] **Step 1: Write the test (it must pass immediately on the clean tree and catch a planted import)**
+- [x] **Step 1: Write the test (it must pass immediately on the clean tree and catch a planted import)**
 
 Create `tests/test_architecture/test_llm_boundary.py`:
 ```python
@@ -2581,12 +2583,12 @@ def test_scanner_recognises_every_import_form() -> None:
     assert llm_imports(ast.parse(source), package=("src", "trading")) == [1, 2, 3, 4, 5]
 ```
 
-- [ ] **Step 2: Run the tests**
+- [x] **Step 2: Run the tests**
 
 Run: `python -m pytest tests/test_architecture -q`
 Expected: all passed (the existing import-ban test plus 4 new).
 
-- [ ] **Step 3: Prove the guard bites on the real tree too**
+- [x] **Step 3: Prove the guard bites on the real tree too**
 
 Run (plant, test, unplant; pytest prints only the assertion's first line in its summary, so grep for the path):
 ```bash
@@ -2597,7 +2599,7 @@ git status --short climate/paths.py
 ```
 Expected: a line `climate/paths.py:NN: imports src.llm`, a `1 failed, 3 passed` summary, then a clean `climate/paths.py`.
 
-- [ ] **Step 4: Document the settings in `.env.example`**
+- [x] **Step 4: Document the settings in `.env.example`**
 
 Append to `.env.example` (after the IBKR block) with the Edit tool:
 ```
@@ -2619,7 +2621,7 @@ Append to `.env.example` (after the IBKR block) with the Edit tool:
 #                                 #   docker inspect -f '{{.State.Health.Status}}' qwenflash   prints healthy
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -2641,7 +2643,7 @@ git commit -m "Guard the pricing and ordering path against LLM imports; document
 - Consumes: `LocalLLMClient`, `LocalLLMSettings`.
 - Produces: `scripts/llm_smoke.py` `main(argv) -> int`; `tests/test_llm/test_live.py` (skipped unless `LLM_LIVE=1`).
 
-- [ ] **Step 1: Write the smoke script**
+- [x] **Step 1: Write the smoke script**
 
 Create `scripts/llm_smoke.py`:
 ```python
@@ -2725,7 +2727,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 2: Write the live test**
+- [x] **Step 2: Write the live test**
 
 Create `tests/test_llm/test_live.py`:
 ```python
@@ -2769,7 +2771,7 @@ def test_live_schema_round_trip():
     assert reply.usage.get("completion_tokens", 0) > 0
 ```
 
-- [ ] **Step 3: Confirm the live test skips locally and lint**
+- [x] **Step 3: Confirm the live test skips locally and lint**
 
 Run:
 ```bash
@@ -2778,7 +2780,7 @@ python -m ruff check scripts/llm_smoke.py tests/test_llm
 ```
 Expected: `10 passed, 1 skipped`, ruff reporting no findings for the two paths.
 
-- [ ] **Step 4: Commit, push, run on the Spark**
+- [x] **Step 4: Commit, push, run on the Spark**
 
 ```bash
 source scripts/spark/env.sh
@@ -2801,7 +2803,7 @@ Expected: `served: [...]` containing `LLM_MODEL`, a latency/tok-s line, `parsed:
 - Modify: memory `C:\Users\asus\.claude\projects\C--Users-asus-OneDrive-Desktop-new-work\memory\dgx-spark.md`
 - Modify: `docs/spark_parity_<date>.md` (section 10)
 
-- [ ] **Step 1: Write the runbook**
+- [x] **Step 1: Write the runbook**
 
 Create `docs/spark_runbook.md`:
 ```markdown
@@ -2931,7 +2933,7 @@ Spark-side `research` role, if it ever comes, goes over Tailscale first
 (operator decision 2026-10-02).
 ```
 
-- [ ] **Step 2: Add the machine column to the IBKR runbook's role table**
+- [x] **Step 2: Add the machine column to the IBKR runbook's role table**
 
 With the Edit tool, replace in `docs/ibkr_runbook.md`:
 ```
@@ -2947,7 +2949,7 @@ with
 ```
 and each of the three remaining rows gains `| Zenbook ` after the clientId cell (`| 2 | Zenbook | the recorder...`, `| 3 | Zenbook | ad-hoc...`, `| 4 | Zenbook | \IBKR\IBKR Paper Sync...`). Add below the table: `The DGX Spark holds no client id (docs/spark_runbook.md section 1).`
 
-- [ ] **Step 3: Point the checkpoint at the runbook**
+- [x] **Step 3: Point the checkpoint at the runbook**
 
 Append to `docs/MIGRATION_CHECKPOINT.md`:
 ```markdown
@@ -2963,7 +2965,7 @@ name) and is fenced out of the pricing/ordering path by
 `tests/test_architecture/test_llm_boundary.py`.
 ```
 
-- [ ] **Step 4: Update memory**
+- [x] **Step 4: Update memory**
 
 With the Edit tool, replace in the memory file `dgx-spark.md` the paragraph starting `- Decision on which option: pending` with:
 ```
@@ -2978,7 +2980,7 @@ With the Edit tool, replace in the memory file `dgx-spark.md` the paragraph star
   with LLM_MODEL required. The Spark holds no client id.
 ```
 
-- [ ] **Step 5: Final suites on both machines at the final commit**
+- [x] **Step 5: Final suites on both machines at the final commit**
 
 ```bash
 source scripts/spark/env.sh
@@ -2992,7 +2994,7 @@ git push
 ```
 Expected: equal `passed` counts on both, `pytest_exit=0` twice, the same ruff baseline total twice, `TOUCHED_FILES_LINT_OK` twice, same SHA. Paste under `## 11. Final suites (Task 11)`, commit the report, push.
 
-- [ ] **Step 6: Open the PR**
+- [x] **Step 6: Open the PR**
 
 ```bash
 gh pr create --base main --head spark-research-split --title "Spark research mirror: parity tooling, data push, local LLM client" --body-file - <<'EOF'
