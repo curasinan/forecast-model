@@ -231,6 +231,24 @@ def test_an_unreadable_stored_file_stops_a_real_run_before_it_connects(ticks_roo
     assert "hourly-earlier-run.parquet" in capsys.readouterr().out
 
 
+def test_a_run_reads_the_stored_bars_only_once_it_holds_the_lock(ticks_root, gateway, monkeypatch):
+    # Read before the lock, another run could finish in between and its bars
+    # would be written a second time.
+    lock_file = ticks_root / "quotes_hourly" / "backfill.lock"
+    seen: list[bool] = []
+    real_read = cli.read_stored_window
+
+    def read_and_note(data_root, requests):
+        seen.append(lock_file.exists())
+        return real_read(data_root, requests)
+
+    monkeypatch.setattr(cli, "read_stored_window", read_and_note)
+    rc = cli.main([*BASE_ARGS, "--start", "2026-09-03", "--end", "2026-09-03"])
+
+    assert rc == 0
+    assert seen == [True]
+
+
 def test_a_second_run_is_refused_while_another_holds_the_lock(ticks_root, gateway, capsys):
     from src.trading.locks import acquire_db_lock
 

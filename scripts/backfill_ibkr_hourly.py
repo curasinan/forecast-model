@@ -258,19 +258,9 @@ def main(argv: list[str] | None = None) -> int:
         if skipped:
             print(f"WARNING: --max-requests dropped {skipped} contracts entirely "
                   f"(they will still be missing after this run)")
-        # Read what the window already holds before anything connects: an
-        # unreadable file is found by the plan, not by a run with the venue
-        # on the line.
-        try:
-            stored = read_stored_window(data_root, requests)
-        except RuntimeError as exc:
-            print(f"refusing: {exc}")
-            return 5
-        stored_bars = sum(len(keys) for keys in stored.values())
-        stored_cons = {key[0] for keys in stored.values() for key in keys}
-        print(f"Already stored in the window: {stored_bars} bars, {len(stored_cons)} "
-              "contracts (not written again)")
         if args.dry_run:
+            if _read_stored(data_root, requests) is None:
+                return 5
             print("--dry-run: not connecting.")
             return 0
 
@@ -278,6 +268,11 @@ def main(argv: list[str] | None = None) -> int:
         lock_target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with acquire_db_lock(lock_target, stale_after_min=LOCK_STALE_MIN):
+                # Read under the lock: read before it, another run could finish
+                # in between and its bars would be written a second time.
+                stored = _read_stored(data_root, requests)
+                if stored is None:
+                    return 5
                 return _run_connected(args, settings, resolver, requests, skipped,
                                       gap_start, gap_end, gaps, data_root, stored)
         except LockHeldError as exc:
@@ -286,6 +281,24 @@ def main(argv: list[str] | None = None) -> int:
             return 6
     finally:
         resolver.close()
+
+
+def _read_stored(data_root: Path, requests: list) -> dict | None:
+    """Stored keys of the plan's window, reported; None when a file cannot be read.
+
+    Done before anything connects, so an unreadable file is found by the plan
+    (the dry run included), not by a run with the venue on the line.
+    """
+    try:
+        stored = read_stored_window(data_root, requests)
+    except RuntimeError as exc:
+        print(f"refusing: {exc}")
+        return None
+    stored_bars = sum(len(keys) for keys in stored.values())
+    stored_cons = {key[0] for keys in stored.values() for key in keys}
+    print(f"Already stored in the window: {stored_bars} bars, {len(stored_cons)} "
+          "contracts (not written again)")
+    return stored
 
 
 def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
