@@ -37,7 +37,9 @@ from climate.cds import (  # noqa: E402
     climate_data_root,
     fetch,
 )
+from climate.paths import root_path  # noqa: E402
 from climate.reduce import reduce_era5_file, reduce_seas5_file  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 
 log = logging.getLogger("fetch_climate_forecasts")
 
@@ -163,6 +165,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     setup_logging()
+
+    try:
+        refuse_if_mirror(root_path(args.root), "download climate forecasts")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
     root = climate_data_root(args.root)
     print(f"climate data root: {root}")
 

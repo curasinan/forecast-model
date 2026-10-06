@@ -67,6 +67,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
 from src.trading.reconcile import ReconcileReport, reconcile_paper_book  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 from src.venues.ibkr.adapter import IBKRAdapter  # noqa: E402
 from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 
@@ -170,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
+    db_path = Path(args.db) if args.db else settings.resolved_data_root / "paper" / "ibkr_paper.db"
+    try:
+        refuse_if_mirror(db_path.parent, "reconcile the paper book")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
     adapter = IBKRAdapter(settings, role="paper_sync", read_only=True)
     adapter.connect()  # ModeMismatchError unless the account is DU/DF (paper)
     if adapter.mode != "paper":  # belt and braces
@@ -178,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"account={adapter.account} mode={adapter.mode} role={adapter.role} "
           f"read_only={adapter.read_only}")
 
-    db_path = Path(args.db) if args.db else settings.resolved_data_root / "paper" / "ibkr_paper.db"
     runs_path = db_path.parent / RUNS_FILENAME
 
     if not db_path.exists():

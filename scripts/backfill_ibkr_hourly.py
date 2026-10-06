@@ -27,7 +27,8 @@ lists them.
 
 Exit codes: 0 done (bars written or nothing missing), 1 the run stopped on an
 error (recorded in the ledger with its message; what was fetched is kept),
-2 the window, a --refetch date or the session mode is invalid, 3 no Gateway
+2 the window, a --refetch date or the session mode is invalid, or the data
+root is a mirror of the live root, 3 no Gateway
 connection (refused, timed out, client id in use, or interrupted before
 connecting), 4 nothing to request (no contracts matched, --max-requests left
 nothing, or the gap is longer than one request can fill), 5 a stored hourly
@@ -61,6 +62,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 from src.venues.ibkr.backfill import (  # noqa: E402
     HISTORY_STARTS,
     MAX_GAP_DAYS,
@@ -206,6 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging()
     settings = load_settings(args)
     data_root = settings.resolved_data_root
+
+    try:
+        refuse_if_mirror(data_root, "backfill hourly bars")
+    except MirrorRootError as exc:
+        print(exc)
+        return 2
 
     try:
         gap_start, gap_end, gaps = resolve_window(args, data_root)

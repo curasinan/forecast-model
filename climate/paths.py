@@ -20,8 +20,8 @@ from pathlib import Path
 ENV_VAR = "CLIMATE_DATA_ROOT"
 
 
-def data_root(override: str | Path | None = None) -> Path:
-    """Return the local climate data directory, creating it if needed.
+def root_path(override: str | Path | None = None) -> Path:
+    """The climate data directory :func:`data_root` returns, without creating it.
 
     Priority:
       1. explicit override argument
@@ -29,12 +29,15 @@ def data_root(override: str | Path | None = None) -> Path:
       3. ~/quant_data/climate_data
     """
     if override is not None and str(override).strip():
-        root = Path(override).expanduser().resolve()
-    elif os.environ.get(ENV_VAR, "").strip():
-        root = Path(os.environ[ENV_VAR]).expanduser().resolve()
-    else:
-        root = Path.home() / "quant_data" / "climate_data"
+        return Path(override).expanduser().resolve()
+    if os.environ.get(ENV_VAR, "").strip():
+        return Path(os.environ[ENV_VAR]).expanduser().resolve()
+    return Path.home() / "quant_data" / "climate_data"
 
+
+def data_root(override: str | Path | None = None) -> Path:
+    """Return the local climate data directory, creating it if needed (see :func:`root_path`)."""
+    root = root_path(override)
     root.mkdir(parents=True, exist_ok=True)
     for sub in ("labels", "raw"):
         (root / sub).mkdir(parents=True, exist_ok=True)

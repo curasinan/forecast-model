@@ -28,6 +28,8 @@ Exit codes: 0 on success, INCLUDING when nothing new was found
 (cron-friendly); 1 when the fetch of ANY series fails (fail loudly so
 the scheduler alerts). Series that did fetch successfully are still
 appended before the failure exit.
+2 when the data root is a mirror of the live root: nothing is fetched and
+nothing is written.
 """
 
 from __future__ import annotations
@@ -44,8 +46,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from climate import noaa  # noqa: E402
 from climate.noaa import LabelObservation  # noqa: E402
-from climate.paths import data_root, warn_if_onedrive  # noqa: E402
+from climate.paths import data_root, root_path, warn_if_onedrive  # noqa: E402
 from climate.storage import append_observations, ledger_path  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 
 log = logging.getLogger("collect_climate_labels")
 
@@ -80,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Override climate data root (else CLIMATE_DATA_ROOT / %%LOCALAPPDATA%%/climate_data)",
     )
     args = parser.parse_args(argv)
+
+    try:
+        refuse_if_mirror(root_path(args.data_root), "append to the label ledger")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     root = data_root(args.data_root)
     warning = warn_if_onedrive(root)

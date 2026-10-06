@@ -35,13 +35,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from climate.paper import parse_ts_utc  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
-from climate.paths import data_root  # noqa: E402
+from climate.paths import data_root, root_path  # noqa: E402
 from src.domain.ids import MarketId  # noqa: E402
 from src.models.prediction import EdgeSignal  # noqa: E402
 from src.trading.executor import TradeIntent, TradingExecutor, render_group_commitments  # noqa: E402
 from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
 from src.trading.reconcile import drop_already_committed, load_open_commitments  # noqa: E402
 from src.trading.risk_manager import RiskLimits  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 from src.venues.ibkr.adapter import IBKRAdapter  # noqa: E402
 from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 
@@ -107,6 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     if settings.trading_mode != "paper":
         print("refusing: this is the PAPER entrypoint; IBKR_TRADING_MODE must be 'paper'",
               file=sys.stderr)
+        return 2
+
+    try:
+        refuse_if_mirror(settings.resolved_data_root, "place or simulate paper orders")
+        if args.db:
+            refuse_if_mirror(Path(args.db).parent, "place or simulate paper orders")
+        refuse_if_mirror(root_path(), "place or simulate paper orders")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
         return 2
 
     signals_path = Path(args.signals) if args.signals else data_root() / "paper" / "gtm_signals.json"

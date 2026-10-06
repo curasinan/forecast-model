@@ -37,6 +37,7 @@ from climate.fit import (  # noqa: E402
 )
 from climate.paper_criteria import evaluate_hindcast_go_live  # noqa: E402
 from climate.paths import ENV_VAR, data_root, warn_if_onedrive  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 
 log = logging.getLogger("fit_gtm_emos")
 
@@ -105,6 +106,13 @@ def main(argv: list[str] | None = None) -> int:
     if not (args.root or "").strip() and not args.live:
         print(_refusal(_default_root()), file=sys.stderr)
         return 2
+
+    if args.live:
+        try:
+            refuse_if_mirror(_default_root(), "refit the operational model")
+        except MirrorRootError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     root = data_root(args.root)  # --live leaves --root unset: the default root
     warn = warn_if_onedrive(root)

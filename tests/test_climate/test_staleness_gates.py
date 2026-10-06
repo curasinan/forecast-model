@@ -683,6 +683,7 @@ def _run_ibkr_paper_with_inits(tmp_path, monkeypatch, inits: dict) -> int:
 
     class _FakeSettings:
         trading_mode = "paper"
+        resolved_data_root = tmp_path / "ibkr_ticks"  # no marker above it: a live root
 
     class _SentinelAdapter:
         def __init__(self, *args, **kwargs):

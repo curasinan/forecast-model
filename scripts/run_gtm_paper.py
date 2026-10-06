@@ -28,7 +28,8 @@ from climate.ladder import latest_sweep_path  # noqa: E402
 from climate.paper import append_paper_history, parse_ts_utc, run_paper, write_paper_payload  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paper_progress import compute_paper_progress  # noqa: E402
-from climate.paths import data_root, warn_if_onedrive  # noqa: E402
+from climate.paths import data_root, root_path, warn_if_onedrive  # noqa: E402
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 
 log = logging.getLogger("run_gtm_paper")
 
@@ -98,6 +99,12 @@ def main(argv: list[str] | None = None) -> int:
         print(reason, file=sys.stderr)
         log.error(reason)
         return 1
+
+    try:
+        refuse_if_mirror(root_path(args.root), "write GTM paper signals")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     root = data_root(args.root)
     warn = warn_if_onedrive(root)

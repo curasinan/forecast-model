@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 from src.venues.ibkr.recorder import QuoteRecorder, setup_logging  # noqa: E402
 from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 
@@ -35,6 +36,12 @@ def main() -> int:
     settings = IBKRSettings()  # loud ValidationError if IBKR_PORT / IBKR_TRADING_MODE unset
     if args.interval_minutes is not None:
         settings.record_interval_minutes = args.interval_minutes
+
+    try:
+        refuse_if_mirror(settings.resolved_data_root, "record quotes")
+    except MirrorRootError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     setup_logging()
     print(f"gateway: {settings.host}:{settings.port} mode={settings.trading_mode}")
