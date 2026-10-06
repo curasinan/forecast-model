@@ -20,6 +20,7 @@ listens". The operating system is asked which sockets listen instead.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -44,9 +45,9 @@ def _output(cmd: list[str], run) -> str:
 def listening_ports(run=subprocess.run) -> set[int]:
     """Local TCP ports with a listening socket."""
     if sys.platform == "win32":
-        text = _output(["netstat", "-an", "-p", "TCP"], run)
+        text = _output(["netstat", "-an"], run)
         lines = [line for line in text.splitlines() if "LISTENING" in line]
-        pattern = re.compile(r"^\s*TCP\s+\S+:(\d+)\s")
+        pattern = re.compile(r"^\s*TCP\s+.+?:(\d+)\s")
     else:
         text = _output(["ss", "-ltnH"], run)
         lines = text.splitlines()
@@ -60,7 +61,7 @@ def listening_ports(run=subprocess.run) -> set[int]:
 
 
 def process_running(name: str, run=subprocess.run) -> bool:
-    """True when a process whose name contains ``name`` runs."""
+    """True when a process whose command line contains ``name`` runs (excluding this checker and its parent)."""
     if sys.platform == "win32":
         return name.lower() in _output(["tasklist"], run).lower()
     try:
@@ -69,7 +70,14 @@ def process_running(name: str, run=subprocess.run) -> bool:
         raise CheckFailed(f"could not run pgrep: {type(exc).__name__}") from exc
     if done.returncode not in (0, 1):  # 1 is pgrep's "no process matched"
         raise CheckFailed(f"could not run pgrep: exit {done.returncode}")
-    return done.returncode == 0
+    if done.returncode == 1:  # No process matched
+        return False
+    # Filter out this checker's pid and its parent
+    own_pid = os.getpid()
+    parent_pid = os.getppid()
+    pids = [int(pid) for pid in done.stdout.strip().split('\n') if pid.strip()]
+    remaining_pids = [pid for pid in pids if pid not in (own_pid, parent_pid)]
+    return bool(remaining_pids)
 
 
 def container_running(name: str, run=subprocess.run) -> bool:
