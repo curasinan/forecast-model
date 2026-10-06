@@ -121,3 +121,106 @@ def test_a_scratch_directory_that_holds_something_is_refused(day_dir, tmp_path, 
     assert rc == 2
     assert (scratch / "keep.txt").read_text(encoding="utf-8") == "mine"
     assert json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))  # source untouched
+
+
+def test_happy_path_asserts_file_count_and_book_exists(day_dir, tmp_path, capsys):
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "RESTORE OK: 4 files" in out
+    assert (tmp_path / "scratch").joinpath(*BOOK).is_file()
+
+
+def test_whole_root_without_paper_book_fails(root, tmp_path, capsys):
+    root.joinpath(*BOOK).unlink()
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: the copy has no paper book" in out
+
+
+def test_day_dir_with_paper_book_null_in_manifest_fails(day_dir, tmp_path, capsys):
+    day_dir.joinpath(*BOOK).unlink()
+    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    manifest["ibkr_ticks/paper/ibkr_paper.db"] = None
+    (day_dir / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: the copy has no paper book" in out
+
+
+def test_empty_directory_fails_no_book(tmp_path, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    rc = restore_check.main(["--from", str(empty), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: the copy has no paper book" in out
+
+
+def test_nonexistent_copy_path_returns_2(tmp_path, capsys):
+    rc = restore_check.main(["--from", str(tmp_path / "nonexistent"), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "cannot read the copy" in out and "is not a directory" in out
+
+
+def test_manifest_with_truncated_json_returns_2(day_dir, tmp_path, capsys):
+    (day_dir / MANIFEST_NAME).write_text('{"incomplete":', encoding="utf-8")
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "cannot read the copy" in out
+    assert "Traceback" not in out
+
+
+def test_scratch_that_is_a_file_returns_2(day_dir, tmp_path, capsys):
+    scratch = tmp_path / "scratch"
+    scratch.write_text("i am a file", encoding="utf-8")
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 2
+    # Scratch that is a file is treated as "not empty"
+    assert "refusing" in out
+
+
+def test_jsonl_with_invalid_utf8_fails_but_checks_other_files(root, tmp_path, capsys):
+    root.joinpath(*RUNS).write_bytes(b'{"ok": true}\n\xff\xfe\n')
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_sync_runs.jsonl" in out
+    # Other files should still be checked and found good
+    assert "FAIL climate_data/models/gtm_emos.json" not in out
+
+
+def test_paper_book_with_failed_integrity_check_fails(root, tmp_path, capsys):
+    book = root.joinpath(*BOOK)
+    # Read the full book, zero middle bytes to corrupt it
+    data = bytearray(book.read_bytes())
+    if len(data) > 200:
+        # Zero bytes in the middle to corrupt the database structure
+        data[100:300] = b'\x00' * 200
+    book.write_bytes(bytes(data))
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    # The corrupted database either fails on integrity_check or fails to open at all
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db" in out and ("integrity check" in out or "database" in out)
+
+
+def test_manifest_key_with_path_escape_fails(day_dir, tmp_path, capsys):
+    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    manifest["../escape.txt"] = {"sha256": "abc123", "size": 11}
+    (day_dir / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    # Create the file so it can be copied
+    (day_dir / ".." / "escape.txt").parent.mkdir(exist_ok=True)
+    (day_dir / ".." / "escape.txt").write_text("escape file", encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ../escape.txt: path escapes the scratch root" in out
+    # Verify nothing was written outside scratch
+    assert not (scratch.parent / "escape.txt").exists()

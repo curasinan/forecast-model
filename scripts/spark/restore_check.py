@@ -9,11 +9,12 @@ source holds when the check starts is then the reference). The operational
 files are copied into the scratch root, and the restored files are verified:
 
   * every file the reference lists is there, with the listed sha256 and size;
-  * the paper book passes SQLite's integrity check and has its tables;
+  * the paper book is present and passes SQLite's integrity check and has its tables;
   * every .parquet file reads, every .json file parses, every .jsonl line parses.
 
 The source is only read. The scratch root must not exist or must be empty.
-Exit 0 all good, 1 at least one failure (each printed), 2 scratch not empty.
+Exit 0 all good, 1 at least one failure (each printed), 2 copy invalid/unreadable
+or scratch not empty or not a directory.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from analysis.spark_parity import MANIFEST_FILES, check_parquet  # noqa: E402
 from monitoring.backup_paper_book import MANIFEST_NAME, file_record  # noqa: E402
 
 REQUIRED_TABLES = ("positions", "trade_log")
+PAPER_DB_KEY = "/".join(MANIFEST_FILES[0])
 
 
 def _reference(copy: Path) -> dict[str, dict | None]:
@@ -74,7 +76,11 @@ def _check_content(key: str, path: Path) -> str | None:
         except ValueError as exc:
             return f"not JSON ({exc})"
     if path.suffix == ".jsonl":
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            return f"not UTF-8 ({exc})"
+        for number, line in enumerate(text.splitlines(), start=1):
             if not line.strip():
                 continue
             try:
@@ -88,6 +94,11 @@ def restore_and_verify(copy: Path, scratch: Path) -> list[str]:
     """Restore ``copy`` into ``scratch``; return the failures (empty when it is good)."""
     reference = _reference(copy)
     failures: list[str] = []
+
+    # Check that the paper book is present in the reference
+    if PAPER_DB_KEY not in reference or reference[PAPER_DB_KEY] is None:
+        failures.append(f"FAIL {PAPER_DB_KEY}: the copy has no paper book")
+
     for key, expected in sorted(reference.items()):
         if expected is None:
             continue
@@ -95,7 +106,19 @@ def restore_and_verify(copy: Path, scratch: Path) -> list[str]:
         if not src.is_file():
             failures.append(f"FAIL {key}: missing from the copy")
             continue
+
+        # Check for path escaping
         restored = scratch.joinpath(*key.split("/"))
+        try:
+            resolved_restored = restored.resolve()
+            resolved_scratch = scratch.resolve()
+            if not str(resolved_restored).startswith(str(resolved_scratch)):
+                failures.append(f"FAIL {key}: path escapes the scratch root")
+                continue
+        except Exception:
+            failures.append(f"FAIL {key}: cannot resolve paths")
+            continue
+
         restored.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, restored)
         actual = file_record(restored)
@@ -118,13 +141,43 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     copy = Path(args.copy).expanduser()
     scratch = Path(args.scratch).expanduser()
-    if scratch.exists() and any(scratch.iterdir()):
-        print(f"refusing: {scratch} is not empty; name a fresh scratch directory")
+
+    # Check if copy exists and is a directory
+    if not copy.is_dir():
+        print(f"cannot read the copy: {copy} is not a directory")
         return 2
+
+    # Check if scratch exists and is not empty, or if it's a file
+    if scratch.exists():
+        if scratch.is_file():
+            print(f"refusing: {scratch} is not empty; name a fresh scratch directory")
+            return 2
+        if any(scratch.iterdir()):
+            print(f"refusing: {scratch} is not empty; name a fresh scratch directory")
+            return 2
+
     scratch.mkdir(parents=True, exist_ok=True)
-    reference = _reference(copy)
+
+    try:
+        reference = _reference(copy)
+    except json.JSONDecodeError as exc:
+        print(f"cannot read the copy: JSONDecodeError: {exc}")
+        return 2
+    except Exception as exc:
+        print(f"cannot read the copy: {type(exc).__name__}: {exc}")
+        return 2
+
     listed = sum(1 for record in reference.values() if record is not None)
-    failures = restore_and_verify(copy, scratch)
+
+    try:
+        failures = restore_and_verify(copy, scratch)
+    except OSError as exc:
+        print(f"cannot read the copy: OSError: {exc}")
+        return 2
+    except Exception as exc:
+        print(f"cannot read the copy: {type(exc).__name__}: {exc}")
+        return 2
+
     for failure in failures:
         print(failure)
     if failures:
