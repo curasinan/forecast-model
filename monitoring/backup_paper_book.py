@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -56,13 +57,22 @@ def _copy(src: Path, dst: Path) -> None:
                 closing(sqlite3.connect(dst)) as target:
             source.backup(target)
     else:
-        shutil.copy2(src, dst)
+        st = src.stat()
+        shutil.copyfile(src, dst)
+        os.utime(dst, (st.st_atime, st.st_mtime))
 
 
-def _prune(dest: Path, keep: int) -> list[Path]:
-    """Remove all but the ``keep`` newest day directories; return what was removed."""
+def _prune(dest: Path, keep: int, exclude: str | None = None) -> list[Path]:
+    """Remove all but the ``keep`` newest day directories; return what was removed.
+
+    If exclude is set, it is never removed; the newest keep-1 others are kept.
+    """
     days = sorted(p for p in dest.iterdir() if p.is_dir() and _DAY_DIR.match(p.name))
-    removed = days[:-keep] if keep > 0 else []
+    if exclude:
+        days_without_exclude = [d for d in days if d.name != exclude]
+        removed = days_without_exclude[:-max(0, keep - 1)] if keep > 0 else days_without_exclude
+    else:
+        removed = days[:-keep] if keep > 0 else []
     for old in removed:
         shutil.rmtree(old)
     return removed
@@ -70,6 +80,14 @@ def _prune(dest: Path, keep: int) -> list[Path]:
 
 def run_backup(root: Path, dest: Path, today: date, keep: int = KEEP_DAYS) -> Path:
     """Copy the operational files of ``root`` into ``dest/YYYYMMDD`` and prune old days."""
+    # Validate root before writing anything
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"backup refused: {root} is not a directory")
+    book_path = root.joinpath(*MANIFEST_FILES[0])  # paper book is first in MANIFEST_FILES
+    if not book_path.exists():
+        raise ValueError(f"backup refused: {book_path} is missing")
+
     day_dir = dest / today.strftime("%Y%m%d")
     partial = dest / (day_dir.name + ".partial")
     dest.mkdir(parents=True, exist_ok=True)
@@ -91,7 +109,7 @@ def run_backup(root: Path, dest: Path, today: date, keep: int = KEEP_DAYS) -> Pa
     if day_dir.exists():
         shutil.rmtree(day_dir)
     partial.rename(day_dir)
-    _prune(dest, keep)
+    _prune(dest, keep, exclude=day_dir.name)
     return day_dir
 
 
@@ -109,10 +127,13 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
     try:
         day_dir = run_backup(Path(args.root).expanduser(), Path(args.dest).expanduser(),
                              day, keep=args.keep)
-    except Exception as exc:  # noqa: BLE001 -- any failure is the outcome to report
+        manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    except ValueError as exc:  # root validation failures
+        print(str(exc))
+        return 1
+    except Exception as exc:  # noqa: BLE001 -- any other failure is the outcome to report
         print(f"backup failed: {type(exc).__name__}: {exc}")
         return 1
-    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
     present = sum(1 for record in manifest.values() if record is not None)
     print(f"backup written: {day_dir} ({present}/{len(manifest)} files present)")
     return 0

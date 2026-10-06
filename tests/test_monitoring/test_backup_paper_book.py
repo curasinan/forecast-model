@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import sys
 from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
@@ -118,3 +120,92 @@ def test_main_exits_1_when_the_copy_cannot_be_made(root, tmp_path, capsys):
 
     assert rc == 1
     assert "backup failed" in capsys.readouterr().out
+
+
+# ---- Additional tests for plan-mandated fixes ----
+SIGNALS_DIR = ("climate_data", "paper", "gtm_signals.json")
+
+
+def test_wal_rows_committed_but_not_checkpointed_are_in_the_copy(root, tmp_path):
+    """WAL-mode rows committed but not checkpointed must be in the backup (uses online backup API)."""
+    book = root.joinpath(*BOOK)
+    writer = sqlite3.connect(book, isolation_level=None)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("INSERT INTO trade_log VALUES ('d', 'open')")
+        day_dir = run_backup(root, tmp_path / "backups", TODAY)
+    finally:
+        writer.close()
+    with closing(sqlite3.connect(day_dir.joinpath(*BOOK))) as copy:
+        assert [r[0] for r in copy.execute("SELECT order_id FROM trade_log ORDER BY 1")] == ["a", "b", "c", "d"]
+
+
+def test_a_failed_copy_leaves_no_day_directory_and_no_manifest(root, tmp_path):
+    """A failed copy must not leave a day directory or a manifest anywhere under dest."""
+    dest = tmp_path / "backups"
+    root.joinpath(*SIGNALS_DIR).mkdir(parents=True)
+    with pytest.raises(OSError):
+        run_backup(root, dest, TODAY)
+    assert not (dest / "20261020").exists()
+    assert not list(dest.rglob(MANIFEST_NAME))
+
+
+def test_a_leftover_partial_from_a_crash_is_not_part_of_the_next_copy(root, tmp_path):
+    """A pre-existing .partial from a crashed run must not appear in the next copy."""
+    dest = tmp_path / "backups"
+    stale = dest / "20261020.partial" / "junk.bin"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x")
+    day_dir = run_backup(root, dest, TODAY)
+    assert not (day_dir / "junk.bin").exists()
+    assert sorted(p.name for p in dest.iterdir()) == ["20261020"]
+
+
+def test_the_day_just_written_survives_the_rotation_even_with_a_clock_behind(root, tmp_path):
+    """The day directory just written must never be pruned, even if today is older than kept days."""
+    dest = tmp_path / "backups"
+    for age in range(1, 4):
+        (dest / (TODAY - timedelta(days=age)).strftime("%Y%m%d")).mkdir(parents=True)
+    day_dir = run_backup(root, dest, TODAY - timedelta(days=10), keep=3)
+    assert day_dir.is_dir()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions only")
+def test_umask_is_applied_to_file_copies(root, tmp_path):
+    """File copies must get 0666 & ~umask permissions, not the source's permissions."""
+    old_umask = os.umask(0o027)
+    try:
+        src = root.joinpath(*MODEL)
+        src.chmod(0o600)
+        day_dir = run_backup(root, tmp_path / "backups", TODAY)
+        copy = day_dir.joinpath(*MODEL)
+        assert oct(copy.stat().st_mode)[-3:] == "640"
+    finally:
+        os.umask(old_umask)
+
+
+def test_main_refuses_a_root_that_is_not_a_directory(tmp_path, capsys):
+    """main must refuse and exit 1 when root is not a directory, without creating anything under dest."""
+    root = tmp_path / "not_a_dir"
+    root.write_text("a file", encoding="utf-8")
+    dest = tmp_path / "backups"
+
+    rc = main(["--root", str(root), "--dest", str(dest)], today=TODAY)
+
+    assert rc == 1
+    assert "is not a directory" in capsys.readouterr().out
+    assert not dest.exists()
+
+
+def test_main_refuses_a_root_without_the_paper_book(tmp_path, capsys):
+    """main must refuse and exit 1 when the paper book is missing, without creating anything under dest."""
+    root = tmp_path / "quant_data"
+    root.mkdir()
+    dest = tmp_path / "backups"
+
+    rc = main(["--root", str(root), "--dest", str(dest)], today=TODAY)
+
+    assert rc == 1
+    assert "is missing" in capsys.readouterr().out
+    assert not dest.exists()
