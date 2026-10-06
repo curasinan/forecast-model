@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -27,6 +28,13 @@ import urllib.request
 ATTEMPTS = 3
 TIMEOUT_S = 10.0
 RETRY_PAUSE_S = 5.0
+
+
+def _validate_env_name(value: str) -> str:
+    """Validate that value is an environment variable name, not a URL or other string."""
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value):
+        raise argparse.ArgumentTypeError("--url-env takes an environment variable NAME")
+    return value
 
 
 def ping(url: str, opener=urllib.request.urlopen, pause=time.sleep) -> str | None:
@@ -38,15 +46,15 @@ def ping(url: str, opener=urllib.request.urlopen, pause=time.sleep) -> str | Non
             return None
         except Exception as exc:  # noqa: BLE001 -- only its class name may be shown
             error = type(exc).__name__
-            if attempt + 1 < ATTEMPTS:
-                pause(RETRY_PAUSE_S)
+        if attempt + 1 < ATTEMPTS:
+            pause(RETRY_PAUSE_S)
     return error
 
 
 def main(argv: list[str] | None = None, run=subprocess.call,
          opener=urllib.request.urlopen, pause=time.sleep) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--url-env", required=True,
+    parser.add_argument("--url-env", required=True, type=_validate_env_name,
                         help="NAME of the environment variable that holds the ping URL")
     parser.add_argument("--ok-exit", nargs="+", type=int, default=[0],
                         help="exit statuses of the command that count as 'it ran'")
@@ -57,7 +65,12 @@ def main(argv: list[str] | None = None, run=subprocess.call,
     if not command:
         parser.error("no command given; put it after --")
 
-    status = run(command)
+    try:
+        status = run(command)
+    except OSError as exc:
+        exc_name = type(exc).__name__
+        print(f"heartbeat: not sent (command could not be started: {exc_name})")
+        return 127 if isinstance(exc, FileNotFoundError) else 126
     if status not in args.ok_exit:
         print(f"heartbeat: not sent (command exit {status})")
         return status
