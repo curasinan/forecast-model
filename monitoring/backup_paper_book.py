@@ -65,14 +65,19 @@ def _copy(src: Path, dst: Path) -> None:
 def _prune(dest: Path, keep: int, exclude: str | None = None) -> list[Path]:
     """Remove all but the ``keep`` newest day directories; return what was removed.
 
-    If exclude is set, it is never removed; the newest keep-1 others are kept.
+    If exclude is set, it is never removed; exactly keep-1 others are kept.
+    A nonsense value (keep <= 0) removes nothing, never deleting history.
     """
+    if keep <= 0:
+        return []
+
     days = sorted(p for p in dest.iterdir() if p.is_dir() and _DAY_DIR.match(p.name))
     if exclude:
         days_without_exclude = [d for d in days if d.name != exclude]
-        removed = days_without_exclude[:-max(0, keep - 1)] if keep > 0 else days_without_exclude
+        others_to_keep = keep - 1
+        removed = days_without_exclude[:-others_to_keep] if others_to_keep > 0 else days_without_exclude
     else:
-        removed = days[:-keep] if keep > 0 else []
+        removed = days[:-keep]
     for old in removed:
         shutil.rmtree(old)
     return removed

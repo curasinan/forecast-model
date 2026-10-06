@@ -209,3 +209,41 @@ def test_main_refuses_a_root_without_the_paper_book(tmp_path, capsys):
     assert rc == 1
     assert "is missing" in capsys.readouterr().out
     assert not dest.exists()
+
+
+def test_rotation_with_keep_1_leaves_only_the_new_day(root, tmp_path):
+    """With keep=1, rotation must keep only the newest day (today)."""
+    dest = tmp_path / "backups"
+    for age in range(1, 11):  # 10 older days
+        (dest / (TODAY - timedelta(days=age)).strftime("%Y%m%d")).mkdir(parents=True)
+
+    run_backup(root, dest, TODAY, keep=1)
+
+    days = sorted(p.name for p in dest.iterdir() if p.name.isdigit())
+    assert days == ["20261020"]
+
+
+def test_rotation_with_keep_0_removes_nothing(root, tmp_path):
+    """With keep=0 (nonsense value), rotation must remove nothing to avoid deleting history."""
+    dest = tmp_path / "backups"
+    for age in range(1, 11):  # 10 older days
+        (dest / (TODAY - timedelta(days=age)).strftime("%Y%m%d")).mkdir(parents=True)
+
+    run_backup(root, dest, TODAY, keep=0)
+
+    days = sorted(p.name for p in dest.iterdir() if p.name.isdigit())
+    assert len(days) == 11  # 10 old + today
+
+
+def test_rotation_with_keep_30_and_40_older_days_leaves_exactly_30(root, tmp_path):
+    """With keep=30, 40 older days, rotation must leave exactly 30 days with the oldest being today minus 29 days."""
+    dest = tmp_path / "backups"
+    for age in range(1, 41):  # 40 older days
+        (dest / (TODAY - timedelta(days=age)).strftime("%Y%m%d")).mkdir(parents=True)
+
+    run_backup(root, dest, TODAY, keep=30)
+
+    days = sorted(p.name for p in dest.iterdir() if p.name.isdigit())
+    assert len(days) == 30
+    assert days[-1] == "20261020"  # today
+    assert days[0] == (TODAY - timedelta(days=29)).strftime("%Y%m%d")  # today minus 29
