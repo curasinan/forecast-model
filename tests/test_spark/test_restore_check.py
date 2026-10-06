@@ -62,7 +62,11 @@ def test_a_good_day_directory_restores_and_verifies(day_dir, tmp_path, capsys):
 
 def test_a_whole_root_without_a_manifest_can_be_checked_too(root, tmp_path, capsys):
     rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
-    assert rc == 0, capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    # C5: Strengthen to check file count and book exists
+    assert "RESTORE OK: 4 files" in out
+    assert (tmp_path / "scratch").joinpath(*BOOK).is_file()
 
 
 def test_a_file_changed_after_the_manifest_was_written_fails(day_dir, tmp_path, capsys):
@@ -180,9 +184,11 @@ def test_scratch_that_is_a_file_returns_2(day_dir, tmp_path, capsys):
     scratch.write_text("i am a file", encoding="utf-8")
     rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
     out = capsys.readouterr().out
+    err = capsys.readouterr().err
     assert rc == 2
-    # Scratch that is a file is treated as "not empty"
-    assert "refusing" in out
+    # Scratch that is a file reports it's not a directory
+    assert "is not a directory" in out
+    assert "Traceback" not in err
 
 
 def test_jsonl_with_invalid_utf8_fails_but_checks_other_files(root, tmp_path, capsys):
@@ -224,3 +230,131 @@ def test_manifest_key_with_path_escape_fails(day_dir, tmp_path, capsys):
     assert "FAIL ../escape.txt: path escapes the scratch root" in out
     # Verify nothing was written outside scratch
     assert not (scratch.parent / "escape.txt").exists()
+
+
+def test_manifest_key_with_scratch_evil_escape_fails(day_dir, tmp_path, capsys):
+    # A: Containment - test key that would write to ../scratch_evil/
+    scratch_evil_file = tmp_path / "scratch_evil" / "x.txt"
+    scratch_evil_file.parent.mkdir()
+    scratch_evil_file.write_text("evil", encoding="utf-8")
+    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    # Record the file with its actual hash so it passes the hash check
+    from monitoring.backup_paper_book import file_record
+    manifest["../scratch_evil/x.txt"] = file_record(scratch_evil_file)
+    (day_dir / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    # Create the file in the copy directory (navigate using ..)
+    (day_dir / ".." / "scratch_evil").mkdir(exist_ok=True)
+    (day_dir / ".." / "scratch_evil" / "x.txt").write_text("evil", encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ../scratch_evil/x.txt: path escapes the scratch root" in out
+    # Verify the file was not copied to scratch_evil (check no copy happened to the temp path)
+    assert not (scratch / "scratch_evil").exists()
+
+
+def test_manifest_not_a_dict_returns_2(day_dir, tmp_path, capsys):
+    # B1: Manifest is valid JSON but not an object
+    (day_dir / MANIFEST_NAME).write_text("[]", encoding="utf-8")
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "cannot read the copy" in out
+    assert "Traceback" not in err
+
+
+def test_scratch_parent_is_file_returns_2(day_dir, tmp_path, capsys):
+    # B2: Scratch parent is a file
+    afile = tmp_path / "afile"
+    afile.write_text("i am a file", encoding="utf-8")
+    scratch_path = str(afile / "sub")
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", scratch_path])
+    out = capsys.readouterr().out
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "cannot prepare the scratch root" in out or "cannot read the copy" in out
+    assert "Traceback" not in err
+
+
+def test_scratch_exists_but_not_directory_returns_2(tmp_path, capsys):
+    # B3: Scratch is a file (not empty, not a directory)
+    root = tmp_path / "quant_data"
+    book = root.joinpath(*BOOK)
+    book.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(book)) as conn:
+        conn.execute("CREATE TABLE positions (question_id TEXT, size REAL)")
+        conn.execute("CREATE TABLE trade_log (order_id TEXT PRIMARY KEY, status TEXT)")
+        conn.commit()
+    scratch = tmp_path / "scratch"
+    scratch.write_text("i am a file", encoding="utf-8")
+    rc = restore_check.main(["--from", str(root), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "is not a directory" in out
+
+
+def test_large_book_with_integrity_check_failure(root, tmp_path, capsys):
+    # C1: Large book where we can corrupt inside a leaf page to trigger integrity check
+    book = root.joinpath(*BOOK)
+    # Build a large database by inserting many rows to get enough pages
+    with closing(sqlite3.connect(book)) as conn:
+        for i in range(10000):  # More rows to create a large database
+            conn.execute("INSERT INTO positions VALUES (?, ?)", (f"q{i}", 1.5))
+        conn.commit()
+
+    # Read page size
+    with closing(sqlite3.connect(book)) as conn:
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+
+    # Corrupt a page in the middle to trigger integrity check
+    data = bytearray(book.read_bytes())
+    file_size = len(data)
+    # Corrupt page 5 at offset 100 to ensure detectable corruption
+    if file_size > page_size * 6:
+        corrupt_offset = page_size * 5 + 100
+        data[corrupt_offset:corrupt_offset + 200] = b'\x00' * 200
+        book.write_bytes(bytes(data))
+
+    # Now run the restore against root (whole-root mode, no manifest)
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db" in out
+    # Should hit the integrity check branch, not the database error branch
+    assert "integrity check" in out
+
+
+def test_json_content_failure(root, tmp_path, capsys):
+    # C2: .json file with broken JSON
+    model = root.joinpath(*MODEL)
+    model.write_text("{broken", encoding="utf-8")
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL climate_data/models/gtm_emos.json" in out
+    assert "not JSON" in out
+
+
+def test_whole_root_happy_path_with_assertions(root, tmp_path, capsys):
+    # C3: Strengthen the happy path test
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "RESTORE OK: 4 files" in out
+    assert (tmp_path / "scratch").joinpath(*BOOK).is_file()
+
+
+def test_multiple_content_failures_all_reported(root, tmp_path, capsys):
+    # C4: Make two files bad to test "others still checked"
+    root.joinpath(*RUNS).write_bytes(b'{"ok": true}\n\xff\xfe\n')
+    permid = root / "ibkr_ticks" / "paper" / "permid_map.json"
+    permid.parent.mkdir(parents=True, exist_ok=True)
+    permid.write_text("{broken", encoding="utf-8")
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    # Both failures should be reported
+    assert "FAIL ibkr_ticks/paper/ibkr_sync_runs.jsonl" in out
+    assert "FAIL ibkr_ticks/paper/permid_map.json" in out

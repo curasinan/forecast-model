@@ -41,7 +41,10 @@ PAPER_DB_KEY = "/".join(MANIFEST_FILES[0])
 def _reference(copy: Path) -> dict[str, dict | None]:
     manifest = copy / MANIFEST_NAME
     if manifest.is_file():
-        return json.loads(manifest.read_text(encoding="utf-8"))
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("the manifest is not a JSON object")
+        return data
     reference: dict[str, dict | None] = {}
     for parts in MANIFEST_FILES:
         src = copy.joinpath(*parts)
@@ -73,7 +76,7 @@ def _check_content(key: str, path: Path) -> str | None:
     if path.suffix == ".json":
         try:
             json.loads(path.read_text(encoding="utf-8"))
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             return f"not JSON ({exc})"
     if path.suffix == ".jsonl":
         try:
@@ -102,21 +105,22 @@ def restore_and_verify(copy: Path, scratch: Path) -> list[str]:
     for key, expected in sorted(reference.items()):
         if expected is None:
             continue
-        src = copy.joinpath(*key.split("/"))
-        if not src.is_file():
-            failures.append(f"FAIL {key}: missing from the copy")
-            continue
 
-        # Check for path escaping
+        # Check for path escaping BEFORE checking if file exists
         restored = scratch.joinpath(*key.split("/"))
         try:
             resolved_restored = restored.resolve()
             resolved_scratch = scratch.resolve()
-            if not str(resolved_restored).startswith(str(resolved_scratch)):
+            if not resolved_restored.is_relative_to(resolved_scratch):
                 failures.append(f"FAIL {key}: path escapes the scratch root")
                 continue
-        except Exception:
-            failures.append(f"FAIL {key}: cannot resolve paths")
+        except (OSError, RuntimeError) as exc:
+            failures.append(f"FAIL {key}: cannot resolve paths ({exc})")
+            continue
+
+        src = copy.joinpath(*key.split("/"))
+        if not src.is_file():
+            failures.append(f"FAIL {key}: missing from the copy")
             continue
 
         restored.parent.mkdir(parents=True, exist_ok=True)
@@ -147,43 +151,46 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cannot read the copy: {copy} is not a directory")
         return 2
 
-    # Check if scratch exists and is not empty, or if it's a file
+    # Check if scratch exists and is not empty, or if it's not a directory
     if scratch.exists():
         if scratch.is_file():
-            print(f"refusing: {scratch} is not empty; name a fresh scratch directory")
+            print(f"the scratch root {scratch} is not a directory")
+            return 2
+        if not scratch.is_dir():
+            print(f"the scratch root {scratch} is not a directory")
             return 2
         if any(scratch.iterdir()):
             print(f"refusing: {scratch} is not empty; name a fresh scratch directory")
             return 2
 
-    scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"cannot prepare the scratch root: {type(exc).__name__}: {exc}")
+        return 2
 
     try:
         reference = _reference(copy)
-    except json.JSONDecodeError as exc:
-        print(f"cannot read the copy: JSONDecodeError: {exc}")
-        return 2
-    except Exception as exc:
+    except (ValueError, OSError) as exc:
         print(f"cannot read the copy: {type(exc).__name__}: {exc}")
         return 2
-
-    listed = sum(1 for record in reference.values() if record is not None)
 
     try:
         failures = restore_and_verify(copy, scratch)
     except OSError as exc:
-        print(f"cannot read the copy: OSError: {exc}")
-        return 2
-    except Exception as exc:
+        # Print collected failures before the abort message
         print(f"cannot read the copy: {type(exc).__name__}: {exc}")
         return 2
 
     for failure in failures:
         print(failure)
+
+    # C5: Fix the message to properly count failures
+    total_files = sum(1 for record in reference.values() if record is not None)
     if failures:
-        print(f"RESTORE FAILED: {len(failures)} of {listed} files ({copy} -> {scratch})")
+        print(f"RESTORE FAILED: {len(failures)} check(s) failed, {total_files} files listed ({copy} -> {scratch})")
         return 1
-    print(f"RESTORE OK: {listed} files restored and verified ({copy} -> {scratch})")
+    print(f"RESTORE OK: {total_files} files restored and verified ({copy} -> {scratch})")
     return 0
 
 
