@@ -44,6 +44,15 @@ def _reference(copy: Path) -> dict[str, dict | None]:
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("the manifest is not a JSON object")
+        # D6: Validate each manifest record
+        for key, record in data.items():
+            if record is not None:
+                if not isinstance(record, dict):
+                    raise ValueError(f"manifest record for {key} is malformed")
+                if "sha256" not in record or not isinstance(record.get("sha256"), str):
+                    raise ValueError(f"manifest record for {key} is malformed")
+                if "size" not in record or not isinstance(record.get("size"), int):
+                    raise ValueError(f"manifest record for {key} is malformed")
         return data
     reference: dict[str, dict | None] = {}
     for parts in MANIFEST_FILES:
@@ -88,15 +97,16 @@ def _check_content(key: str, path: Path) -> str | None:
                 continue
             try:
                 json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 return f"line {number} is not JSON"
     return None
 
 
-def restore_and_verify(copy: Path, scratch: Path) -> list[str]:
+def restore_and_verify(copy: Path, scratch: Path, failures: list[str] | None = None) -> list[str]:
     """Restore ``copy`` into ``scratch``; return the failures (empty when it is good)."""
+    if failures is None:
+        failures = []
     reference = _reference(copy)
-    failures: list[str] = []
 
     # Check that the paper book is present in the reference
     if PAPER_DB_KEY not in reference or reference[PAPER_DB_KEY] is None:
@@ -114,7 +124,7 @@ def restore_and_verify(copy: Path, scratch: Path) -> list[str]:
             if not resolved_restored.is_relative_to(resolved_scratch):
                 failures.append(f"FAIL {key}: path escapes the scratch root")
                 continue
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             failures.append(f"FAIL {key}: cannot resolve paths ({exc})")
             continue
 
@@ -171,21 +181,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         reference = _reference(copy)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RecursionError) as exc:
         print(f"cannot read the copy: {type(exc).__name__}: {exc}")
         return 2
 
+    failures: list[str] = []
     try:
-        failures = restore_and_verify(copy, scratch)
+        failures = restore_and_verify(copy, scratch, failures)
     except OSError as exc:
-        # Print collected failures before the abort message
+        for failure in failures:
+            print(failure)
         print(f"cannot read the copy: {type(exc).__name__}: {exc}")
         return 2
 
     for failure in failures:
         print(failure)
 
-    # C5: Fix the message to properly count failures
     total_files = sum(1 for record in reference.values() if record is not None)
     if failures:
         print(f"RESTORE FAILED: {len(failures)} check(s) failed, {total_files} files listed ({copy} -> {scratch})")
