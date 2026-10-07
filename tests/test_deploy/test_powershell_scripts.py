@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -62,9 +63,11 @@ def test_the_ibkr_unregister_script_removes_all_three_tasks():
 
 
 def swap(home: Path, *args: str) -> subprocess.CompletedProcess:
+    # Always under a temporary home: this is never run against the real user home. The refusal
+    # text carries Windows' own (localized, OEM-encoded) error message, so decoding is lenient.
     return subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
                            "Bypass", "-File", str(SWAP), "-UserHome", str(home), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, errors="replace", timeout=120)
 
 
 @pytest.fixture
@@ -118,6 +121,56 @@ def test_undo_puts_the_kept_root_back_and_retires_the_mirror(home):
     assert not (home / "quant_data" / MARKER).exists()
     assert (home / "quant_data_mirror_retired" / "pulled.txt").is_file()
     assert not (home / "quant_data_zenbook_final").exists()
+
+
+@windows_only
+def test_an_undo_that_cannot_put_the_kept_root_back_puts_the_mirror_back_too(home):
+    # -Undo retires the mirror first and renames the kept root second. When the second step
+    # fails (a file held open inside the kept root), the first is undone: a re-run would
+    # otherwise stop at "the retired name already exists" with the mirror out of place.
+    assert swap(home).returncode == 0
+    (home / "quant_data" / "pulled.txt").write_text("a pulled copy", encoding="utf-8")
+    held = home / "quant_data_zenbook_final" / "ibkr_ticks" / "live_state.txt"
+
+    with held.open("rb"):
+        done = swap(home, "-Undo")
+
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "swap refused" in done.stdout
+    assert "the mirror is back at" in done.stdout and str(home / "quant_data") in done.stdout
+    # Everything is where it was before the -Undo: the marked mirror under its own name with
+    # what it had pulled, the kept root under its own, nothing retired.
+    assert (home / "quant_data" / MARKER).is_file()
+    assert (home / "quant_data" / "pulled.txt").read_text(encoding="utf-8") == "a pulled copy"
+    assert not (home / "quant_data_mirror_retired").exists()
+    assert held.read_text(encoding="utf-8") == "live"
+    assert sorted(p.name for p in home.iterdir()) == ["quant_data", "quant_data_zenbook_final"]
+
+    again = swap(home, "-Undo")  # the file is released now
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    live_file = home / "quant_data" / "ibkr_ticks" / "live_state.txt"
+    assert live_file.read_text(encoding="utf-8") == "live"
+    assert not (home / "quant_data" / MARKER).exists()
+    assert (home / "quant_data_mirror_retired" / MARKER).is_file()
+    assert (home / "quant_data_mirror_retired" / "pulled.txt").is_file()
+    assert not (home / "quant_data_zenbook_final").exists()
+
+
+@windows_only
+def test_an_undo_with_no_mirror_to_retire_that_cannot_put_the_kept_root_back_changes_nothing(home):
+    assert swap(home).returncode == 0
+    shutil.rmtree(home / "quant_data")  # no mirror at all: nothing is retired, nothing to put back
+    held = home / "quant_data_zenbook_final" / "ibkr_ticks" / "live_state.txt"
+
+    with held.open("rb"):
+        done = swap(home, "-Undo")
+
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "swap refused" in done.stdout and "nothing was changed" in done.stdout
+    assert "the mirror" not in done.stdout  # there was none to put back, so none is mentioned
+    assert sorted(p.name for p in home.iterdir()) == ["quant_data_zenbook_final"]
+    assert held.read_text(encoding="utf-8") == "live"
 
 
 @windows_only

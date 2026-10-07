@@ -16,6 +16,8 @@
 # then create the marker file inside the LIVE root. The pull would take that
 # root for a mirror and write into it, and the rollback would have no kept
 # root to go back to. Close anything that has a file open under the root first.
+# -Undo is all or nothing: if it has retired the mirror and then cannot rename the kept
+# root, it puts the mirror back and the "swap refused:" line says so, so it can be run again.
 param(
     [switch]$Undo,
     [string]$UserHome = $env:USERPROFILE
@@ -54,6 +56,7 @@ if (-not $Undo) {
 if (-not (Test-Path $kept -PathType Container)) { Stop-Swap "$kept does not exist, so there is no kept root to put back" }
 if (Test-Path (Join-Path $kept $marker))         { Stop-Swap "$kept carries $marker, so it is not the kept live root" }
 if (Test-Path $retired)                          { Stop-Swap "$retired already exists" }
+$mirrorRetired = $false
 if (Test-Path $root) {
     if (-not (Test-Path (Join-Path $root $marker))) {
         Stop-Swap "$root does not carry $marker, so it is not the mirror; nothing was changed"
@@ -64,11 +67,27 @@ if (Test-Path $root) {
         Stop-Swap "Windows would not rename the mirror ($($_.Exception.Message)); nothing was changed"
     }
     if (Test-Path $root) { Stop-Swap "the mirror is still at $root; nothing else was changed" }
+    $mirrorRetired = $true
 }
+# -Undo is all or nothing: if the kept root cannot be renamed after the mirror has been retired,
+# the mirror goes back where it was, so that -Undo can simply be run again. (A re-run would
+# otherwise stop at "$retired already exists" with no mirror at $root.)
 try {
     Rename-Item -Path $kept -NewName 'quant_data'
 } catch {
-    Stop-Swap "Windows would not rename the kept root back ($($_.Exception.Message)); the mirror is now at $retired"
+    $reason = $_.Exception.Message
+    $state = 'nothing was changed'
+    if ($mirrorRetired) {
+        try {
+            Rename-Item -Path $retired -NewName 'quant_data'
+            $state = "the mirror is back at $root; -Undo can be run again"
+        } catch {
+            $why = $_.Exception.Message
+            $state = "the mirror could not be put back ($why) and is at $retired; " +
+                     "rename it to quant_data by hand before running -Undo again"
+        }
+    }
+    Stop-Swap "Windows would not rename the kept root back ($reason); $state"
 }
 Write-Host "live root:      $root"
 Write-Host "retired mirror: $retired"
