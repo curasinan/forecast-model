@@ -13,15 +13,19 @@ on what happened at or after --since, the moment the Spark's units started:
           the file's mtime only when the name carries none;
   health  the health unit finished a run with exit status 0, and a test alert
           was delivered by Telegram;
-  sync    the paper sync ran since --since, its newest run is ok, and the book
-          carried over from the last ok run before --since (the Zenbook's). A
+  sync    the paper sync ran since --since, its newest run since then is ok, and
+          the book carried over from the last ok run before --since (the
+          Zenbook's) to the first ok run since --since (the Spark's first). A
           run's counts are what that run concluded, not the state of the book:
           a row concluded filled or cancelled is no longer examined, so the book
           carried over when
               examined(after) == examined(before) - filled(before) - cancelled(before)
           and unmatched_venue_orders(after) == unmatched_venue_orders(before).
-          filled, partially_filled, cancelled and unchanged may differ (venue
-          activity between the two syncs); the line prints each one that did;
+          Only the first ok run is held to that: a later run examines one row
+          fewer for every row an earlier Spark run concluded, and that is not the
+          book breaking. filled, partially_filled, cancelled and unchanged may
+          differ between the two runs; the line prints each one that did, and the
+          derivation of the examined count it expected (passing or failing);
   parity  the two score payloads pass the registered parity gate; compare_json's
           own output follows the verdict line, every line indented four spaces.
 
@@ -34,7 +38,9 @@ Each line is judged on its own: one that cannot be evaluated (an unreadable file
 a torn ledger line, a missing payload) prints "FAIL <line>: could not be evaluated
 (<ExceptionClass>)" and the other three verdicts still print. Only the class name
 is printed, never the exception text, which can quote the data that broke it. The
-sync ledger's lines carry the paper account id; no line of it is ever printed.
+sync ledger's lines carry the paper account id; no line of it is ever printed. A
+ledger line that cannot be read says where it is, "(JSONDecodeError at line 17)":
+the 1-based number of the line in the file, blank lines counted.
 --since must carry its UTC offset; anything else is a usage error (exit 2).
 """
 
@@ -65,7 +71,7 @@ PARITY_FLAGS = ["--rtol", "1e-8", "--atol", "1e-10", "--min-numeric", "1000",
                 "--ignore", "identity.machine", "--differ", "identity.machine"]
 SYNC_COUNTS = ("examined", "filled", "partially_filled", "cancelled", "unchanged",
                "unmatched_venue_orders")
-# The counts that may differ between the Zenbook's last run and the Spark's first.
+# The counts that may differ between the Zenbook's last ok run and the Spark's first.
 ACTIVITY_COUNTS = ("filled", "partially_filled", "cancelled", "unchanged")
 SINCE_USAGE = "must be an ISO-8601 time with its UTC offset, for example 2026-10-20T16:00:00+00:00"
 
@@ -196,45 +202,78 @@ def _carry_over(before: dict[str, int], after: dict[str, int]) -> tuple[bool, st
 
     The run before concluded `filled` and `cancelled` rows, which left the set a sync
     examines, so the run after examines exactly the rest; and the venue orders the book
-    does not know are as many as before. The other counts may differ.
+    does not know are as many as before. The other counts may differ. The verdict, passing
+    or failing, prints the derivation of the examined count it expected.
     """
     expected = before["examined"] - before["filled"] - before["cancelled"]
-    broken = []
-    if after["examined"] != expected:
-        broken.append(f"examined {before['examined']} -> {after['examined']}, "
-                      f"expected {expected}")
-    if after["unmatched_venue_orders"] != before["unmatched_venue_orders"]:
-        broken.append(f"unmatched_venue_orders {before['unmatched_venue_orders']} -> "
-                      f"{after['unmatched_venue_orders']}")
-    if broken:
+    examined = (f"examined {before['examined']} -> {after['examined']}, expected {expected} = "
+                f"{before['examined']} - {before['filled']} filled - "
+                f"{before['cancelled']} cancelled")
+    unmatched_moved = after["unmatched_venue_orders"] != before["unmatched_venue_orders"]
+    if after["examined"] != expected or unmatched_moved:
+        broken = [examined]  # the half that held reads as itself: 3 -> 3 against an expected 3
+        if unmatched_moved:
+            broken.append(f"unmatched_venue_orders {before['unmatched_venue_orders']} -> "
+                          f"{after['unmatched_venue_orders']}")
         return False, "the book did not carry over: " + "; ".join(broken)
-    detail = (f"book carried over (examined {before['examined']} -> {after['examined']} "
-              f"after {before['filled']} filled, {before['cancelled']} cancelled)")
+    detail = f"book carried over ({examined})"
     moved = [f"{name} {before[name]} -> {after[name]}"
              for name in ACTIVITY_COUNTS if after[name] != before[name]]
     if moved:
-        detail += "; venue activity: " + ", ".join(moved)
+        detail += "; counts that differ between the two runs: " + ", ".join(moved)
     return True, detail
+
+
+def _unevaluated(what: str) -> str:
+    """The detail of a line that could not be judged; `what` is a class name, never data."""
+    return f"could not be evaluated ({what})"
+
+
+def _ledger_runs(ledger: Path) -> list[tuple[datetime, dict]] | str:
+    """Every run in the sync ledger, oldest first, each with its time; or what cannot be read.
+
+    The ledger is append-only, so file order is time order. A line that cannot be read as a
+    run (torn, not a record, or with no usable ts_utc) is named by its 1-based number in the
+    file, blank lines counted, and the exception's class: never by its content, which
+    carries the paper account id.
+    """
+    runs = []
+    for number, line in enumerate(ledger.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+            runs.append((_when(record["ts_utc"]), record))
+        except (ValueError, KeyError, TypeError) as exc:
+            return _unevaluated(f"{type(exc).__name__} at line {number}")
+    return runs
 
 
 def check_sync(root: Path, since: datetime) -> tuple[bool, str]:
     ledger = root / "ibkr_ticks" / "paper" / "ibkr_sync_runs.jsonl"
     if not ledger.is_file():
         return False, f"{ledger} is missing"
-    # Append-only, so the last line of a kind is the newest run of that kind.
-    records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()
-               if line.strip()]
-    after = [r for r in records if _when(r["ts_utc"]) >= since]
-    before_ok = [r for r in records if _when(r["ts_utc"]) < since and r.get("ok")]
+    runs = _ledger_runs(ledger)
+    if isinstance(runs, str):
+        return False, runs
+    after = [(when, run) for when, run in runs if when >= since]
+    before_ok = [run for when, run in runs if when < since and run.get("ok")]
     if not after:
         return False, "no sync run since the cutover"
-    if not after[-1].get("ok"):
-        return False, "the last sync run's ok is false"
+    # Two conditions. The newest run since the cutover must be ok ...
+    newest_when, newest = after[-1]
+    if not newest.get("ok"):
+        stamp = f"{newest_when.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
+        return False, f"the newest sync run since the cutover ({stamp}): ok is false"
     if not before_ok:
         return False, "no earlier ok run to compare the book with"
+    # ... and the book is judged on the FIRST ok run since: it is the one that has to carry
+    # the Zenbook's book over. Every later run examines one row fewer per row an earlier
+    # Spark run concluded, so none of them is held to the identity against the Zenbook's run.
+    first_ok = next(run for _, run in after if run.get("ok"))  # exists: the newest is ok
     counts = []
     for record, which in ((before_ok[-1], "the last ok sync run before the cutover"),
-                          (after[-1], "the newest sync run since the cutover")):
+                          (first_ok, "the first ok sync run since the cutover")):
         found = _counts(record, which)
         if isinstance(found, str):
             return False, found
@@ -263,7 +302,7 @@ def _verdict(evaluate) -> tuple[bool, str]:
     try:
         return evaluate()
     except Exception as exc:  # noqa: BLE001 -- any failure to judge a line IS that line's FAIL
-        return False, f"could not be evaluated ({type(exc).__name__})"
+        return False, _unevaluated(type(exc).__name__)
 
 
 def main(argv: list[str] | None = None, run=subprocess.run) -> int:

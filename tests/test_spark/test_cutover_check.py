@@ -24,6 +24,7 @@ MID_BEFORE = "2026-10-18T20:00:00+00:00"
 BEFORE = "2026-10-19T14:30:00+00:00"
 JUST_BEFORE = "2026-10-20T15:59:59+00:00"
 AFTER_EARLY = "2026-10-20T16:05:00+00:00"
+AFTER_MID = "2026-10-20T16:10:00+00:00"
 SWEEP_AT = "2026-10-20T16:15:00+00:00"
 AFTER = "2026-10-20T16:20:00+00:00"
 # Clearly synthetic. A real ledger line carries the paper account id, and no run may print it.
@@ -372,12 +373,35 @@ def test_the_newest_sync_since_the_cutover_must_be_ok(site, capsys):
     _ledger(site, _sync(BEFORE), _sync(AFTER, ok=False))
     rc, out = _run(site, capsys)
     assert rc == 1
-    assert "FAIL sync" in out and "ok is false" in out
+    assert ("FAIL sync: the newest sync run since the cutover (2026-10-20T16:20:00Z): "
+            "ok is false") in out.splitlines()
 
     # Only the newest run counts: a failed first attempt that a rerun made good does not.
     _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY, ok=False), _sync(AFTER))
     rc, out = _run(site, capsys)
     assert rc == 0, out
+
+
+def test_a_newest_run_that_is_not_ok_fails_even_when_the_first_run_carried_the_book_over(
+        site, capsys):
+    # The identity is judged on the first ok run since the cutover, and that one is fine here;
+    # "the newest run is ok" is its own condition of the line, with its own message naming
+    # the run (by the UTC time of its record, never by the record).
+    _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY), _sync(AFTER, ok=False))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "the newest sync run since the cutover (2026-10-20T16:20:00Z): "
+                              "ok is false")
+
+
+def test_the_run_named_as_not_ok_is_named_in_utc_whatever_offset_its_record_carries(
+        site, capsys):
+    # 18:20+02:00 is 16:20Z, after the cutover; the name printed is the UTC time.
+    _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY), _sync("2026-10-20T18:20:00+02:00", ok=False))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "the newest sync run since the cutover (2026-10-20T16:20:00Z): "
+                              "ok is false")
 
 
 def test_a_missing_sync_ledger_fails_the_sync_line(site, capsys):
@@ -403,8 +427,10 @@ def test_without_an_ok_run_before_the_cutover_there_is_no_book_to_compare(site, 
 def test_an_untouched_book_carries_over(site, capsys):
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert ("PASS sync: book carried over (examined 3 -> 3 after 0 filled, 0 cancelled)"
-            in out.splitlines())
+    # The derivation of the identity is printed with the verdict, and nothing else is: no
+    # count differs between the two runs, so there is no "counts that differ" clause.
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)") in out.splitlines()
 
 
 def test_a_fill_in_the_zenbooks_last_run_does_not_fail_the_sync(site, capsys):
@@ -415,8 +441,10 @@ def test_a_fill_in_the_zenbooks_last_run_does_not_fail_the_sync(site, capsys):
             _sync(AFTER, examined=2, filled=0, unchanged=2))
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert ("PASS sync: book carried over (examined 3 -> 2 after 1 filled, 0 cancelled); "
-            "venue activity: filled 1 -> 0") in out.splitlines()
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 2, expected 2 = 3 - 1 filled - 0 cancelled); "
+            "counts that differ between the two runs: filled 1 -> 0") in out.splitlines()
+    assert "venue activity" not in out  # the counts differ for more reasons than the venue
 
 
 @pytest.mark.parametrize("filled, cancelled", [(0, 1), (1, 1), (2, 1)])
@@ -430,8 +458,9 @@ def test_rows_the_zenbooks_last_run_concluded_are_not_examined_again(
             _sync(AFTER, examined=open_rows, unchanged=open_rows))
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert any(line.startswith(f"PASS sync: book carried over (examined {examined} -> 3 "
-                               f"after {filled} filled, {cancelled} cancelled)")
+    assert any(line.startswith(f"PASS sync: book carried over (examined {examined} -> 3, "
+                               f"expected 3 = {examined} - {filled} filled - "
+                               f"{cancelled} cancelled)")
                for line in out.splitlines()), out
 
 
@@ -440,8 +469,10 @@ def test_venue_activity_between_the_two_syncs_is_reported_not_failed(site, capsy
     _ledger(site, _sync(BEFORE), _sync(AFTER, unchanged=2, cancelled=1))
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert ("PASS sync: book carried over (examined 3 -> 3 after 0 filled, 0 cancelled); "
-            "venue activity: cancelled 0 -> 1, unchanged 3 -> 2") in out.splitlines()
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled); "
+            "counts that differ between the two runs: cancelled 0 -> 1, unchanged 3 -> 2"
+            ) in out.splitlines()
 
 
 def test_every_count_that_may_differ_is_printed_with_both_values(site, capsys):
@@ -450,9 +481,10 @@ def test_every_count_that_may_differ_is_printed_with_both_values(site, capsys):
             _sync(AFTER, examined=4, filled=2, partially_filled=0, cancelled=1, unchanged=1))
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert ("PASS sync: book carried over (examined 5 -> 4 after 1 filled, 0 cancelled); "
-            "venue activity: filled 1 -> 2, partially_filled 1 -> 0, cancelled 0 -> 1, "
-            "unchanged 3 -> 1") in out.splitlines()
+    assert ("PASS sync: book carried over "
+            "(examined 5 -> 4, expected 4 = 5 - 1 filled - 0 cancelled); "
+            "counts that differ between the two runs: filled 1 -> 2, partially_filled 1 -> 0, "
+            "cancelled 0 -> 1, unchanged 3 -> 1") in out.splitlines()
 
 
 def test_a_book_that_lost_its_rows_fails_and_names_the_identity(site, capsys):
@@ -461,43 +493,83 @@ def test_a_book_that_lost_its_rows_fails_and_names_the_identity(site, capsys):
             _sync(AFTER, examined=0, unchanged=0))
     rc, out = _run(site, capsys)
     assert rc == 1
-    assert "FAIL sync" in out and "examined 3 -> 0, expected 2" in out
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 0, expected 2 = 3 - 1 filled - 0 cancelled")
 
 
 def test_a_book_that_gained_rows_fails_and_names_the_identity(site, capsys):
     _ledger(site, _sync(BEFORE), _sync(AFTER, examined=4, unchanged=4))
     rc, out = _run(site, capsys)
     assert rc == 1
-    assert "FAIL sync" in out and "examined 3 -> 4, expected 3" in out
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled")
 
 
 def test_a_change_in_the_venue_orders_the_book_does_not_know_fails(site, capsys):
     _ledger(site, _sync(BEFORE), _sync(AFTER, unmatched_venue_orders=1))
     rc, out = _run(site, capsys)
     assert rc == 1
-    assert "FAIL sync" in out and "unmatched_venue_orders 0 -> 1" in out
+    # The derivation goes with the verdict whichever half of the identity broke; the half
+    # that held reads as itself (3 -> 3 against an expected 3).
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled; "
+                              "unmatched_venue_orders 0 -> 1")
 
 
 def test_both_identities_are_named_when_both_break(site, capsys):
     _ledger(site, _sync(BEFORE), _sync(AFTER, examined=2, unmatched_venue_orders=1))
     rc, out = _run(site, capsys)
     assert rc == 1
-    assert "examined 3 -> 2, expected 3" in out and "unmatched_venue_orders 0 -> 1" in out
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 2, expected 3 = 3 - 0 filled - 0 cancelled; "
+                              "unmatched_venue_orders 0 -> 1")
 
 
-def test_the_sync_is_judged_on_the_newest_run_after_and_the_last_ok_run_before(site, capsys):
+def test_the_sync_is_judged_on_the_first_ok_run_after_and_the_last_ok_run_before(site, capsys):
     foreign = {"examined": 9, "unchanged": 9, "unmatched_venue_orders": 2}  # not our book
     _ledger(site,
-            _sync(LONG_BEFORE, **foreign),               # an older ok run: another book
-            _sync(MID_BEFORE, ok=False, **foreign),      # a failed run between the two ok runs
-            _sync(BEFORE),                               # the last ok run before: the reference
-            _sync(JUST_BEFORE, ok=False, **foreign),     # a failed run: never the reference
-            _sync(AFTER_EARLY, examined=7, unchanged=7),  # the oldest run since: not judged
-            _sync(AFTER))                                # the newest run since: the same book
+            _sync(LONG_BEFORE, **foreign),                # an older ok run: another book
+            _sync(MID_BEFORE, ok=False, **foreign),       # a failed run between the two ok runs
+            _sync(BEFORE),                                # the last ok run before: the reference
+            _sync(JUST_BEFORE, ok=False, **foreign),      # a failed run: never the reference
+            _sync(AFTER_EARLY, ok=False, **foreign),      # a failed run since: never the first
+            _sync(AFTER_MID),                             # the first ok run since: the same book
+            _sync(AFTER, examined=7, unchanged=7))        # the newest run since: not judged
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    assert ("PASS sync: book carried over (examined 3 -> 3 after 0 filled, 0 cancelled)"
-            in out.splitlines())
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)") in out.splitlines()
+
+
+def test_the_book_is_judged_against_the_first_ok_run_not_the_newest(site, capsys):
+    # Ruling 20. The Spark's first sync concluded a venue fill, so its second sync examines
+    # one row fewer than its first: judged against the Zenbook's last run, the newest run
+    # breaks the identity (a false FAIL on every later run of the gate). The first run is
+    # the one that has to carry the Zenbook's book over.
+    _ledger(site,
+            _sync(BEFORE),
+            _sync(AFTER_EARLY, examined=3, filled=1, unchanged=2),
+            _sync(AFTER, examined=2, filled=0, unchanged=2))
+    rc, out = _run(site, capsys)
+    assert rc == 0, out
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled); "
+            "counts that differ between the two runs: filled 0 -> 1, unchanged 3 -> 2"
+            ) in out.splitlines()
+
+
+def test_a_newest_run_that_looks_right_does_not_rescue_a_first_run_that_broke_the_book(
+        site, capsys):
+    # The other direction: a row appeared at the cutover (the first Spark run examined 4),
+    # and a later run that examines 3 again must not hide it.
+    _ledger(site,
+            _sync(BEFORE),
+            _sync(AFTER_EARLY, examined=4, unchanged=4),
+            _sync(AFTER))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled")
 
 
 def _ledger_with_a_broken_record(site, which: str, **changes) -> None:
@@ -530,14 +602,35 @@ def test_a_count_that_is_not_a_whole_number_cannot_vouch_for_the_book(site, caps
     assert "FAIL sync" in out and "has no whole-number unmatched_venue_orders" in out
 
 
-def test_a_partial_last_ledger_line_fails_the_sync_line_and_hides_nothing(site, capsys):
-    whole = _sync(AFTER)
-    torn = whole[: whole.index(ACCOUNT) + len(ACCOUNT) + 1]  # cut just after the account id
+def _torn(line: str) -> str:
+    """A ledger line cut just after the account id: what a write that died half-way leaves."""
+    torn = line[: line.index(ACCOUNT) + len(ACCOUNT) + 1]
     assert ACCOUNT in torn
-    site["ledger"].write_text(_sync(BEFORE) + "\n" + torn, encoding="utf-8")
+    return torn
+
+
+def test_a_partial_last_ledger_line_fails_the_sync_line_and_hides_nothing(site, capsys):
+    site["ledger"].write_text(_sync(BEFORE) + "\n" + _torn(_sync(AFTER)), encoding="utf-8")
     rc, out = _run(site, capsys)
     assert rc == 1
-    _only_failed(out, "sync", "could not be evaluated (JSONDecodeError)")
+    _only_failed(out, "sync", "could not be evaluated (JSONDecodeError at line 2)")
+
+
+def test_a_torn_ledger_line_is_named_by_its_line_number_and_never_quoted(site, capsys):
+    # The 1-based number of the line in the file, blank lines counted: line 4 here, the one
+    # `sed -n 4p` prints. The lines after it are whole, and the torn one carries the account id.
+    _ledger(site, "", _sync(BEFORE), "", _torn(_sync(AFTER_EARLY)), _sync(AFTER))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "could not be evaluated (JSONDecodeError at line 4)")
+
+
+def test_a_torn_line_far_down_the_ledger_is_named_by_its_own_number(site, capsys):
+    whole = [_sync(f"2026-10-{day:02d}T14:30:00+00:00") for day in range(1, 18)]  # 17 lines
+    _ledger(site, *whole, _torn(_sync(AFTER)))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "could not be evaluated (JSONDecodeError at line 18)")
 
 
 def test_a_ledger_record_without_ts_utc_fails_the_sync_line_and_hides_nothing(site, capsys):
@@ -546,7 +639,20 @@ def test_a_ledger_record_without_ts_utc_fails_the_sync_line_and_hides_nothing(si
     _ledger(site, _sync(BEFORE), json.dumps(nameless))
     rc, out = _run(site, capsys)
     assert rc == 1
-    _only_failed(out, "sync", "could not be evaluated (KeyError)")
+    _only_failed(out, "sync", "could not be evaluated (KeyError at line 2)")
+
+
+@pytest.mark.parametrize("line, error", [
+    (json.dumps({"ts_utc": "yesterday-ish", "account": ACCOUNT}), "ValueError"),
+    (json.dumps({"ts_utc": 5, "account": ACCOUNT}), "TypeError"),
+    (json.dumps([ACCOUNT, 1, 2]), "TypeError"),  # whole JSON, but not a record
+])
+def test_any_ledger_line_that_cannot_be_read_as_a_run_is_named_by_its_number(
+        site, capsys, line, error):
+    _ledger(site, _sync(BEFORE), line, _sync(AFTER))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", f"could not be evaluated ({error} at line 2)")
 
 
 # --------------------------------------------------------------------------------- parity
