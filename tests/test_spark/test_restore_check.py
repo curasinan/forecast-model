@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import sys
 from contextlib import closing
@@ -32,6 +33,7 @@ def root(tmp_path) -> Path:
     root = tmp_path / "quant_data"
     book = root.joinpath(*BOOK)
     book.parent.mkdir(parents=True)
+    # closing(): a connection that is only left behind keeps the file locked on Windows
     with closing(sqlite3.connect(book)) as conn:
         conn.execute("CREATE TABLE positions (question_id TEXT, size REAL)")
         conn.execute("CREATE TABLE trade_log (order_id TEXT PRIMARY KEY, status TEXT)")
@@ -56,7 +58,7 @@ def test_a_good_day_directory_restores_and_verifies(day_dir, tmp_path, capsys):
     rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "RESTORE OK" in out
+    assert "RESTORE OK: 4 files" in out
     assert (tmp_path / "scratch").joinpath(*BOOK).is_file()
 
 
@@ -87,7 +89,7 @@ def test_a_file_the_manifest_lists_but_the_copy_lacks_fails(day_dir, tmp_path, c
 def test_a_truncated_paper_book_fails_even_when_the_manifest_was_written_from_it(
         root, tmp_path, capsys):
     book = root.joinpath(*BOOK)
-    book.write_bytes(book.read_bytes()[:100])
+    book.write_bytes(book.read_bytes()[:100])  # the header only: not a database any more
     rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
     out = capsys.readouterr().out
     assert rc == 1
@@ -121,17 +123,12 @@ def test_a_scratch_directory_that_holds_something_is_refused(day_dir, tmp_path, 
     scratch.mkdir()
     (scratch / "keep.txt").write_text("mine", encoding="utf-8")
     rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out, err = capsys.readouterr()
     assert rc == 2
+    assert "is not empty" in out
+    assert "Traceback" not in err
     assert (scratch / "keep.txt").read_text(encoding="utf-8") == "mine"
-    assert json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
-
-
-def test_happy_path_asserts_file_count_and_book_exists(day_dir, tmp_path, capsys):
-    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(tmp_path / "scratch")])
-    out = capsys.readouterr().out
-    assert rc == 0, out
-    assert "RESTORE OK: 4 files" in out
-    assert (tmp_path / "scratch").joinpath(*BOOK).is_file()
+    assert json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))  # source untouched
 
 
 def test_whole_root_without_paper_book_fails(root, tmp_path, capsys):
@@ -163,7 +160,6 @@ def test_empty_directory_fails_no_book(tmp_path, capsys):
 
 
 def test_nonexistent_copy_path_returns_2(tmp_path, capsys):
-    out, err = capsys.readouterr()
     rc = restore_check.main(["--from", str(tmp_path / "nonexistent"), "--scratch", str(tmp_path / "scratch")])
     out, err = capsys.readouterr()
     assert rc == 2
@@ -284,12 +280,13 @@ def test_manifest_key_with_path_escape_fails(day_dir, tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "FAIL ../escape.txt: path escapes the scratch root" in out
-    assert not (scratch / "escape.txt").exists()
+    assert not (scratch.parent / "escape.txt").exists()
 
 
 def test_manifest_key_with_scratch_evil_escape_fails(day_dir, tmp_path, capsys):
-    # A: Rewritten containment test - plant source ONLY at backups/scratch_evil/x.txt
-    # day_dir is at tmp_path/backups/20261020
+    # plant the source ONLY at backups/scratch_evil/x.txt (day_dir is tmp_path/backups/20261020):
+    # the key then restores to tmp_path/scratch_evil/x.txt, which shares the string prefix of
+    # tmp_path/scratch (a startswith() check would accept it) but lies outside it
     backups = day_dir.parent
     scratch_evil_dir = backups / "scratch_evil"
     scratch_evil_file = scratch_evil_dir / "x.txt"
@@ -309,13 +306,12 @@ def test_manifest_key_with_scratch_evil_escape_fails(day_dir, tmp_path, capsys):
 
 
 def test_os_error_during_restore_prints_collected_failures(root, tmp_path, capsys):
-    # B4: Test that collected failures are printed before abort message
+    # the failures collected before the abort are printed ahead of the error line
     # Break the parquet file (it sorts first)
     root.joinpath(*LEDGER).write_bytes(b"not parquet")
 
     scratch = tmp_path / "scratch"
-    import shutil as real_shutil
-    original_copy2 = real_shutil.copy2
+    original_copy2 = shutil.copy2
 
     with patch('restore_check.shutil.copy2') as mock_copy2:
         def side_effect(src, dst):
@@ -338,7 +334,7 @@ def test_os_error_during_restore_prints_collected_failures(root, tmp_path, capsy
 
 
 def test_manifest_record_malformed_returns_2(day_dir, tmp_path, capsys):
-    # D6: Manifest record validation
+    # a manifest entry that is not a {sha256, size} record makes the copy unreadable (exit 2)
     manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
     manifest["oops"] = "not a record"
     (day_dir / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")

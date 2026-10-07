@@ -44,7 +44,7 @@ def _reference(copy: Path) -> dict[str, dict | None]:
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("the manifest is not a JSON object")
-        # D6: Validate each manifest record
+        # Validate each manifest record
         for key, record in data.items():
             if record is not None:
                 if not isinstance(record, dict):
