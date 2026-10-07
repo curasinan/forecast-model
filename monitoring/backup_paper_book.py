@@ -33,10 +33,13 @@ from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from analysis.spark_parity import MANIFEST_FILES
+from analysis.spark_parity import MANIFEST_FILES, PAPER_DB_REL, TICKS_DIR
 
 KEEP_DAYS = 30
 MANIFEST_NAME = "manifest.json"
+# The paper book by name, as a MANIFEST_FILES entry: not "the first entry", which would
+# move the refusal below onto another file the day somebody reorders that tuple.
+PAPER_BOOK = (TICKS_DIR, *PAPER_DB_REL)
 _DAY_DIR = re.compile(r"^\d{8}$")
 
 
@@ -89,7 +92,7 @@ def run_backup(root: Path, dest: Path, today: date, keep: int = KEEP_DAYS) -> Pa
     root = Path(root)
     if not root.is_dir():
         raise ValueError(f"backup refused: {root} is not a directory")
-    book_path = root.joinpath(*MANIFEST_FILES[0])  # paper book is first in MANIFEST_FILES
+    book_path = root.joinpath(*PAPER_BOOK)
     if not book_path.exists():
         raise ValueError(f"backup refused: {book_path} is missing")
 

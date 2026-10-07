@@ -31,11 +31,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from analysis.spark_parity import MANIFEST_FILES, check_parquet  # noqa: E402
+from analysis.spark_parity import (  # noqa: E402
+    MANIFEST_FILES,
+    PAPER_DB_REL,
+    TICKS_DIR,
+    check_parquet,
+)
 from monitoring.backup_paper_book import MANIFEST_NAME, file_record  # noqa: E402
 
 REQUIRED_TABLES = ("positions", "trade_log")
-PAPER_DB_KEY = "/".join(MANIFEST_FILES[0])
+# The paper book by name, not "the first entry of MANIFEST_FILES": the requirement below must
+# stay on the book if that tuple is ever reordered.
+PAPER_DB_KEY = "/".join((TICKS_DIR, *PAPER_DB_REL))
 
 
 def _reference(copy: Path) -> dict[str, dict | None]:

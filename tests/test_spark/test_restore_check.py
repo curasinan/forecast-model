@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ if str(REPO_ROOT / "scripts" / "spark") not in sys.path:
 
 import restore_check  # noqa: E402
 
+from analysis import spark_parity  # noqa: E402
 from monitoring.backup_paper_book import MANIFEST_NAME, run_backup, file_record  # noqa: E402
 
 BOOK = ("ibkr_ticks", "paper", "ibkr_paper.db")
@@ -344,3 +346,49 @@ def test_manifest_record_malformed_returns_2(day_dir, tmp_path, capsys):
     assert "cannot read the copy" in out
     assert "malformed" in out
     assert "Traceback" not in err
+
+
+# ---- the paper book is named, not the first entry of MANIFEST_FILES ----
+
+
+def test_the_paper_book_key_is_the_book_file():
+    assert restore_check.PAPER_DB_KEY == "ibkr_ticks/paper/ibkr_paper.db"
+    assert restore_check.PAPER_DB_KEY in {"/".join(parts) for parts in spark_parity.MANIFEST_FILES}
+
+
+REAL_ORDER = spark_parity.MANIFEST_FILES
+
+
+@pytest.fixture
+def book_last():
+    """analysis.spark_parity.MANIFEST_FILES in another order (the sync ledger first, the paper
+    book last), and restore_check imported again under it: its book key is made at import."""
+    rest = [parts for parts in REAL_ORDER if parts not in (BOOK, RUNS)]
+    reordered = (RUNS, *rest, BOOK)
+    with pytest.MonkeyPatch.context() as patch_:
+        patch_.setattr(spark_parity, "MANIFEST_FILES", reordered)
+        importlib.reload(restore_check)
+        yield reordered
+    importlib.reload(restore_check)  # the patch is undone: back to the real order
+
+
+def test_a_reordered_manifest_still_requires_the_paper_book(book_last, root, tmp_path, capsys):
+    # Reading the book as MANIFEST_FILES[0] would now require the sync ledger, which this root
+    # holds, and report RESTORE OK for a root with no book at all.
+    assert book_last[0] == RUNS and root.joinpath(*RUNS).is_file()
+    assert restore_check.MANIFEST_FILES == book_last  # restore_check is under the new order
+    assert restore_check.PAPER_DB_KEY == "ibkr_ticks/paper/ibkr_paper.db"
+    root.joinpath(*BOOK).unlink()
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: the copy has no paper book" in out
+    assert "RESTORE OK" not in out
+
+
+def test_the_real_order_is_back_once_the_reordered_one_is_done(root, tmp_path, capsys):
+    # the fixture above reloads the module on its way out: a later test sees the real thing
+    assert spark_parity.MANIFEST_FILES == REAL_ORDER
+    assert restore_check.MANIFEST_FILES == REAL_ORDER
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    assert rc == 0, capsys.readouterr().out

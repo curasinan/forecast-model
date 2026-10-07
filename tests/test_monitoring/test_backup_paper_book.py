@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from analysis.spark_parity import MANIFEST_FILES
-from monitoring.backup_paper_book import KEEP_DAYS, MANIFEST_NAME, main, run_backup
+from monitoring import backup_paper_book
+from monitoring.backup_paper_book import KEEP_DAYS, MANIFEST_NAME, PAPER_BOOK, main, run_backup
 
 BOOK = ("ibkr_ticks", "paper", "ibkr_paper.db")
 MODEL = ("climate_data", "models", "gtm_emos.json")
@@ -209,6 +210,55 @@ def test_main_refuses_a_root_without_the_paper_book(tmp_path, capsys):
     assert rc == 1
     assert "is missing" in capsys.readouterr().out
     assert not dest.exists()
+
+
+def test_the_paper_book_is_named_by_its_file_not_by_its_place_in_the_manifest():
+    assert "/".join(PAPER_BOOK) == "ibkr_ticks/paper/ibkr_paper.db"
+    assert PAPER_BOOK == BOOK
+    assert PAPER_BOOK in MANIFEST_FILES  # so the copy loop takes it
+
+
+SYNC_LEDGER = ("ibkr_ticks", "paper", "ibkr_sync_runs.jsonl")
+
+
+def _book_last() -> tuple:
+    """MANIFEST_FILES in another order: the sync ledger first, the paper book last."""
+    rest = [parts for parts in MANIFEST_FILES if parts not in (BOOK, SYNC_LEDGER)]
+    return (SYNC_LEDGER, *rest, BOOK)
+
+
+def test_a_reordered_manifest_still_refuses_a_root_without_the_paper_book(
+        tmp_path, monkeypatch, capsys):
+    # With the book last, MANIFEST_FILES[0] is the sync ledger, which this root does hold: a
+    # refusal that looked at the first entry would let a backup of a root with no book through.
+    reordered = _book_last()
+    monkeypatch.setattr(backup_paper_book, "MANIFEST_FILES", reordered)
+    root = tmp_path / "quant_data"
+    first = root.joinpath(*reordered[0])
+    first.parent.mkdir(parents=True)
+    first.write_text('{"ok": true}\n', encoding="utf-8")
+    dest = tmp_path / "backups"
+
+    rc = main(["--root", str(root), "--dest", str(dest)], today=TODAY)
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "ibkr_paper.db" in out and "is missing" in out
+    assert not dest.exists()
+
+
+def test_a_reordered_manifest_does_not_refuse_a_root_that_holds_the_paper_book(
+        root, tmp_path, monkeypatch):
+    # The fixture's root holds the book and a model but no sync ledger, which a reorder
+    # would put first: the refusal is about the book, not about whatever file is first.
+    reordered = _book_last()
+    assert not root.joinpath(*reordered[0]).exists()
+    monkeypatch.setattr(backup_paper_book, "MANIFEST_FILES", reordered)
+
+    day_dir = run_backup(root, tmp_path / "backups", TODAY)
+
+    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["/".join(BOOK)]["sha256"] == _sha256(day_dir.joinpath(*BOOK))
 
 
 def test_rotation_with_keep_1_leaves_only_the_new_day(root, tmp_path):
