@@ -1,0 +1,22 @@
+# ForecastEx quote recorder (clientId 2, read-only) -> /srv/quant_data/ibkr_ticks.
+# Reads IBKR_PORT / IBKR_TRADING_MODE from the clone's .env. It retries the Gateway
+# by itself (GatewaySession), so it needs no ordering against the Gateway container.
+[Unit]
+Description=ForecastEx quote recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+UMask=0027
+NoNewPrivileges=yes
+OOMScoreAdjust=-900
+WorkingDirectory=/home/trading/forecast-model
+ExecStart=/home/trading/forecast-model/.venv/bin/python -u scripts/record_ibkr_ticks.py --interval-minutes 20
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

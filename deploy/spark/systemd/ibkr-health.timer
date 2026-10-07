@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly IBKR health probe
+
+[Timer]
+OnCalendar=*-*-* *:00:00 Europe/Istanbul
+Persistent=true
+Unit=ibkr-health.service
+
+[Install]
+WantedBy=timers.target

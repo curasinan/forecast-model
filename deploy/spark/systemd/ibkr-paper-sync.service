@@ -1,0 +1,15 @@
+# Daily reconciliation of resting paper orders (clientId 4, read-only). A failed run
+# leaves this unit failed and shows up as SYNC_STALE in the health probe.
+[Unit]
+Description=IBKR paper book reconciliation
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+UMask=0027
+NoNewPrivileges=yes
+OOMScoreAdjust=-900
+WorkingDirectory=/home/trading/forecast-model
+ExecStart=/home/trading/forecast-model/.venv/bin/python -u scripts/sync_ibkr_paper.py
+TimeoutStartSec=600

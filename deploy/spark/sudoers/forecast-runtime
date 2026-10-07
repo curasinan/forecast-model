@@ -1,0 +1,6 @@
+# Install as /etc/sudoers.d/forecast-runtime, mode 0440, after `visudo -cf` accepts it.
+# Lets the operator start, stop and restart the runtime's units from a deploy or a
+# rollback, without a password, and nothing else. Installing or changing a unit file
+# stays a manual sudo step.
+Cmnd_Alias FORECAST_UNITS =     /usr/bin/systemctl start ibkr-recorder.service,     /usr/bin/systemctl stop ibkr-recorder.service,     /usr/bin/systemctl restart ibkr-recorder.service,     /usr/bin/systemctl start ibkr-health.service,     /usr/bin/systemctl stop ibkr-health.service,     /usr/bin/systemctl start ibkr-health.timer,     /usr/bin/systemctl stop ibkr-health.timer,     /usr/bin/systemctl start ibkr-paper-sync.service,     /usr/bin/systemctl stop ibkr-paper-sync.service,     /usr/bin/systemctl start ibkr-paper-sync.timer,     /usr/bin/systemctl stop ibkr-paper-sync.timer,     /usr/bin/systemctl start climate-labels.service,     /usr/bin/systemctl stop climate-labels.service,     /usr/bin/systemctl start climate-labels.timer,     /usr/bin/systemctl stop climate-labels.timer,     /usr/bin/systemctl start paper-book-backup.service,     /usr/bin/systemctl stop paper-book-backup.service,     /usr/bin/systemctl start paper-book-backup.timer,     /usr/bin/systemctl stop paper-book-backup.timer
+scura ALL=(root) NOPASSWD: FORECAST_UNITS

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily climate label collection
+
+[Timer]
+OnCalendar=*-*-* 16:30:00 Europe/Istanbul
+Persistent=true
+Unit=climate-labels.service
+
+[Install]
+WantedBy=timers.target

@@ -2,3 +2,7 @@
 # straight from the Windows working tree, where core.autocrlf=true would otherwise
 # check them out with CRLF ("$'\r': command not found" on every line).
 scripts/spark/*.sh text eol=lf
+
+# Unit files, the compose file and the sudoers drop-in are read by systemd, Docker and
+# sudo on the Spark; they must be LF in every checkout.
+deploy/** text eol=lf

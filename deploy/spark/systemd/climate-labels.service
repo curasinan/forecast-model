@@ -1,0 +1,17 @@
+# NOAA first-print label ledger. The external heartbeat is pinged on success only.
+[Unit]
+Description=Climate label collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+UMask=0027
+NoNewPrivileges=yes
+OOMScoreAdjust=-900
+WorkingDirectory=/home/trading/forecast-model
+EnvironmentFile=/home/trading/.config/forecast-model/heartbeat.env
+ExecStart=/home/trading/forecast-model/.venv/bin/python -u scripts/spark/heartbeat_ping.py --url-env HEARTBEAT_URL_LABELS -- /home/trading/forecast-model/.venv/bin/python -u scripts/collect_climate_labels.py
+TimeoutStartSec=900

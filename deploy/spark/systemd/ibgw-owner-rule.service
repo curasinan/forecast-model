@@ -1,0 +1,18 @@
+# Loopback isolation for the IB Gateway container. The LLM stack's containers use the
+# host network, so "bound to 127.0.0.1" does not keep them away from the Gateway.
+# Port 4002 (API): only processes of the user trading. Port 5900 (remote screen): only
+# processes of the operator, whose ssh tunnel is how the screen is reached.
+# iptables -C makes each rule idempotent: it is inserted only when it is not there.
+[Unit]
+Description=Owner rule for the IB Gateway API and remote-screen ports
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/usr/sbin/iptables -C OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset 2>/dev/null || /usr/sbin/iptables -I OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset'
+ExecStart=/bin/sh -c '/usr/sbin/iptables -C OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset 2>/dev/null || /usr/sbin/iptables -I OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset'
+ExecStop=/bin/sh -c '/usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset; /usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset'
+
+[Install]
+WantedBy=multi-user.target

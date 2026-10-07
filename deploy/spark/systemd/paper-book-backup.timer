@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup of the operational files
+
+[Timer]
+OnCalendar=*-*-* 21:00:00 Europe/Istanbul
+Persistent=true
+Unit=paper-book-backup.service
+
+[Install]
+WantedBy=timers.target

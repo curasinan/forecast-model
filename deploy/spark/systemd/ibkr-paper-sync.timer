@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily IBKR paper book reconciliation
+
+[Timer]
+OnCalendar=*-*-* 17:30:00 Europe/Istanbul
+Persistent=true
+Unit=ibkr-paper-sync.service
+
+[Install]
+WantedBy=timers.target
