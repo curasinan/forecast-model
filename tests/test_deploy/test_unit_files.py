@@ -124,18 +124,56 @@ def test_the_owner_rule_admits_trading_on_the_api_and_the_operator_on_the_screen
     assert any("--dport 5900 -m owner ! --uid-owner scura -j REJECT" in s for s in starts)
     assert all("-o lo -p tcp" in s and "iptables -C" in s and "iptables -I" in s for s in starts)
     assert values(unit, "Service", "RemainAfterExit") == ["yes"]
+    assert "docker.service" in values(unit, "Unit", "Before")
+    assert values(unit, "Service", "Type") == ["oneshot"]
+    assert values(unit, "Install", "WantedBy") == ["multi-user.target"]
 
 
 def test_the_sudoers_file_names_only_these_units_and_only_three_verbs():
     text = SUDOERS.read_text(encoding="utf-8")
     assert "scura ALL=(root) NOPASSWD: FORECAST_UNITS" in text
+
+    # Parse continuation lines and extract commands
+    joined = text.replace("\\\n", " ")
+    lines = [line.strip() for line in joined.split("\n") if line.strip() and not line.strip().startswith("#")]
+
+    # Extract the exact set of (verb, unit) pairs
     commands = re.findall(r"/usr/bin/systemctl (\S+) (\S+?)(?:,|\s|$)", text)
     assert commands, text
-    units = {p.name for p in UNIT_DIR.iterdir()} - {"ibgw-owner-rule.service"}
-    for verb, unit in commands:
-        assert verb in {"start", "stop", "restart"}
-        assert unit in units, unit
-    assert {unit for _verb, unit in commands} == units
+
+    # Expected: 9 units (all except ibgw-owner-rule) with start/stop + restart for ibkr-recorder
+    expected_units = {
+        "ibkr-recorder.service", "ibkr-health.service", "ibkr-health.timer",
+        "ibkr-paper-sync.service", "ibkr-paper-sync.timer",
+        "climate-labels.service", "climate-labels.timer",
+        "paper-book-backup.service", "paper-book-backup.timer"
+    }
+
+    expected_commands = set()
+    for unit in expected_units:
+        expected_commands.add(("start", unit))
+        expected_commands.add(("stop", unit))
+    expected_commands.add(("restart", "ibkr-recorder.service"))
+
+    assert set(commands) == expected_commands, f"Got {set(commands)}, expected {expected_commands}"
+
+    # Verify file structure: should have one Cmnd_Alias definition and one grant line
+    alias_count = sum(1 for line in lines if line.startswith("Cmnd_Alias FORECAST_UNITS"))
+    grant_count = sum(1 for line in lines if "scura ALL=(root)" in line)
+    assert alias_count == 1, f"Expected 1 Cmnd_Alias definition, got {alias_count}"
+    assert grant_count == 1, f"Expected 1 grant line, got {grant_count}"
+
+    # Every line in the alias definition must start with /usr/bin/systemctl
+    in_alias = False
+    for line in lines:
+        if line.startswith("Cmnd_Alias FORECAST_UNITS"):
+            in_alias = True
+        elif "scura ALL=(root)" in line:
+            in_alias = False
+        elif in_alias and line:
+            # Every non-empty line in alias definition must be a systemctl command
+            assert line.startswith("/usr/bin/systemctl"), "Non-systemctl entry in alias: " + line
+
     assert "*" not in text and "ALL=(ALL)" not in text
 
 
@@ -146,7 +184,7 @@ def test_no_file_under_deploy_gives_a_secret_a_value():
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             for key in SECRET_KEYS:
-                match = re.match(rf"\s*{key}\s*[=:]\s*(.*)$", line)
+                match = re.search(rf"(?:^|[\s\-'\"']){key}\s*[=:]\s*(.*)$", line)
                 if match and match.group(1).strip() and not match.group(1).strip().startswith("${"):
                     offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}")
     assert offenders == []
@@ -155,3 +193,4 @@ def test_no_file_under_deploy_gives_a_secret_a_value():
 def test_files_under_deploy_are_lf_in_every_checkout():
     attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert "deploy/** text eol=lf" in attributes
+    assert [p for p in (REPO_ROOT / "deploy").rglob("*") if p.is_file() and b"\r" in p.read_bytes()] == []

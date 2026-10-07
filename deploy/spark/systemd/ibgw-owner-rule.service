@@ -12,7 +12,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c '/usr/sbin/iptables -C OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset 2>/dev/null || /usr/sbin/iptables -I OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset'
 ExecStart=/bin/sh -c '/usr/sbin/iptables -C OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset 2>/dev/null || /usr/sbin/iptables -I OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset'
-ExecStop=/bin/sh -c '/usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset; /usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset'
+ExecStop=-/bin/sh -c '/usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 4002 -m owner ! --uid-owner trading -j REJECT --reject-with tcp-reset; /usr/sbin/iptables -D OUTPUT -o lo -p tcp --dport 5900 -m owner ! --uid-owner scura -j REJECT --reject-with tcp-reset'
 
 [Install]
 WantedBy=multi-user.target
