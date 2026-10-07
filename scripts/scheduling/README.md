@@ -23,6 +23,32 @@ Register IBKR jobs from an elevated PowerShell:
 
 Remove them with `unregister_ibkr_tasks.ps1`.
 
+## Spark pull (the copy of the live root that lives off the Spark)
+
+From the cutover of the runtime to the Spark on, this machine's `~/quant_data`
+is a mirror of the Spark's live root (`docs/spark_runbook.md` section 7.6).
+
+| Job | Command | Cadence |
+|---|---|---|
+| Pull the live root and the daily backups | `run_spark_pull.ps1` (WSL, `scripts/spark/pull_snapshot.sh`) | Task Scheduler `\Spark\Spark Pull`, at logon and every six hours |
+
+Register it from an elevated PowerShell, after setting the user-level
+variable `HEARTBEAT_URL_OFFBOX` (the script's header says how):
+
+```powershell
+.\scripts\scheduling\register_spark_pull_task.ps1
+```
+
+The script registers the task enabled, and a second run replaces the
+registration, so it enables a task that was disabled on purpose. After the
+cutover, never run it without
+`Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'` after it,
+unless the pull is meant to run.
+
+Log: `logs\spark_pull_task.log`. The pull refuses a `~/quant_data` that does
+not carry the file `.mirror-of-spark`. Remove the task with
+`Unregister-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull' -Confirm:$false`.
+
 ## Leftover Polymarket Task Scheduler jobs
 
 If `\Polymarket\collect_markets` (etc.) is still registered, uninstall:

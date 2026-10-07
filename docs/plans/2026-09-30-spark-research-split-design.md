@@ -5,6 +5,12 @@
 Dated artifact names below (`constraints/zenbook-<date>.txt`,
 `docs/spark_parity_<date>.md`) take the date of the run that produces them.
 
+> **Amended 2026-10-05.** `docs/plans/2026-10-05-spark-runtime-move-design.md`
+> moves the Gateway and the runtime to the Spark. From its cutover on,
+> invariants 1, 2, 4 and 5 of section 2 below are replaced as section 12 of
+> that document says; invariant 3, the parity tooling, the LLM client and the
+> LLM boundary stand. Until the cutover this document is in force unchanged.
+
 ## 0. One-paragraph goal
 
 Run the research half of this repo on the DGX Spark (`spark-8f47`, aarch64,

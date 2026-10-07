@@ -5,6 +5,11 @@ follow the claim/evidence convention of `docs/venue_semantics.md`: claim,
 evidence, date verified, invalidation condition. Anything sourced from IBKR
 documentation rather than our own logs/probes is labeled as such.
 
+> **Runtime move (2026-10): built, not yet in force.** The runtime is moving
+> to the DGX Spark (`docs/spark_runbook.md` section 7). Until a cutover report
+> `docs/spark_runtime_cutover_<date>.md` exists, this page describes the
+> system as it runs, on the Zenbook.
+
 Quick facts:
 
 | Item | Value |

@@ -485,3 +485,17 @@ Spark). Parity is evidenced in the newest `docs/spark_parity_*.md`; the
 operator's view is `docs/spark_runbook.md`. The local vLLM model is
 reachable through `src/llm/` (config-driven model name) and is fenced out of
 the pricing/ordering path by `tests/test_architecture/test_llm_boundary.py`.
+
+## 11. Runtime move to the Spark (2026-10)
+
+**Status: built, not cut over.** The Zenbook is still the runtime; everything
+in sections 0 to 8 stands. What exists: the design
+(`docs/plans/2026-10-05-spark-runtime-move-design.md`), the plan
+(`docs/plans/2026-10-05-spark-runtime-move.md`), the spike report
+(`docs/spark_runtime_spike_<date>.md`), and the build: a Linux user `trading`
+on the Spark with a runtime clone, systemd units under `deploy/spark/`, an
+owner rule that admits only `trading` to the Gateway port, a marker file
+that tells a mirror from the live root, a daily backup with a restore check,
+external heartbeat checks, and the deploy, pull, mirror and rollback scripts
+under `scripts/spark/`. The operator's view is `docs/spark_runbook.md`
+section 7. This section is rewritten at the cutover and again at acceptance.
