@@ -43,13 +43,21 @@ def _output(cmd: list[str], run) -> str:
 
 
 def listening_ports(run=subprocess.run) -> set[int]:
-    """Local TCP ports with a listening socket."""
+    """Local TCP ports with a listening socket.
+
+    A listing that has rows but yields no port at all is a listing this function could not
+    read (a language that does not say LISTENING, a changed format), not a machine where
+    nothing listens: both machines always have listeners, so that raises CheckFailed. Only a
+    listing with no output at all reads as "nothing listens".
+    """
     if sys.platform == "win32":
-        text = _output(["netstat", "-an"], run)
+        tool = "netstat"
+        text = _output([tool, "-an"], run)
         lines = [line for line in text.splitlines() if "LISTENING" in line]
         pattern = re.compile(r"^\s*TCP\s+.+?:(\d+)\s")
     else:
-        text = _output(["ss", "-ltnH"], run)
+        tool = "ss"
+        text = _output([tool, "-ltnH"], run)
         lines = text.splitlines()
         pattern = re.compile(r"^\s*LISTEN\s+\d+\s+\d+\s+\S+:(\d+)\s")
     ports: set[int] = set()
@@ -57,6 +65,9 @@ def listening_ports(run=subprocess.run) -> set[int]:
         match = pattern.match(line)
         if match:
             ports.add(int(match.group(1)))
+    if text.strip() and not ports:
+        raise CheckFailed(f"no listening port could be read from the {tool} output "
+                          f"({len(text.splitlines())} lines)")
     return ports
 
 
@@ -81,8 +92,13 @@ def process_running(name: str, run=subprocess.run) -> bool:
 
 
 def container_running(name: str, run=subprocess.run) -> bool:
-    """True when a Docker container with exactly this name runs."""
-    cmd = ["docker", "ps", "--quiet", "--filter", f"name=^{name}$", "--filter", "status=running"]
+    """True when a Docker container with exactly this name is up.
+
+    No status filter: `status=running` leaves out a container that is restarting (or paused),
+    and a Gateway restarting in a loop is one that logs in. Plain `docker ps` lists running,
+    paused and restarting containers, and not the stopped ones.
+    """
+    cmd = ["docker", "ps", "--quiet", "--filter", f"name=^{name}$"]
     return bool(_output(cmd, run).strip())
 
 
