@@ -1,4 +1,4 @@
-# Remove the IBKR recorder + health-check jobs from Windows Task Scheduler.
+# Remove the IBKR recorder, health-check and paper-sync jobs from Windows Task Scheduler.
 #
 # Run from an ELEVATED PowerShell:
 #
@@ -13,7 +13,7 @@ param(
     [string]$TaskPath = "\IBKR\"
 )
 
-$taskNames = @("IBKR Recorder", "IBKR Recorder Health")
+$taskNames = @("IBKR Recorder", "IBKR Recorder Health", "IBKR Paper Sync")
 
 foreach ($name in $taskNames) {
     $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $name -ErrorAction SilentlyContinue
