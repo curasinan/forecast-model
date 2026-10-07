@@ -26,12 +26,18 @@
 #   4. Copy the Spark's live root into the Zenbook's kept root, ~/quant_data_zenbook_final.
 #      No --delete: nothing the Zenbook holds is removed. This is the ONLY place where data
 #      is copied from the Spark into a Zenbook live root; it refuses (exit 3) a destination
-#      that is missing or that carries the mirror marker. If the copy fails, the session has
-#      already been released: run the script again to finish the copy before anyone logs in.
+#      that is missing or that carries the mirror marker, before the Spark has been asked
+#      anything. The SQLite journal, WAL and SHM files go with their databases, unlike in the
+#      other copy scripts: every writer is stopped by now, so a journal that exists belongs to
+#      its database, and without it a stop that landed mid-transaction would leave the Zenbook
+#      a half-written book with nothing to roll it back. If the copy fails (exit 5), the
+#      session has already been released: run the script again to finish the copy before
+#      anyone logs in.
 #   5. Print what the account holder does next. None of it is done here.
 # --no-copy ends after step 3: the Spark side only, for a rehearsal with everything stopped.
-# Exit: 0 done, 2 usage, 3 destination refused, 4 the Spark may still hold the session; any
-# other status is rsync's (the copy failed after the session was released).
+# Exit: 0 done, 2 usage, 3 destination refused (the Spark was not touched and may still hold
+# the session; --no-copy releases it), 4 the Spark may still hold the session, 5 the copy
+# failed after the session was released (rsync's own status is in the message).
 set -euo pipefail
 
 HOST="${SPARK_HOST:-spark}"
@@ -57,14 +63,21 @@ for arg in "$@"; do
   esac
 done
 
+# A refused destination is decided before the Spark is asked anything, so the Spark may be
+# exactly as it was, session included; --no-copy needs no destination and lets it go.
+refuse_destination() {
+  echo "rollback: $1" >&2
+  echo "rollback: the Spark was not touched and may still hold the session;" \
+       "--no-copy releases it" >&2
+  exit 3
+}
+
 if [ "$COPY" -eq 1 ]; then
   if [ ! -d "$DEST" ]; then
-    echo "rollback: $DEST does not exist; the root kept at the cutover is the only destination" >&2
-    exit 3
+    refuse_destination "$DEST does not exist; the root kept at the cutover is the only destination"
   fi
   if [ -e "$DEST/$MARKER" ]; then
-    echo "rollback: $DEST carries $MARKER; it is a mirror, not the kept live root" >&2
-    exit 3
+    refuse_destination "$DEST carries $MARKER; it is a mirror, not the kept live root"
   fi
 fi
 
@@ -137,8 +150,8 @@ if [ "$COPY" -eq 0 ]; then
 fi
 
 echo "== 4/5 copy $SRC -> $DEST (nothing is deleted there)"
-EXCLUDES=(--exclude "ibkr_ticks/state/" --exclude "*.tmp" --exclude "*-journal"
-          --exclude "*.db-wal" --exclude "*.db-shm" --exclude "/$MARKER")
+# Not the list of the other copy scripts: no "*-journal", "*.db-wal" or "*.db-shm" here (see 4).
+EXCLUDES=(--exclude "ibkr_ticks/state/" --exclude "*.tmp" --exclude "/$MARKER")
 COPY_CMD=(rsync -rlt --stats "${EXCLUDES[@]}" -e "$SSH -o BatchMode=yes -o ConnectTimeout=20"
           "$SRC/" "$DEST/")
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -149,8 +162,11 @@ else
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
-    echo "rollback: the copy failed (rsync exit $rc). The Spark has given the session up; run this script again to finish the copy before anyone logs in on the Zenbook." >&2
-    exit "$rc"
+    # Exit 5, not rsync's own status: rsync's 3 and 4 would read as this script's "destination
+    # refused" and "the Spark may still hold the session". The status is in the message.
+    echo "rollback: copy failed (rsync exit $rc); run this script again to finish the copy" \
+         "before anyone logs in on the Zenbook. The Spark has given the session up." >&2
+    exit 5
   fi
 fi
 
@@ -160,6 +176,8 @@ cat <<'EOF'
     sudo systemctl disable ibkr-recorder.service ibkr-health.timer ibkr-paper-sync.timer climate-labels.timer paper-book-backup.timer
   On the Zenbook, in an elevated PowerShell, from the repo root:
     Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'
+    python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final --scratch <a fresh directory>
+      (RESTORE OK must come first; a FAIL line names the file)
     .\scripts\scheduling\swap_live_root_for_mirror.ps1 -Undo
     Get-ScheduledTask -TaskPath '\IBKR\','\Climate\' | Where-Object TaskName -in 'IBKR Recorder','IBKR Recorder Health','IBKR Paper Sync','Climate Labels' | Enable-ScheduledTask
   Only after the swap has printed "live root:", open IB Gateway on the Zenbook and log in.

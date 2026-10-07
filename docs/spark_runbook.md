@@ -617,21 +617,31 @@ address needs no restart.
 `scripts/spark/rollback.sh` stops the Spark's units and the Gateway
 container, checks that the Spark no longer holds a session, and only then
 copies the Spark's live root into the Zenbook's kept root
-`~/quant_data_zenbook_final` (nothing is deleted there). It ends by printing
-what the account holder does: disable the units on the Spark, disable the pull
-task `\Spark\Spark Pull` (left enabled it refuses the unmarked root and never
-pings, so `offbox-pull` goes late within three days), put the kept root back
-with `scripts/scheduling/swap_live_root_for_mirror.ps1` and its `-Undo` switch,
-re-enable the four scheduled tasks, log in on the Zenbook. Only exit 0 allows
-that login. Exit 4 means the Spark may still hold the session (it could not be
+`~/quant_data_zenbook_final` (nothing is deleted there; the SQLite journal,
+WAL and SHM files go with their databases, unlike in the other copy scripts:
+every writer is stopped by then, so a journal that exists belongs to its
+database). It ends by printing what the account holder does, in this order:
+disable the units on the Spark, disable the pull task `\Spark\Spark Pull`
+(left enabled it refuses the unmarked root and never pings, so `offbox-pull`
+goes late within three days), check the copied book, which a stop that landed
+mid-transaction can have left half written:
+
+    python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final --scratch <a fresh directory>
+
+(it must print `RESTORE OK`; delete the scratch afterwards), put the kept root
+back with `scripts/scheduling/swap_live_root_for_mirror.ps1` and its `-Undo`
+switch, re-enable the four scheduled tasks, log in on the Zenbook. Only exit 0
+allows that login. Exit 4 means the Spark may still hold the session (it could not be
 reached, the connection to it was lost, a stop was refused, or the check found
 a Gateway): do not log in on the Zenbook. The script prints
 `Do NOT log in on the Zenbook` then, and also when it is interrupted (Ctrl-C,
 a closed terminal, a kill) after it has first asked the Spark and before the
 check has passed, because the Spark may be stopped only half way.
-Exit 2 is a usage error and exit 3 a kept root that is missing or carries the
-mirror marker: nothing was done. Any other exit without that warning is a
-copy that failed after the session was released: run the script again.
+Exit 2 is a usage error. Exit 3 is a kept root that is missing or carries the
+mirror marker: nothing was copied and the Spark was not touched, so it may
+still hold the session (do not log in; `--no-copy` releases it). Exit 5 is a
+copy that failed after the session was released; the message gives rsync's own
+status (`copy failed (rsync exit N)`): run the script again.
 `--no-copy` runs the Spark side only, for a rehearsal.
 
 ### 7.10 Research jobs

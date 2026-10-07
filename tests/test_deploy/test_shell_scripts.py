@@ -107,6 +107,10 @@ def test_an_unknown_argument_is_a_usage_error(name):
 
 COPIES_FROM_THE_SPARK = ["pull_snapshot.sh", "mirror_live.sh", "rollback.sh"]
 MARKER_ENTRY = "/$MARKER"  # the pattern as the scripts spell it; they set MARKER=".mirror-of-spark"
+# What every copy leaves out except rollback.sh's: a journal, WAL or SHM file is a live
+# writer's, and the book it belongs to may be copied mid-write. Rollback runs with every
+# writer stopped, so a journal it finds belongs to its database and goes with it.
+HOT_SQLITE = ["*-journal", "*.db-wal", "*.db-shm"]
 
 
 def exclude_patterns(name: str) -> list[str]:
@@ -121,15 +125,20 @@ def exclude_patterns(name: str) -> list[str]:
 
 def test_the_exclude_lists_of_the_four_copy_scripts_cannot_drift_apart():
     lists = {name: exclude_patterns(name) for name in [*COPIES_FROM_THE_SPARK, "push_snapshot.sh"]}
-    # the three scripts that copy FROM the Spark share one list, marker entry included: the
-    # marker of the mirror (or of a kept live root) is never overwritten by the Spark's own
-    assert lists["pull_snapshot.sh"] == lists["mirror_live.sh"] == lists["rollback.sh"]
-    assert MARKER_ENTRY in lists["pull_snapshot.sh"]
+    # the three scripts that copy FROM the Spark carry the marker entry: the marker of the
+    # mirror (or of a kept live root) is never overwritten by the Spark's own
+    assert all(MARKER_ENTRY in lists[name] for name in COPIES_FROM_THE_SPARK)
     # push_snapshot.sh refuses a marked source, so the marker entry would be inert there; but
-    # with that one entry set aside, all four are the same list of volatile files
+    # with that one entry set aside, pull, mirror and push are the same list of volatile files
     volatile = {name: [p for p in patterns if p != MARKER_ENTRY] for name, patterns in lists.items()}
-    assert len({tuple(patterns) for patterns in volatile.values()}) == 1, volatile
-    assert len(volatile["push_snapshot.sh"]) >= 5  # state/, *.tmp, the journal, wal and shm files
+    shared = volatile["pull_snapshot.sh"]
+    assert volatile["mirror_live.sh"] == volatile["push_snapshot.sh"] == shared, volatile
+    assert len(shared) >= 5  # state/, *.tmp, the journal, wal and shm files
+    assert [p for p in HOT_SQLITE if p not in shared] == []
+    # rollback.sh differs by exactly those three patterns: nothing more is dropped and none
+    # of them stays, and the pull and the mirror still leave them out
+    assert volatile["rollback.sh"] == [p for p in shared if p not in HOT_SQLITE], volatile
+    assert lists["pull_snapshot.sh"] == lists["mirror_live.sh"]
 
 
 # ----------------------------------------------------------------- push_snapshot.sh
@@ -279,16 +288,21 @@ def test_the_restart_a_deploy_asks_for_is_one_sudo_allows():
 # ----------------------------------------------------------------- rollback.sh
 
 
+NOT_TOUCHED = "the Spark was not touched and may still hold the session; --no-copy releases it"
+
+
 def test_rollback_refuses_a_missing_destination(tmp_path):
     done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=(tmp_path / "absent").as_posix())
     assert done.returncode == 3
     assert "does not exist" in done.stderr
+    assert NOT_TOUCHED in done.stderr
 
 
 def test_rollback_refuses_a_destination_that_is_a_mirror(mirror):
     done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=mirror.as_posix())
     assert done.returncode == 3
     assert "it is a mirror" in done.stderr
+    assert NOT_TOUCHED in done.stderr
 
 
 def test_rollback_dry_run_gives_the_session_up_before_it_copies(unmarked):
@@ -308,6 +322,21 @@ def test_rollback_dry_run_gives_the_session_up_before_it_copies(unmarked):
     assert sorted(p.name for p in unmarked.iterdir()) == ["keep.txt"]
 
 
+def test_rollback_copies_the_journal_wal_and_shm_files_with_their_databases(unmarked):
+    # Every writer is stopped by the copy, so a journal on the Spark belongs to its database:
+    # leaving it behind would hand the Zenbook a book a stop interrupted mid-transaction with
+    # nothing to roll it back. The state directory, *.tmp and the marker stay out.
+    done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix())
+    assert done.returncode == 0, done.stderr
+    (copy_line,) = [line for line in done.stdout.splitlines() if line.startswith("DRY-RUN: rsync ")]
+    for pattern in HOT_SQLITE:
+        assert f"--exclude {pattern}" not in copy_line, copy_line
+    assert "--exclude ibkr_ticks/state/" in copy_line
+    assert "--exclude *.tmp" in copy_line
+    assert f"--exclude /{MARKER}" in copy_line
+    assert copy_line.split().count("--exclude") == 3, copy_line  # and nothing else is left out
+
+
 def test_rollback_stops_every_runtime_unit_with_a_command_sudo_allows(unmarked):
     done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix())
     calls = re.findall(r"sudo -n /usr/bin/systemctl (\S+) (\S+)", done.stdout)
@@ -318,6 +347,29 @@ def test_rollback_stops_every_runtime_unit_with_a_command_sudo_allows(unmarked):
     timers = [i for i, (_verb, unit) in enumerate(calls) if unit.endswith(".timer")]
     services = [i for i, (_verb, unit) in enumerate(calls) if unit.endswith(".service")]
     assert max(timers) < min(services)  # nothing may start a service we have just stopped
+
+
+def test_rollback_has_the_restored_book_checked_before_the_kept_root_goes_back(unmarked):
+    # The copy can hand the Zenbook a book a stop interrupted: the check runs first, on the
+    # kept root where it was copied, and the by-hand list says it must print RESTORE OK.
+    done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix())
+    assert done.returncode == 0, done.stderr
+    by_hand = done.stdout[done.stdout.index("== 5/5 by hand"):]
+    disable = by_hand.index("Disable-ScheduledTask -TaskPath '\\Spark\\' -TaskName 'Spark Pull'")
+    check = by_hand.index("python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final "
+                          "--scratch <a fresh directory>")
+    undo = by_hand.index("swap_live_root_for_mirror.ps1 -Undo")
+    enable = by_hand.index("Enable-ScheduledTask")
+    assert disable < check < undo < enable
+    assert "RESTORE OK" in by_hand[check:undo]  # what the account holder waits for
+
+
+def test_the_restore_check_the_rollback_prints_is_one_restore_check_accepts():
+    done = subprocess.run([sys.executable, (SCRIPTS / "restore_check.py").as_posix(), "--help"],
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert "--from" in done.stdout and "--scratch" in done.stdout
+    assert "RESTORE OK" in (SCRIPTS / "restore_check.py").read_text(encoding="utf-8")
 
 
 # ----------------------------------------------------------------- real runs against stand-ins
@@ -374,14 +426,62 @@ def test_rollback_no_copy_ends_after_the_session_check(tmp_path):
     assert "rsync" not in done.stdout and "by hand" not in done.stdout
 
 
-def test_a_failed_copy_says_the_session_is_released_and_to_run_again(unmarked, tmp_path):
-    # the stand-in obeys but speaks no rsync protocol (and Git Bash has no rsync at all)
+def on_path(tmp_path: Path, name: str, body: str) -> dict[str, str]:
+    """The environment in which `name` is a stand-in script found first on PATH."""
+    directory = tmp_path / "bin"
+    directory.mkdir(exist_ok=True)
+    stand_in(directory, name, body)
+    return {"PATH": os.pathsep.join([str(directory), os.environ["PATH"]])}
+
+
+@pytest.mark.parametrize("status", [1, 3, 4, 23, 127])
+def test_a_failed_copy_exits_5_and_says_the_session_is_released_and_to_run_again(
+        unmarked, tmp_path, status):
+    # rsync's own statuses include 3 and 4, which are this script's "destination refused" and
+    # "the Spark may still hold the session": a copy that failed after the session was
+    # released must not look like either, so it exits 5 and puts rsync's status in the message.
     ssh = stand_in(tmp_path, "ssh_ok", SSH_THAT_OBEYS)
-    done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh)
-    assert done.returncode not in (0, 4)
-    assert "run this script again" in done.stderr
+    rsync = on_path(tmp_path, "rsync", f"exit {status}\n")
+    done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh, **rsync)
+    assert done.returncode == 5, (done.stdout, done.stderr)
+    assert f"copy failed (rsync exit {status}); run this script again" in done.stderr
     assert "Do NOT log in" not in done.stderr
     assert "by hand" not in done.stdout
+
+
+def test_a_copy_that_succeeds_still_ends_with_the_by_hand_list(unmarked, tmp_path):
+    ssh = stand_in(tmp_path, "ssh_ok", SSH_THAT_OBEYS)
+    rsync = on_path(tmp_path, "rsync", "exit 0\n")
+    done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh, **rsync)
+    assert done.returncode == 0, done.stderr
+    assert "== 5/5 by hand" in done.stdout and "copy failed" not in done.stderr
+
+
+def test_runbook_7_9_tells_the_operator_what_each_exit_and_the_restore_check_mean():
+    text = (REPO_ROOT / "docs" / "spark_runbook.md").read_text(encoding="utf-8")
+    section = text.split("### 7.9 ", 1)[1].split("### 7.10 ", 1)[0]
+    for status in (2, 3, 4, 5):
+        assert re.search(rf"\bExit {status}\b", section), f"7.9 does not say what exit {status} is"
+    flat = " ".join(section.split())  # the paragraphs are wrapped
+    assert "copy failed (rsync exit N)" in flat
+    assert "the Spark was not touched, so it may still hold the session" in flat
+    assert "`--no-copy` releases it" in flat
+    # the restore check comes before the swap in the runbook as it does in the script's list
+    check = section.index("python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final")
+    assert "--scratch <a fresh directory>" in section[check:check + 140]
+    assert check < section.index("swap_live_root_for_mirror.ps1")
+    assert "RESTORE OK" in section[check:]
+
+
+def test_the_exit_list_in_the_header_names_every_status_the_script_ends_with():
+    text = (SCRIPTS / "rollback.sh").read_text(encoding="utf-8")
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    used = {int(n) for n in re.findall(r"\bexit (\d+)\b", "\n".join(code))}
+    assert used == {0, 2, 3, 4, 5}, used  # 5 is the copy that failed; nothing else uses it
+    (exit_list,) = re.findall(r"^# Exit:(.*?)(?=^[^#])", text, re.MULTILINE | re.DOTALL)
+    listed = {int(n) for n in re.findall(r"\b(\d)\b(?= [a-zA-Z(])", exit_list)}
+    assert used <= listed, (used, exit_list)
+    assert "rsync's own status" in exit_list
 
 
 SSH_OPTS = "-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
