@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -132,64 +133,43 @@ def test_the_owner_rule_admits_trading_on_the_api_and_the_operator_on_the_screen
 
 
 def test_the_sudoers_file_names_only_these_units_and_only_three_verbs():
+    """One alias of exactly these systemctl commands, one grant that uses it, nothing else."""
     text = SUDOERS.read_text(encoding="utf-8")
 
-    # Parse: drop comments and blanks first
-    lines = [line for line in text.split("\n") if line.strip() and not line.strip().startswith("#")]
+    # 1. Blank and comment lines go, but sudo reads "#include" and "#includedir" as directives.
+    kept = []
+    for line in text.split("\n"):
+        if line.strip().startswith("#"):
+            assert not re.match(r"^\s*#\s*include", line), f"a directive, not a comment: {line!r}"
+        elif line.strip():
+            kept.append(line)
 
-    # Join continuation lines
-    cleaned = "\n".join(lines)
-    joined = cleaned.replace("\\\n", " ")
+    # 2. A backslash right before a newline continues the line; each remaining line is a statement.
+    statements = "\n".join(kept).replace("\\\n", " ").split("\n")
 
-    # Split into statements: find where the grant line starts
-    statements = []
-    remaining = joined
+    # 3. The alias and its grant, so that no other statement can add a rule of its own.
+    assert len(statements) == 2, f"expected two statements, got {[s[:48] for s in statements]!r}"
 
-    # Extract Cmnd_Alias statement (everything before "scura")
-    if "scura" in remaining:
-        parts = remaining.split("scura", 1)
-        alias_part = parts[0].strip()
-        grant_part = "scura" + parts[1]
-        statements.append(alias_part)
-        statements.append(grant_part.strip())
+    # 4. Every alias entry is a systemctl command, and there are exactly 19 of them.
+    alias = re.match(r"^Cmnd_Alias FORECAST_UNITS = (.+)$", statements[0])
+    assert alias, f"the first statement is not the alias: {statements[0][:60]!r}"
+    entries = [entry.strip() for entry in alias.group(1).split(",")]
+    stray = [entry for entry in entries if not entry.startswith("/usr/bin/systemctl ")]
+    assert not stray, f"not systemctl commands: {stray!r}"
+    assert len(entries) == 19, f"expected 19 entries, got {len(entries)}"
 
-    # Require exactly two statements
-    assert len(statements) == 2, "Expected 2 statements, got " + str(len(statements))
+    # 5. Everything after the binary, compared as sorted lists, so that a duplicate, a wildcard
+    # or a second unit name shows up as a difference.
+    units = {*RUNTIME_SERVICES, *TIMERS}
+    expected = sorted([(verb, unit) for unit in units for verb in ("start", "stop")]
+                      + [("restart", "ibkr-recorder.service")])
+    granted = sorted(tuple(entry.split()[1:]) for entry in entries)
+    got, want = Counter(granted), Counter(expected)
+    assert granted == expected, (
+        f"extra: {sorted((got - want).elements())}, missing: {sorted((want - got).elements())}")
 
-    # Parse the Cmnd_Alias statement
-    alias_stmt = statements[0]
-    assert alias_stmt.startswith("Cmnd_Alias FORECAST_UNITS = "), "First statement must be Cmnd_Alias"
-
-    # Extract and validate alias entries
-    alias_body = alias_stmt[len("Cmnd_Alias FORECAST_UNITS = "):].lstrip("\\ ")
-    entries = [e.strip() for e in alias_body.split(",") if e.strip()]
-
-    # Every entry must start with /usr/bin/systemctl
-    for entry in entries:
-        assert entry.startswith("/usr/bin/systemctl "), "Non-systemctl entry: " + entry
-
-    # Extract (verb, unit) pairs from each entry
-    pairs = set()
-    for entry in entries:
-        parts = entry.split()
-        assert len(parts) >= 3, "Entry must have at least verb and unit: " + entry
-        verb = parts[1]
-        unit = parts[2]
-        pairs.add((verb, unit))
-
-    # Build expected pairs using module constants
-    expected_units = {*RUNTIME_SERVICES, *TIMERS}
-    expected_pairs = set()
-    for unit in expected_units:
-        expected_pairs.add(("start", unit))
-        expected_pairs.add(("stop", unit))
-    expected_pairs.add(("restart", "ibkr-recorder.service"))
-
-    assert pairs == expected_pairs, "Got " + str(pairs) + ", expected " + str(expected_pairs)
-
-    # Verify the grant statement
-    grant_stmt = statements[1]
-    assert grant_stmt == "scura ALL=(root) NOPASSWD: FORECAST_UNITS", "Invalid grant: " + grant_stmt
+    # 6. The one grant: the operator, as root, without a password, for exactly that alias.
+    assert statements[1] == "scura ALL=(root) NOPASSWD: FORECAST_UNITS", statements[1]
 
 
 def test_no_file_under_deploy_gives_a_secret_a_value():
@@ -208,4 +188,5 @@ def test_no_file_under_deploy_gives_a_secret_a_value():
 def test_files_under_deploy_are_lf_in_every_checkout():
     attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert "deploy/** text eol=lf" in attributes
-    assert [p for p in (REPO_ROOT / "deploy").rglob("*") if p.is_file() and b"\r" in p.read_bytes()] == []
+    files = [path for path in (REPO_ROOT / "deploy").rglob("*") if path.is_file()]
+    assert [path for path in files if b"\r" in path.read_bytes()] == []
