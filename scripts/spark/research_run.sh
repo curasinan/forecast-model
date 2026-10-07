@@ -34,8 +34,8 @@ while [ $# -gt 0 ]; do
     *) echo "research_run: unknown argument: $1 (the command goes after --)" >&2; exit 2 ;;
   esac
 done
-if [[ ! "$MEMORY" =~ ^[0-9]+[KMGT]$ ]]; then
-  echo "research_run: --memory takes a number with a unit, such as 15G (got '$MEMORY')" >&2
+if [[ ! "$MEMORY" =~ ^[1-9][0-9]*[KMGT]$ ]]; then
+  echo "research_run: --memory takes a positive number with a unit K, M, G or T, such as 15G (got '$MEMORY')" >&2
   exit 2
 fi
 if [ $# -eq 0 ]; then

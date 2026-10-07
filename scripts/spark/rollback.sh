@@ -18,7 +18,11 @@
 #   finds a Gateway -- the script stops with exit 4 and says so: nothing has been copied, and
 #   nobody may log in on the Zenbook, because the Spark may still hold the session. A Spark
 #   that cannot be reached cannot be proved to have let go from here: wait until it answers,
-#   or stop the container at the machine itself.
+#   or stop the container at the machine itself. The same warning is printed when the script
+#   is interrupted (Ctrl-C, a closed terminal, a kill) before the check has passed: the Spark
+#   may be stopped half way. Every ssh call here runs with BatchMode and keepalive options
+#   (SSH_OPTS), so a Spark that stops answering ends the call within about a minute instead
+#   of hanging.
 #   4. Copy the Spark's live root into the Zenbook's kept root, ~/quant_data_zenbook_final.
 #      No --delete: nothing the Zenbook holds is removed. This is the ONLY place where data
 #      is copied from the Spark into a Zenbook live root; it refuses (exit 3) a destination
@@ -34,6 +38,9 @@ HOST="${SPARK_HOST:-spark}"
 SRC="$HOST:/srv/quant_data"
 DEST="${ROLLBACK_DEST:-/mnt/c/Users/asus/quant_data_zenbook_final}"
 SSH="${SPARK_SSH:-/mnt/c/Windows/System32/OpenSSH/ssh.exe}"
+# Every direct ssh call: never prompt, give up connecting after 20 s, and drop a connection
+# that has been silent for a minute. (The -e string of the copy below carries its own pair.)
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 MARKER=".mirror-of-spark"
 TIMERS="ibkr-health.timer ibkr-paper-sync.timer climate-labels.timer paper-book-backup.timer"
 SERVICES="ibkr-health.service ibkr-paper-sync.service climate-labels.service paper-book-backup.service ibkr-recorder.service"
@@ -69,10 +76,30 @@ run() {
   fi
 }
 
+# From the moment the Spark is first asked to let go until the session check has passed, the
+# Spark may hold the session (stopped half way, or not at all), so every exit in that stretch
+# -- a failed step, Ctrl-C, a closed terminal, a kill -- ends with the same warning. bash
+# reports status 0 to an EXIT trap that a signal triggered, so the trap cannot read the exit
+# status: it is armed only for a real run and only once the Spark is being asked (so --help,
+# a dry run, a usage error and a refused destination stay quiet), and RELEASED disarms it.
+RELEASED=0
+WARNED=0
+warn_not_released() {
+  WARNED=1
+  echo "rollback: the Spark may still hold the Gateway session and nothing was copied. Do NOT log in on the Zenbook." >&2
+}
+
 still_held() {
   echo "rollback: $1" >&2
-  echo "rollback: the Spark may still hold the Gateway session and nothing was copied. Do NOT log in on the Zenbook." >&2
+  warn_not_released
   exit 4
+}
+
+on_exit() {
+  if [ "$RELEASED" -eq 0 ] && [ "$WARNED" -eq 0 ]; then
+    echo "rollback: stopped before the session check passed" >&2
+    warn_not_released
+  fi
 }
 
 # Timers first, so nothing starts a service that has just been stopped.
@@ -81,18 +108,26 @@ for unit in $TIMERS $SERVICES; do
   STOP_CMD+="sudo -n /usr/bin/systemctl stop $unit && "
 done
 STOP_CMD+="echo 'all runtime units are stopped'"
+# The command that decides whether the Zenbook may log in: one definition, so that what a
+# dry run prints is what the real run sends.
+CHECK_CMD="python3 - --port 4002 --container ibgw"
 
 echo "== 1/5 stop the Spark's timers and services"
-run "$SSH" "$HOST" "$STOP_CMD" || still_held "the Spark's units could not be stopped (exit $?)"
+if [ "$DRY_RUN" -eq 0 ]; then
+  trap on_exit EXIT
+fi
+run "$SSH" "${SSH_OPTS[@]}" "$HOST" "$STOP_CMD" || still_held "the Spark's units could not be stopped (exit $?)"
 
 echo "== 2/5 stop the Gateway container"
-run "$SSH" "$HOST" "cd ~/ibgw && docker compose stop" \
+run "$SSH" "${SSH_OPTS[@]}" "$HOST" "cd ~/ibgw && docker compose stop" \
   || still_held "the Gateway container could not be stopped (exit $?)"
 
 echo "== 3/5 session check on the Spark"
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "DRY-RUN: $SSH $HOST python3 - --port 4002 --container ibgw < $HERE/session_check.py"
-elif ! "$SSH" "$HOST" "python3 - --port 4002 --container ibgw" < "$HERE/session_check.py"; then
+  echo "DRY-RUN: $SSH ${SSH_OPTS[*]} $HOST $CHECK_CMD < $HERE/session_check.py"
+elif "$SSH" "${SSH_OPTS[@]}" "$HOST" "$CHECK_CMD" < "$HERE/session_check.py"; then
+  RELEASED=1
+else
   still_held "the session check on the Spark did not pass"
 fi
 

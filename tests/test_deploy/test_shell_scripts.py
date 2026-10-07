@@ -7,11 +7,14 @@ System32\\bash.exe is the WSL launcher and is never used here.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -100,6 +103,35 @@ def test_an_unknown_argument_is_a_usage_error(name):
     assert "unknown argument" in done.stderr
 
 
+# ----------------------------------------------------------------- the exclude lists agree
+
+COPIES_FROM_THE_SPARK = ["pull_snapshot.sh", "mirror_live.sh", "rollback.sh"]
+MARKER_ENTRY = "/$MARKER"  # the pattern as the scripts spell it; they set MARKER=".mirror-of-spark"
+
+
+def exclude_patterns(name: str) -> list[str]:
+    """The patterns of the EXCLUDES=(--exclude PATTERN ...) array a script defines."""
+    text = (SCRIPTS / name).read_text(encoding="utf-8")
+    match = re.search(r"^EXCLUDES=\((.*?)\)", text, re.MULTILINE | re.DOTALL)
+    assert match, f"{name} defines no EXCLUDES array"
+    tokens = shlex.split(match.group(1))
+    assert tokens[0::2] == ["--exclude"] * (len(tokens) // 2), tokens
+    return tokens[1::2]
+
+
+def test_the_exclude_lists_of_the_four_copy_scripts_cannot_drift_apart():
+    lists = {name: exclude_patterns(name) for name in [*COPIES_FROM_THE_SPARK, "push_snapshot.sh"]}
+    # the three scripts that copy FROM the Spark share one list, marker entry included: the
+    # marker of the mirror (or of a kept live root) is never overwritten by the Spark's own
+    assert lists["pull_snapshot.sh"] == lists["mirror_live.sh"] == lists["rollback.sh"]
+    assert MARKER_ENTRY in lists["pull_snapshot.sh"]
+    # push_snapshot.sh refuses a marked source, so the marker entry would be inert there; but
+    # with that one entry set aside, all four are the same list of volatile files
+    volatile = {name: [p for p in patterns if p != MARKER_ENTRY] for name, patterns in lists.items()}
+    assert len({tuple(patterns) for patterns in volatile.values()}) == 1, volatile
+    assert len(volatile["push_snapshot.sh"]) >= 5  # state/, *.tmp, the journal, wal and shm files
+
+
 # ----------------------------------------------------------------- push_snapshot.sh
 
 
@@ -137,6 +169,18 @@ def test_push_cutover_goes_into_the_live_root_as_trading(unmarked, tmp_path):
     assert " spark-rt cd /home/trading/forecast-model " in verify
     assert verify.endswith("scripts/spark/verify_mirror.py --root /srv/quant_data")
     assert "climate_data/raw/" not in push
+
+
+def test_push_cutover_refuses_a_source_that_is_a_mirror(mirror, tmp_path):
+    # the cutover push goes into the Spark's LIVE root: the mirror rule matters most there
+    snapshot = tmp_path / "snapshot"
+    done = run_script("push_snapshot.sh", "--cutover", "--dry-run", QUANT_DATA_SRC=mirror.as_posix(),
+                      QUANT_DATA_SNAPSHOT=snapshot.as_posix())
+    assert done.returncode == 3
+    assert MARKER in done.stderr and "never pushed" in done.stderr
+    assert "DRY-RUN" not in done.stdout  # it refused before it printed a single command
+    assert not snapshot.exists()
+    assert sorted(p.name for p in mirror.iterdir()) == [MARKER]
 
 
 # ----------------------------------------------------------------- pull_snapshot.sh
@@ -340,6 +384,96 @@ def test_a_failed_copy_says_the_session_is_released_and_to_run_again(unmarked, t
     assert "by hand" not in done.stdout
 
 
+SSH_OPTS = "-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+# Logs the arguments of every call and, for the session check, what arrived on its stdin.
+SSH_THAT_LOGS = """\
+echo "argv: $*" >> "$STAND_IN_LOG"
+case "$*" in
+  *"python3 -"*)
+    cat > "$STAND_IN_STDIN"
+    echo "stdin: $(wc -c < "$STAND_IN_STDIN" | tr -d ' ') bytes" >> "$STAND_IN_LOG" ;;
+esac
+exit 0
+"""
+
+
+def run_logged_rollback(tmp_path: Path) -> tuple[list[str], Path]:
+    """A --no-copy rollback against an ssh that logs each call: the log lines, and the file that
+    holds what the session check read on its stdin."""
+    log, taken = tmp_path / "calls.log", tmp_path / "stdin.bin"
+    ssh = stand_in(tmp_path, "ssh_that_logs", SSH_THAT_LOGS)
+    done = run_script("rollback.sh", "--no-copy", SPARK_SSH=ssh,
+                      STAND_IN_LOG=log.as_posix(), STAND_IN_STDIN=taken.as_posix())
+    assert done.returncode == 0, done.stderr
+    return log.read_text(encoding="utf-8").splitlines(), taken
+
+
+def test_rollback_sends_the_session_check_once_with_this_machines_copy_on_stdin(tmp_path):
+    # The dry run prints this command; only a real run shows what the Spark is really asked,
+    # and the Zenbook's login depends on the answer.
+    lines, taken = run_logged_rollback(tmp_path)
+    calls = [line.removeprefix("argv: ") for line in lines if line.startswith("argv: ")]
+    assert len(calls) == 3  # stop the units, stop the container, check
+    assert [call for call in calls if "python3 -" in call] == [
+        f"{SSH_OPTS} spark python3 - --port 4002 --container ibgw"]
+    assert calls[2].endswith(" python3 - --port 4002 --container ibgw")  # and it comes last
+    shipped = (SCRIPTS / "session_check.py").read_bytes()
+    assert f"stdin: {len(shipped)} bytes" in lines
+    assert hashlib.sha256(taken.read_bytes()).hexdigest() == hashlib.sha256(shipped).hexdigest()
+
+
+def test_every_direct_ssh_call_of_a_rollback_carries_the_connection_options(tmp_path):
+    lines, _taken = run_logged_rollback(tmp_path)
+    calls = [line.removeprefix("argv: ") for line in lines if line.startswith("argv: ")]
+    assert len(calls) == 3
+    assert all(call.startswith(f"{SSH_OPTS} spark ") for call in calls), calls
+
+
+# Stands in for an ssh that is interrupted while it works: it signals the script that started
+# it, as Ctrl-C, a closed terminal or a kill would, and keeps hanging for a moment. A real
+# Ctrl-C reaches ssh too, so for INT it dies of the signal as well.
+SSH_THAT_GETS_INTERRUPTED = """\
+kill -"$STAND_IN_SIGNAL" "$PPID"
+[ "$STAND_IN_SIGNAL" != INT ] || kill -INT $$
+sleep 2
+exit 0
+"""
+
+
+@pytest.mark.parametrize("signal_name", ["TERM", "HUP", "INT"])
+def test_rollback_interrupted_before_the_check_says_not_to_log_in(unmarked, tmp_path, signal_name):
+    ssh = stand_in(tmp_path, "ssh_interrupted", SSH_THAT_GETS_INTERRUPTED)
+    done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh,
+                      STAND_IN_SIGNAL=signal_name)
+    assert done.returncode != 0
+    assert done.stderr.count("Do NOT log in on the Zenbook") == 1
+    assert "could not be stopped" not in done.stderr  # no failed step spoke: the exit trap did
+    assert "== 2/5" not in done.stdout and "rsync" not in done.stdout
+    assert sorted(p.name for p in unmarked.iterdir()) == ["keep.txt"]
+
+
+def test_rollback_warns_once_not_twice_when_a_step_fails(unmarked, tmp_path):
+    ssh = stand_in(tmp_path, "ssh_down", "exit 255\n")
+    done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh)
+    assert done.returncode == 4
+    assert done.stderr.count("Do NOT log in on the Zenbook") == 1  # the step spoke; the trap adds nothing
+    assert "stopped before the session check passed" not in done.stderr
+
+
+def test_rollback_stays_quiet_when_the_spark_was_never_asked(mirror, unmarked, tmp_path):
+    runs = [
+        run_script("rollback.sh", "--help"),
+        run_script("rollback.sh", "--no-such-option"),
+        run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=(tmp_path / "absent").as_posix()),
+        run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=mirror.as_posix()),
+        run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix()),
+    ]
+    assert [done.returncode for done in runs] == [0, 2, 3, 3, 0]
+    for done in runs:
+        assert "Do NOT log in" not in done.stderr
+
+
 DEPLOY_SSH = """\
 echo "$*" >> "$STAND_IN_LOG"
 case "$*" in
@@ -347,7 +481,16 @@ case "$*" in
   *"cmp -s"*) [ -z "${STAND_IN_CHANGED:-}" ] || echo "$STAND_IN_CHANGED" ;;
   *"recorder_state.json"*) echo "heartbeat is 30s old" ;;
   *"systemctl restart"*) ;;
-  *"is-active ibkr-recorder.service") echo "${STAND_IN_STATE:-active}"; [ "${STAND_IN_STATE:-active}" = active ] || exit 3 ;;
+  *"is-active ibkr-recorder.service")
+    # the first question and the one asked again before the restart may be answered differently
+    if [ "$(grep -c 'is-active ibkr-recorder.service' "$STAND_IN_LOG")" -lt 2 ]; then
+      state="${STAND_IN_STATE:-active}"; code="${STAND_IN_STATE_EXIT:-}"
+    else
+      state="${STAND_IN_STATE_AFTER:-${STAND_IN_STATE:-active}}"; code="${STAND_IN_STATE_EXIT_AFTER:-}"
+    fi
+    [ -z "$code" ] || exit "$code"
+    echo "$state"
+    [ "$state" = active ] || exit 3 ;;
 esac
 exit 0
 """
@@ -388,6 +531,169 @@ def test_deploy_stops_for_a_unit_file_that_must_be_installed_by_hand(tmp_path):
     assert not [call for call in calls if "systemctl restart" in call or "recorder_state.json" in call]
 
 
+def test_deploy_asks_again_right_before_the_restart(tmp_path):
+    done, calls = run_deploy(tmp_path)
+    assert done.returncode == 0, done.stderr
+    asks = [i for i, call in enumerate(calls) if call.endswith("is-active ibkr-recorder.service")]
+    waits = [i for i, call in enumerate(calls) if "recorder_state.json" in call]
+    restarts = [i for i, call in enumerate(calls) if "systemctl restart" in call]
+    assert len(asks) == 2 and len(waits) == 1 and len(restarts) == 1
+    assert asks[0] < waits[0] < asks[1] == restarts[0] - 1  # nothing in between the answer and the restart
+
+
+def test_deploy_stops_when_the_recorders_state_cannot_be_asked(tmp_path):
+    # a dead ssh (255, no output) is no answer: it must not read as "not running"
+    done, calls = run_deploy(tmp_path, STAND_IN_STATE_EXIT="255")
+    assert done.returncode == 255
+    assert "state query" in done.stderr and "is-active ibkr-recorder.service" in done.stderr
+    assert "NOT restarted" in done.stderr
+    assert "not running" not in done.stdout and "== 4/4" not in done.stdout
+    assert not [call for call in calls if "systemctl restart" in call or "recorder_state.json" in call]
+
+
+def test_deploy_does_not_restart_a_recorder_that_stopped_during_the_wait(tmp_path):
+    done, calls = run_deploy(tmp_path, STAND_IN_STATE_AFTER="inactive")
+    assert done.returncode == 0, done.stderr
+    assert "recorder no longer active; NOT restarted" in done.stdout
+    assert [call for call in calls if "recorder_state.json" in call]  # it did wait
+    assert not [call for call in calls if "systemctl restart" in call]
+    assert "== 4/4" in done.stdout  # and the units' states were still reported
+
+
+def test_deploy_stops_when_the_second_answer_cannot_be_had(tmp_path):
+    done, calls = run_deploy(tmp_path, STAND_IN_STATE_EXIT_AFTER="255")
+    assert done.returncode == 255
+    assert "state query" in done.stderr and "NOT restarted" in done.stderr
+    assert not [call for call in calls if "systemctl restart" in call]
+
+
+# ----------------------------------------------------------------- the deploy's remote command lines
+#
+# deploy.sh keeps its remote commands in single-quoted variables: `bash -n` on the script cannot
+# see inside them and a stand-in ssh only matches substrings of them. So each one is taken from
+# the dry run (the very text a real run sends), then parsed and run here in bash, as the Spark's
+# shell would run it. What a command uses of the machine (sleep, the clock, git, systemctl) is a
+# shell function in a prologue, which shadows the program of the same name; a script on PATH
+# would cost a bash start per call, and the wait calls sleep 132 times.
+
+CLONE = "/home/trading/forecast-model"
+INSTALLED = "/etc/systemd/system"
+HEARTBEAT = "/srv/quant_data/ibkr_ticks/state/recorder_state.json"
+
+
+@pytest.fixture(scope="module")
+def remote() -> dict[str, str]:
+    """The remote command lines of a deploy by what they do, as its dry run prints them."""
+    done = run_script("deploy.sh", "--dry-run", SSH="ssh")
+    assert done.returncode == 0, done.stderr
+    by_step: dict[str, list[tuple[str, str]]] = {}
+    step = ""
+    for line in done.stdout.splitlines():
+        header = re.match(r"== (\d)/4 ", line)
+        if header:
+            step = header.group(1)
+        elif line.startswith("DRY-RUN: ssh "):
+            host, _, command = line.removeprefix("DRY-RUN: ssh ").partition(" ")
+            by_step.setdefault(step, []).append((host, command))
+    ((diff_host, diff),) = by_step["2"]
+    ((state_host, state), (wait_host, wait), (again_host, again), (restart_host, restart)) = by_step["3"]
+    ((status_host, status),) = by_step["4"]
+    assert state == again  # the same question is asked again right before the restart
+    assert {diff_host, state_host, wait_host, again_host, status_host} == {"spark-rt"}
+    assert restart_host == "spark"  # the operator, who is the one allowed to restart the unit
+    return {"diff": diff, "state": state, "wait": wait, "restart": restart, "status": status}
+
+
+def run_command_line(tmp_path: Path, command: str, prologue: str = "",
+                     **env: str) -> subprocess.CompletedProcess:
+    script = tmp_path / "command_line.sh"
+    script.write_bytes((prologue + command + "\n").encode("utf-8"))
+    return subprocess.run([BASH, script.as_posix()], env={**os.environ, **env},
+                          capture_output=True, text=True, timeout=300)
+
+
+# The sleeps of the wait are recorded, not slept; after 300 of them a loop that never ends
+# fails at once instead of running on. The clock and stat are fixed where a test needs that.
+SLEEP_STUB = ("__sleeps=0\n"
+              'sleep() { echo "$1" >> "$SLEEP_LOG"; __sleeps=$((__sleeps + 1)); '
+              '[ "$__sleeps" -lt 300 ] || exit 99; }\n')
+CLOCK_STUB = ('date() { echo "$FAKE_NOW"; }\n'
+              'stat() { [ -n "$FAKE_MTIME" ] || return 1; echo "$FAKE_MTIME"; }\n')
+
+
+@pytest.mark.parametrize("name", ["diff", "state", "wait", "restart", "status"])
+def test_each_remote_command_line_parses(remote, tmp_path, name):
+    script = tmp_path / f"{name}.sh"
+    script.write_bytes((remote[name] + "\n").encode("utf-8"))
+    done = subprocess.run([BASH, "-n", script.as_posix()], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+
+
+def test_the_unit_comparison_prints_the_changed_and_missing_units_and_nothing_else(remote, tmp_path):
+    assert CLONE in remote["diff"] and INSTALLED in remote["diff"]
+    installed = tmp_path / "installed"
+    shutil.copytree(UNIT_DIR, installed)
+    clone = tmp_path / "clone"
+    shutil.copytree(UNIT_DIR, clone / "deploy" / "spark" / "systemd")
+
+    def compare(clone_dir: Path) -> subprocess.CompletedProcess:
+        command = remote["diff"].replace(CLONE, clone_dir.as_posix())
+        return run_command_line(tmp_path, command.replace(INSTALLED, installed.as_posix()))
+
+    same = compare(clone)
+    assert same.returncode == 0 and same.stdout == "", same.stderr  # identical sets: not a word
+
+    with (installed / "ibkr-health.timer").open("ab") as handle:
+        handle.write(b"# edited on the Spark\n")
+    (installed / "ibkr-recorder.service").unlink()
+    differs = compare(clone)
+    assert differs.returncode == 0, differs.stderr
+    assert sorted(differs.stdout.split()) == ["ibkr-health.timer", "ibkr-recorder.service"]
+
+    bare = tmp_path / "bare"
+    (bare / "deploy" / "spark" / "systemd").mkdir(parents=True)
+    nothing = compare(bare)  # no unit file in the clone: the glob matches nothing, and not a word
+    assert nothing.returncode == 0 and nothing.stdout == "", nothing.stderr
+
+
+@pytest.mark.parametrize("age", [None, 125], ids=["no-heartbeat-file", "heartbeat-125s-old"])
+def test_the_wait_gives_up_after_132_sleeps_of_10_seconds(remote, tmp_path, age):
+    assert remote["wait"].startswith(f"f={HEARTBEAT}; ")  # the file the recorder writes
+    sleeps = tmp_path / "sleeps.log"
+    now = 1_000_000
+    done = run_command_line(tmp_path, remote["wait"], SLEEP_STUB + CLOCK_STUB,
+                            SLEEP_LOG=sleeps.as_posix(), FAKE_NOW=str(now),
+                            FAKE_MTIME="" if age is None else str(now - age))
+    assert done.returncode == 1, (done.returncode, done.stderr)
+    assert sleeps.read_text(encoding="utf-8").split() == ["10"] * 132  # 22 minutes in 10 s steps
+    assert done.stdout.count("waiting for the sweep to finish") == 22  # one line a minute
+
+
+def test_the_wait_returns_at_once_for_a_heartbeat_100_seconds_old(remote, tmp_path):
+    assert remote["wait"].startswith(f"f={HEARTBEAT}; ")
+    heartbeat = tmp_path / "recorder_state.json"
+    heartbeat.write_text("{}", encoding="utf-8")
+    stamp = time.time() - 100
+    os.utime(heartbeat, (stamp, stamp))
+    sleeps = tmp_path / "sleeps.log"
+    command = remote["wait"].replace(HEARTBEAT, heartbeat.as_posix(), 1)
+    done = run_command_line(tmp_path, command, SLEEP_STUB, SLEEP_LOG=sleeps.as_posix())
+    assert done.returncode == 0, done.stderr
+    age = re.fullmatch(r"heartbeat is (\d+)s old", done.stdout.strip())
+    assert age and 100 <= int(age.group(1)) <= 105, done.stdout  # the real stat and date
+    assert not sleeps.exists()  # not one sleep
+
+
+def test_the_status_line_reports_the_commit_the_recorder_and_every_timer(remote, tmp_path):
+    prologue = 'git() { echo "abc1234 a commit"; }\nsystemctl() { echo active; }\n'
+    done = run_command_line(tmp_path, remote["status"], prologue)
+    assert done.returncode == 0, done.stderr
+    first, *states = done.stdout.splitlines()
+    assert first == "abc1234 a commit"
+    assert sorted(states) == sorted(
+        f"{unit}: active" for unit in {"ibkr-recorder.service"} | {p.name for p in UNIT_DIR.glob("*.timer")})
+
+
 # ----------------------------------------------------------------- research_run.sh
 
 
@@ -412,3 +718,17 @@ def test_research_run_refuses_a_missing_command_and_a_ceiling_without_a_unit():
     done = run_script("research_run.sh", "--memory", "15", "--dry-run", "--", "true")
     assert done.returncode == 2
     assert "15G" in done.stderr
+
+
+@pytest.mark.parametrize("value", ["15", "0G", "00G", "15g", "60GB", "G"])
+def test_research_run_refuses_a_ceiling_that_is_not_a_positive_number_with_a_unit(value):
+    done = run_script("research_run.sh", "--memory", value, "--dry-run", "--", "true")
+    assert done.returncode == 2
+    assert "15G" in done.stderr and "DRY-RUN" not in done.stdout
+
+
+@pytest.mark.parametrize("value", ["1K", "512M", "10G", "15G", "2T"])
+def test_research_run_takes_any_positive_whole_number_with_a_unit(value):
+    done = run_script("research_run.sh", "--memory", value, "--dry-run", "--", "true")
+    assert done.returncode == 0, done.stderr
+    assert f"-p MemoryMax={value} " in done.stdout

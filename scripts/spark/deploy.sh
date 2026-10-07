@@ -14,9 +14,13 @@
 #      Run the deploy again afterwards.
 #   3. Unless --no-restart, and only if the recorder is running: wait until it has just
 #      finished a sweep (its heartbeat file is younger than 120 s; at most 22 minutes, one
-#      sweep interval plus two), then restart ibkr-recorder.service, so a deploy does not
-#      cost a sweep. A recorder that is not running is left alone: a deploy never starts
+#      sweep interval plus two), then ask again and, if it still runs, restart
+#      ibkr-recorder.service, so a deploy does not cost a sweep. A recorder that is not
+#      running, or no longer running after the wait, is left alone: a deploy never starts
 #      the runtime (before the cutover, and after a rollback, it is stopped on purpose).
+#      Only the two answers of `systemctl is-active` count (exit 0, active; exit 3, any
+#      other state). No answer at all, from a dead ssh for one, stops the deploy with ssh's
+#      own status, because "could not ask" must not read as "not running".
 #      The timers' services are one-shot and pick the new code up at their next run.
 #   4. Print the deployed commit and the units' states.
 # Not done here: Python dependencies. When pyproject.toml or the constraints file changed,
@@ -74,6 +78,20 @@ WAIT_CMD='f='"$HEARTBEAT"'; i=0; while [ "$i" -lt 132 ]; do age=$(( $(date +%s) 
 RESTART_CMD='sudo -n /usr/bin/systemctl restart ibkr-recorder.service'
 STATUS_CMD='git -C '"$CLONE"' log --oneline -1; for u in '"$UNITS"'; do echo "$u: $(systemctl is-active "$u")"; done'
 
+# Ask the Spark whether the recorder runs; sets $state. systemctl is-active answers with exit
+# 0 ("active") or exit 3 (every other state it can name), so those two statuses are answers
+# and nothing else is: a dead ssh (255, no output) is not "not running", and a deploy that
+# cannot tell must stop rather than skip the restart in silence.
+query_state() {
+  local rc=0
+  state=$("$SSH" "$REMOTE" "$STATE_CMD" | tr -d '\r') || rc=$?
+  case "$rc" in
+    0|3) ;;
+    *) echo "deploy: the state query ($STATE_CMD, on $REMOTE) failed with exit $rc, so the recorder's state is unknown; the recorder was NOT restarted" >&2
+       exit "$rc" ;;
+  esac
+}
+
 echo "== 1/4 push main to $REMOTE"
 run "$GIT" push "$REMOTE" main
 
@@ -101,10 +119,11 @@ elif [ "$DRY_RUN" -eq 1 ]; then
   echo "== 3/4 restart the recorder right after a sweep, if it is running"
   echo "DRY-RUN: $SSH $REMOTE $STATE_CMD"
   echo "DRY-RUN: $SSH $REMOTE $WAIT_CMD"
+  echo "DRY-RUN: $SSH $REMOTE $STATE_CMD"
   echo "DRY-RUN: $SSH $OPERATOR $RESTART_CMD"
 else
   echo "== 3/4 restart the recorder right after a sweep, if it is running"
-  state=$("$SSH" "$REMOTE" "$STATE_CMD" | tr -d '\r' || true)
+  query_state
   if [ "$state" != "active" ]; then
     echo "deploy: the recorder is not running on the Spark (state: ${state:-unknown}); a deploy does not start it"
   else
@@ -118,7 +137,12 @@ else
       *) echo "deploy: could not watch the heartbeat (ssh exit $rc); the recorder was NOT restarted" >&2
          exit "$rc" ;;
     esac
-    "$SSH" "$OPERATOR" "$RESTART_CMD"
+    query_state
+    if [ "$state" != "active" ]; then
+      echo "deploy: recorder no longer active; NOT restarted (state: ${state:-unknown})"
+    else
+      "$SSH" "$OPERATOR" "$RESTART_CMD"
+    fi
   fi
 fi
 
