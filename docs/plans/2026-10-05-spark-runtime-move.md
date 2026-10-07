@@ -46,7 +46,7 @@
 | `monitoring/backup_paper_book.py` | daily copy of the operational files with a manifest, 30 kept | 4 |
 | `scripts/spark/restore_check.py` | restore a copy into a scratch root and verify it | 5 |
 | `deploy/spark/systemd/*.service`, `*.timer` | the runtime's units and the owner-rule unit | 6 |
-| `deploy/spark/sudoers/forecast-runtime` | lets `scura` start, stop, restart these units only | 6 |
+| `deploy/spark/sudoers/forecast-runtime` | lets `scura` start and stop the nine units and restart the recorder only | 6 |
 | `deploy/spark/ibgw/docker-compose.yml`, `env.example` | the Gateway project, pinned by the digest the spike tried | 0 |
 | `.gitattributes` (modify) | `deploy/**` is LF | 6 (or 0, whichever lands first) |
 | `scripts/spark/deploy.sh` | push `main` to the runtime clone, restart the recorder after a sweep | 7 |
@@ -328,7 +328,7 @@ What a start after the kill switch needs is looked at, not assumed. **(account h
 
 - [ ] **Step 16: Write the spike report and commit it**
 
-Create `docs/spark_runtime_spike_<date>.md` with: the date and duration; the image tag and digest from step 8; the Gateway and IBC versions the container logs print (`docker logs ibgw 2>&1 | grep -iE "version|IBC" | head`; read the lines first and paste version lines only: a line that carries a user name or an account id does not go into the report); a table of the nine checks with the command's output line and pass or fail; the environment variable names and the container port that actually worked; what a start after the kill switch showed in step 15 (the login dialog, so a manual login); the account holder's answer on assumption A7 (does the Spark power on by itself when power returns, and which firmware setting says so); and the verdict, `GO` or `STOP: <which assumption failed, which fallback>`. No account id, no password, no screen password.
+Create `docs/spark_runtime_spike_<date>.md` with: the date and duration; the image tag and digest from step 8; the Gateway and IBC versions the container logs print (`docker logs ibgw 2>&1 | grep -iE "version|IBC" | head`; read the lines first and paste version lines only: a line that carries a user name or an account id does not go into the report); a table of the nine checks with the command's output line and pass or fail; the environment variable names and the container port that actually worked; the `userland-proxy` setting of Docker (`"$SSH" spark 'cat /etc/docker/daemon.json 2>/dev/null || echo "no daemon.json: the default, true"'`; paste the `userland-proxy` line only), because the owner rule's `-o lo` match and the session check's port leg both depend on docker-proxy listening on the Gateway's port; what a start after the kill switch showed in step 15 (the login dialog, so a manual login); the account holder's answer on assumption A7 (does the Spark power on by itself when power returns, and which firmware setting says so); and the verdict, `GO` or `STOP: <which assumption failed, which fallback>`. No account id, no password, no screen password.
 
 ```bash
 git add docs/spark_runtime_spike_*.md
@@ -2477,9 +2477,10 @@ WantedBy=multi-user.target
 
 ```
 # Install as /etc/sudoers.d/forecast-runtime, mode 0440, after `visudo -cf` accepts it.
-# Lets the operator start, stop and restart the runtime's units from a deploy or a
-# rollback, without a password, and nothing else. Installing or changing a unit file
-# stays a manual sudo step.
+# Lets the operator start and stop the runtime's units (the recorder, the four timers and
+# the four services behind them) and restart the recorder, from a deploy or a rollback,
+# without a password, and nothing else: no other unit, no other verb. Installing or
+# changing a unit file stays a manual sudo step.
 Cmnd_Alias FORECAST_UNITS = \
     /usr/bin/systemctl start ibkr-recorder.service, \
     /usr/bin/systemctl stop ibkr-recorder.service, \
@@ -4617,9 +4618,10 @@ executable bits).
 | `paper-book-backup.timer` | `monitoring/backup_paper_book.py`, then a ping | 21:00 |
 
 The unit files live in `deploy/spark/systemd/` and are installed under
-`/etc/systemd/system` by the account holder. `scura` may start, stop and
-restart exactly these units without a password
-(`deploy/spark/sudoers/forecast-runtime`); enabling, disabling and installing
+`/etc/systemd/system` by the account holder. `scura` may, without a password,
+start and stop the units above and the services behind the timers, and restart
+`ibkr-recorder.service`; nothing else, and no other verb
+(`deploy/spark/sudoers/forecast-runtime`). Enabling, disabling and installing
 need `sudo` with a password. Each timer names its zone, so changing the
 Spark's clock zone moves no job by itself, and a run missed while the Spark
 was off fires at the next boot.
@@ -4672,10 +4674,16 @@ at their next run either way.
   `sudo systemctl enable --now <its name>`.
 - The research clone is a separate delivery: `git push spark main`
   (section 2).
-- When `pyproject.toml` or the constraints file changed, install first, as
-  `trading`, then deploy:
+- When `pyproject.toml` or the constraints file changed, deliver the code
+  without a restart first, then install as `trading` from the runtime clone,
+  which now holds the new files, then deploy again, so that the recorder is
+  restarted after a fresh sweep on the new code with the new packages (before
+  the first push the clone still holds the old files, and an install made then
+  would put the old set back):
 
+      bash scripts/spark/deploy.sh --no-restart
       "$SSH" spark-rt 'cd forecast-model && uv pip install --python .venv/bin/python -e ".[dev,ibkr,climate,mcp,web,trading]" -c "$(ls constraints/zenbook-*.txt | tail -n 1)"'
+      bash scripts/spark/deploy.sh
 
 ### 7.5 Scripts run by hand
 
@@ -4780,14 +4788,16 @@ address needs no restart.
 container, checks that the Spark no longer holds a session, and only then
 copies the Spark's live root into the Zenbook's kept root
 `~/quant_data_zenbook_final` (nothing is deleted there). It ends by printing
-what the account holder does: disable the units on the Spark, put the kept
-root back with `scripts/scheduling/swap_live_root_for_mirror.ps1` and its
-`-Undo` switch, re-enable the four scheduled tasks, log in on the Zenbook.
-Only exit 0 allows that login. Exit 4 means the Spark may still hold the
-session (it could not be reached, a stop was refused, or the check found a
-Gateway): do not log in on the Zenbook. Any other exit is a copy that
-failed after the session was released: run the script again. `--no-copy`
-runs the Spark side only, for a rehearsal.
+what the account holder does, in this order: disable the units on the Spark,
+disable the pull task `\Spark\Spark Pull`, check the copied book with
+`scripts/spark/restore_check.py --from ~/quant_data_zenbook_final --scratch
+<a fresh directory>` (it must print `RESTORE OK`), put the kept root back with
+`scripts/scheduling/swap_live_root_for_mirror.ps1` and its `-Undo` switch,
+re-enable the four scheduled tasks, log in on the Zenbook. Only exit 0 allows
+that login. Exit 4 means the Spark may still hold the session (it could not be
+reached, a stop was refused, or the check found a Gateway): do not log in on
+the Zenbook. Exit 5 is a copy that failed after the session was released: run
+the script again. `--no-copy` runs the Spark side only, for a rehearsal.
 
 ### 7.10 Research jobs
 
@@ -4919,7 +4929,7 @@ git push spark-rt main
 "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python -m pytest -q 2>&1 | tail -n 1'
 ```
 
-Expected: `1705 passed, 1 skipped` and `All checks passed!` on the Zenbook (1536 before this plan plus its 169 tests, as counted in a trial run of the plan's code; more if other work has landed since); `0` uncommitted files; the fast-forward; `1696 passed, 10 skipped` from both clones on the Spark (the nine tests that need Windows PowerShell are skipped there) and `All checks passed!`. Whether `main` also goes to GitHub (`git push origin main`) is the account holder's call: ask, do not assume.
+Expected: no failure and `All checks passed!` on the Zenbook; `0` uncommitted files; the fast-forward; no failure and `All checks passed!` from both clones on the Spark. The counts are not fixed numbers, because more work may have landed: the Spark's passed count is the Zenbook's, minus the tests that need Windows PowerShell (`tests/test_deploy/test_powershell_scripts.py`, skipped there), plus the one POSIX-only test (the umask test of `tests/test_monitoring/test_backup_paper_book.py`, skipped on the Zenbook). Whether `main` also goes to GitHub (`git push origin main`) is the account holder's call: ask, do not assume.
 
 - [ ] **Step 2 (account holder): install the units, the sudoers drop-in and the owner rule**
 
@@ -5053,7 +5063,7 @@ Expected: `heartbeat: sent`. **(account holder)** pauses the check `offbox-pull`
 
 - [ ] **Step 9: The rehearsals**
 
-Each line has an expected result; one that differs is fixed before the cutover is scheduled. Two of them are real runs, not dry runs: the Spark side of the rollback (everything there is stopped, so stopping it again changes nothing, but sudo, docker and the piped check are really used), and a pull of one small directory into a scratch mirror (ssh without a prompt from WSL, the read through the group, rsync at both ends).
+Each line has an expected result; one that differs is fixed before the cutover is scheduled. Run them from the main checkout, after step 1 has landed the build there: `REPO_WSL` points at it, and its `.py` files are CRLF (the checkout converts them), which is the form of `session_check.py` that `rollback.sh` pipes to the Spark's python, so the rehearsal also shows that the Spark's python runs that copy. Three of them are real runs, not dry runs: the Spark side of the rollback (everything there is stopped, so stopping it again changes nothing, but sudo, docker and the piped check are really used), a pull of one small directory into a scratch mirror (ssh without a prompt from WSL, the read through the group, rsync at both ends), and a research job left running when its login ends (the last lines of the block).
 
 ```bash
 source scripts/spark/env.sh
@@ -5071,10 +5081,14 @@ wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/push_snapshot.sh" --cutover -
 "$SSH" spark 'cd ~/work/forecast-model && bash scripts/spark/research_run.sh -- cat /proc/self/oom_score_adj'
 "$SSH" spark "cd ~/work/forecast-model && bash scripts/spark/research_run.sh -- sh -c 'cat /sys/fs/cgroup\$(cut -d: -f3 /proc/self/cgroup)/memory.max'"
 python scripts/spark/session_check.py --port 4002 --process ibgateway; echo "exit=$?"
+"$SSH" spark 'loginctl show-user scura -p Linger'
+"$SSH" spark 'cd ~/work/forecast-model && (nohup bash scripts/spark/research_run.sh -- sleep 300 < /dev/null > /dev/null 2>&1 &)'
+sleep 40; "$SSH" spark-rt 'pgrep -af "[s]leep 300" || echo "the job is gone"'
+"$SSH" spark 'pkill -f "[s]leep 300"; true'
 ```
 
 Expected, in order:
-1. `6` (the push, the compare, the recorder's state, the wait, the restart, the status).
+1. `7` (the push, the compare, the recorder's state, the wait, the recorder's state again, the restart, the status).
 2. `all runtime units are stopped`, the session check's `no Gateway here` line, the `skipped (--no-copy)` line and `rollback rehearsal: exit=0`. An exit 4 here is a finding: sudo, docker or the check does not work the way a real rollback needs.
 3. The five `== n/5` headings in order with the rsync line under the fourth. (`ROLLBACK_DEST=/tmp` because the kept root does not exist before the cutover; a dry run copies nothing.)
 4. `pull_snapshot: done ...`, then the names of the paper directory's files (`ibkr_paper.db`, `ibkr_sync_runs.jsonl` and the others; names only). The scratch directories are removed by the next line.
@@ -5084,6 +5098,10 @@ Expected, in order:
 8. `500`.
 9. `16106127360` (15 GiB).
 10. `session check: a Gateway is here: ...` and `exit=1` while the Zenbook's Gateway is open.
+11. `Linger=yes`.
+12. A line `<pid> sleep 300`, not `the job is gone`.
+
+11 and 12 are one finding. A job started by `research_run.sh` lives in the user manager of `scura` (`systemd-run --user --scope`), and that manager stops with the last login of `scura` unless linger is on, taking the job with it. Close every other login of `scura` first (the VNC tunnel, a tmux session): any of them keeps the manager alive and hides the problem. `Linger=no`, or `the job is gone` 40 s after the starting login ended: **(account holder)** decides on `sudo loginctl enable-linger scura`, and lines 11 and 12 are run again. (The brackets in `[s]leep` keep `pgrep` and `pkill` from matching their own command line.)
 
 Nothing is committed in this task. Record the results in the ledger.
 
@@ -5118,7 +5136,7 @@ Get-ScheduledTask -TaskPath '\IBKR\','\Climate\','\Spark\' | Format-Table TaskNa
 | What it shows | Where the evening is | The way out |
 | --- | --- | --- |
 | the four tasks `Ready` or `Running`, `zenbook session: exit=1` | before step 3 | nothing to undo |
-| the four tasks `Disabled`, no `quant_data_zenbook_final` | steps 3 to 6 | call it off: stop the Spark's container if it is up (`cd ~/ibgw && docker compose stop`), re-enable the four tasks, log in on the Zenbook |
+| the four tasks `Disabled`, no `quant_data_zenbook_final` | steps 3 to 6 | call it off: run `wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/rollback.sh" --no-copy` (it stops the Spark's container if it is up, runs the piped session check and requires its exit 0), and only after exit 0 re-enable the four tasks and log in on the Zenbook |
 | `quant_data_zenbook_final` exists, the pull task `Disabled` | steps 7 to 10 | step 11, the rollback, for ANY failure: a login that does not work, a unit that does not start, a gate line that fails |
 | the units `enabled active`, the pull task `Ready` | step 12 or later | the cutover stands; from here a rollback is runbook section 7.9 |
 
@@ -5142,6 +5160,16 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ForEach-Object { if 
 ```
 
 Expected: the same commit twice and `0` changed files; the suite line; five `inactive` lines, `active`, and `0` running containers; three `trading 600` lines; `zenbook: exit=1` (the Zenbook holds the session, as it should now). The PowerShell line names every script a Python process on the Zenbook is running: it must print `scripts\record_ibkr_ticks.py` and nothing else. A backfill, a discovery run or a script somebody started by hand would go on writing into the root after the freeze, and what it wrote would never reach the Spark: let it finish first.
+
+Nothing on the Zenbook may start IB Gateway by itself at logon: the first logon after the cutover, or a reboot during the rollback week, would take the session back from the Spark without a word. In PowerShell:
+
+```powershell
+Get-ScheduledTask | Where-Object { ($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -match 'gateway|ibc' } | Format-Table TaskPath, TaskName, State
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' | Format-List | Out-String | Select-String -Pattern 'gateway|ibc'
+Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp" | Where-Object Name -match 'gateway|ibc'
+```
+
+Expected: the three lines print nothing: no scheduled task, `Run` key or Startup item mentions the Gateway or IBC. Whatever prints is disabled by the **(account holder)** before step 3.
 
 The evidence directory's path is now in `cutover_current.txt`; every later block reads it from there, because nothing else survives from one shell to the next.
 
@@ -5202,7 +5230,7 @@ Expected: `session check: no Gateway here (port 4002 closed, no ibgateway proces
 
 - [ ] **Step 4 (account holder): the Gateway container up on the Spark, logged out**
 
-Only now, with the Zenbook checked: on the Spark, `cd ~/ibgw && docker compose up -d && docker compose ps`. On the Zenbook, the tunnel (`ssh -L 5900:127.0.0.1:5900 spark`) and the VNC viewer. The container needs about three minutes; step 5 runs meanwhile. When the screen is up it must show the LOGIN DIALOG, as the spike saw after a stop (Task 0 step 15). Do not log in yet. If it shows the Gateway's main window instead, it has taken a session by itself: `docker compose stop` at once, and call the evening off.
+Only now, with the Zenbook checked: on the Spark, `cd ~/ibgw && docker compose up -d && docker compose ps`. On the Zenbook, the tunnel (`ssh -L 5900:127.0.0.1:5900 spark`) and the VNC viewer. The container needs about three minutes; step 5 runs meanwhile. When the screen is up it must show the LOGIN DIALOG, as the spike saw after a stop (Task 0 step 15). Do not log in yet. If it shows the Gateway's main window instead, it has taken a session by itself: `docker compose stop` at once, and call the evening off as the table says for steps 3 to 6: `rollback.sh --no-copy`, and only its exit 0 allows re-enabling the four tasks and logging in on the Zenbook.
 
 ```bash
 source scripts/spark/env.sh
@@ -5353,7 +5381,7 @@ wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/rollback.sh" --dry-run | grep
 wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/rollback.sh"; echo "rollback: exit=$?"
 ```
 
-Expected: the dry run lists its five steps; the real run ends with the by-hand list and `rollback: exit=0`. **Only exit 0 allows a login on the Zenbook.** Exit 4 means the Spark may still hold the session (it could not be reached, a stop was refused, or the check found a Gateway): the script says which, and nobody logs in on the Zenbook until a later run ends with 0, or the container has been stopped at the Spark itself. Any other exit is a failed copy after the session was released: run it again. Then **(account holder)** does what the script printed, in its order: disable the units on the Spark; on the Zenbook `.\scripts\scheduling\swap_live_root_for_mirror.ps1 -Undo` and re-enable the four tasks; open the Gateway and log in. The report of step 13 is written with the verdict `ROLLED BACK` and the reason, and the plan stops until the cause is understood.
+Expected: the dry run lists its five steps; the real run ends with the by-hand list and `rollback: exit=0`. **Only exit 0 allows a login on the Zenbook.** Exit 4 means the Spark may still hold the session (it could not be reached, a stop was refused, or the check found a Gateway): the script says which, and nobody logs in on the Zenbook until a later run ends with 0, or the container has been stopped at the Spark itself. Exit 5 is a failed copy after the session was released (rsync's own status is in the message): run it again. Then **(account holder)** does what the script printed, in its order: disable the units on the Spark; on the Zenbook disable the pull task (`Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'`), check the copied book with `python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final --scratch <a fresh directory>` (it must print `RESTORE OK`), then `.\scripts\scheduling\swap_live_root_for_mirror.ps1 -Undo` and re-enable the four tasks; open the Gateway and log in. The report of step 13 is written with the verdict `ROLLED BACK` and the reason, and the plan stops until the cause is understood.
 
 - [ ] **Step 12: After a passing gate -- start the pull, mark the research mirror, see the marker work**
 
@@ -5412,7 +5440,7 @@ In `docs/ibkr_runbook.md`, replace the notice above `Quick facts:` with
 > Zenbook: a login there takes the session away from the Spark.**
 ```
 
-In `docs/MIGRATION_CHECKPOINT.md` section 11, replace its first two sentences (`**Status: built, not cut over.** The Zenbook is still the runtime; everything in sections 0 to 8 stands.`) with
+In `docs/MIGRATION_CHECKPOINT.md` section 11, replace its first two sentences, the ones that open with `**Status: built, not cut over.**` (find them by that opening: the words after `still the runtime` have been reworded since this plan was written), with
 
 ```markdown
 **Status: cut over on <date>; acceptance pending.** The Spark is the runtime
