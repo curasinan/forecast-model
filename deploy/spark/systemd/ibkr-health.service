@@ -1,6 +1,9 @@
 # Recorder and paper-sync health probe. Exit 1 means "found a problem and the alert
-# path handled it", which is a successful run of this unit. The external heartbeat is
-# pinged whenever the probe ran (exit 0 or 1), so a probe that breaks goes late there.
+# path handled it", which is a successful run of this unit (SuccessExitStatus=1): the
+# external heartbeat is pinged for exit 0 and exit 1. Exit 3 means the probe itself
+# crashed (scripts/check_ibkr_recorder.py turns any uncaught exception, an import failure
+# included, into 3, where CPython alone would say 1): no ping, the unit fails, and the
+# external check goes late.
 [Unit]
 Description=IBKR recorder and paper-sync health probe
 
@@ -14,6 +17,10 @@ OOMScoreAdjust=-900
 WorkingDirectory=/home/trading/forecast-model
 EnvironmentFile=/home/trading/.config/forecast-model/alerts.env
 EnvironmentFile=/home/trading/.config/forecast-model/heartbeat.env
+# The Gateway's ports are private only while the owner rule stands. If it failed at boot,
+# Docker starts the Gateway unguarded and says nothing: fail this run instead, which pings
+# nothing, so the external check goes late.
+ExecStartPre=/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service
 ExecStart=/home/trading/forecast-model/.venv/bin/python -u scripts/spark/heartbeat_ping.py --url-env HEARTBEAT_URL_HEALTH --ok-exit 0 1 -- /home/trading/forecast-model/.venv/bin/python -u scripts/check_ibkr_recorder.py
 SuccessExitStatus=1
 TimeoutStartSec=300

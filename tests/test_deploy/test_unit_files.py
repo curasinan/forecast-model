@@ -117,6 +117,32 @@ def test_an_unhealthy_probe_is_not_a_failed_unit():
     assert values(unit, "Service", "SuccessExitStatus") == ["1"]
 
 
+def test_a_probe_that_crashed_is_neither_pinged_nor_a_successful_unit():
+    """CPython exits 1 on a crash, which this unit calls "found a problem and alerted"; the
+    probe's own hook exits with another status, and neither the ping nor the unit takes it."""
+    probe = (REPO_ROOT / "scripts" / "check_ibkr_recorder.py").read_text(encoding="utf-8")
+    hook = re.search(r"def _crash_exit\(.*?os\._exit\((\d+)\)", probe, re.DOTALL)
+    assert hook, "scripts/check_ibkr_recorder.py has no crash hook"
+    unit = parse_unit(UNIT_DIR / "ibkr-health.service")
+    (exec_start,) = values(unit, "Service", "ExecStart")
+    ok_exit = re.search(r"--ok-exit((?: \d+)+) --", exec_start)
+    assert ok_exit, exec_start
+    pinged = set(ok_exit.group(1).split())
+    successes = {code for value in values(unit, "Service", "SuccessExitStatus")
+                 for code in value.split()}
+    assert pinged == {"0", "1"} and successes == {"1"}  # 0 is a success by default
+    assert hook.group(1) not in pinged | successes | {"0"}
+
+
+def test_the_health_unit_fails_while_the_owner_rule_is_not_active():
+    """A failed owner rule at boot leaves Docker to start the Gateway unguarded in silence.
+    This run fails instead, so nothing is pinged and the external check goes late."""
+    unit = parse_unit(UNIT_DIR / "ibkr-health.service")
+    assert values(unit, "Service", "ExecStartPre") == [
+        "/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service"]
+    assert (UNIT_DIR / "ibgw-owner-rule.service").is_file()
+
+
 def test_the_owner_rule_admits_trading_on_the_api_and_the_operator_on_the_screen():
     unit = parse_unit(UNIT_DIR / "ibgw-owner-rule.service")
     starts = values(unit, "Service", "ExecStart")

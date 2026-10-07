@@ -39,6 +39,9 @@ Recorder-axis statuses (CRITICAL/DOWN/STALE/DEGRADED) outrank SYNC_STALE in
 the combined status, but ANY failing axis exits 1, and when both axes fail
 the message mentions both.
 
+A probe that itself crashes (an uncaught exception, an import failure included) exits 3,
+never 1: exit 1 means "found a problem", and the health unit treats it as a good run.
+
 Alerting -- on state changes, not on every unhealthy run (2026-10-03: the
 2026-09-29..10-03 outage produced ~15 identical DOWN messages a day until the
 operator stopped reading them). The alert state is the pair
@@ -142,6 +145,19 @@ from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# A crash must not look like a finding. CPython exits 1 on any uncaught exception, an import
+# failure included, and exit 1 is this probe's "found a problem, and alerted": the health unit
+# (deploy/spark/systemd/ibkr-health.service) pings the external check for exit 0 or 1, so a
+# probe broken by a deploy would be pinged and recorded healthy. Any uncaught exception exits 3
+# instead, which that unit does not accept. The hook goes before the first-party imports so
+# that an import failure is covered too; importing this module (the tests do) installs nothing.
+if __name__ == "__main__":
+    def _crash_exit(exc_type, exc, tb):
+        import traceback
+        traceback.print_exception(exc_type, exc, tb)
+        os._exit(3)
+    sys.excepthook = _crash_exit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
