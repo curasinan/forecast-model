@@ -136,11 +136,12 @@ def test_the_sudoers_file_names_only_these_units_and_only_three_verbs():
     """One alias of exactly these systemctl commands, one grant that uses it, nothing else."""
     text = SUDOERS.read_text(encoding="utf-8")
 
-    # 1. Blank and comment lines go, but sudo reads "#include" and "#includedir" as directives.
+    # 1. Blank and comment lines go. But sudo does not read "#include", "#includedir" or a "#"
+    # right before a digit (a user ID, as in "#1000 ALL=(root) ...") as a comment.
     kept = []
     for line in text.split("\n"):
         if line.strip().startswith("#"):
-            assert not re.match(r"^\s*#\s*include", line), f"a directive, not a comment: {line!r}"
+            assert not re.match(r"^\s*#(\s*include|-?\d)", line), f"not a comment to sudo: {line!r}"
         elif line.strip():
             kept.append(line)
 
