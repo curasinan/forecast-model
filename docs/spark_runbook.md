@@ -370,8 +370,9 @@ executable bits).
   it). Daily backups: `/srv/quant_data_backups`.
 - Mirrors, each carrying the file `.mirror-of-spark`: `~/quant_data` of
   `scura` on the Spark, and `~/quant_data` on the Zenbook. A script that
-  writes live state refuses a marked root (exit 2); a script that copies into
-  a root refuses an unmarked one (exit 3).
+  writes live state refuses a marked root (exit 2); the two mirror-filling
+  scripts, `scripts/spark/pull_snapshot.sh` and `scripts/spark/mirror_live.sh`,
+  refuse an unmarked root (exit 3).
 - ssh shortcuts on the Zenbook: `spark` (the operator) and `spark-rt`
   (`trading`), both at the Spark's Tailscale name.
 - The client ids are unchanged (`src/venues/ibkr/clients.py`); all four roles
@@ -403,7 +404,7 @@ executable bits).
   reached. The daily restart at 23:45 Europe/Istanbul needs no login.
 - One session, one machine. Before the paper user logs in anywhere else, the
   Spark's container is stopped and `scripts/spark/session_check.py` exits 0
-  there, as `scura`:
+  there, as `scura`, from `~/work/forecast-model` on the Spark:
 
       python3 scripts/spark/session_check.py --port 4002 --container ibgw
 
@@ -430,9 +431,10 @@ executable bits).
 | `paper-book-backup.timer` | `monitoring/backup_paper_book.py`, then a ping | 21:00 |
 
 The unit files live in `deploy/spark/systemd/` and are installed under
-`/etc/systemd/system` by the account holder. `scura` may start, stop and
-restart exactly these units without a password
-(`deploy/spark/sudoers/forecast-runtime`); enabling, disabling and installing
+`/etc/systemd/system` by the account holder. `scura` may, without a password,
+start and stop the units above and the services behind the timers, and restart
+`ibkr-recorder.service`; nothing else, and no other verb
+(`deploy/spark/sudoers/forecast-runtime`). Enabling, disabling and installing
 need `sudo` with a password. Each timer names its zone, so changing the
 Spark's clock zone moves no job by itself, and a run missed while the Spark
 was off fires at the next boot.
@@ -484,10 +486,10 @@ at their next run either way.
   the runtime: a recorder that is stopped (before the cutover, and after a
   rollback, it is stopped on purpose), or that stopped during the wait, is
   left alone.
-- Exit 3 means a unit file changed: the script prints the `sudo install`
-  lines; the account holder runs them and `sudo systemctl daemon-reload` on
-  the Spark, then the deploy is run again. A new timer also needs
-  `sudo systemctl enable --now <its name>`.
+- Exit 3 means a unit file changed or is not installed (a new unit file, for
+  example): the script prints the `sudo install` lines; the account holder runs
+  them and `sudo systemctl daemon-reload` on the Spark, then the deploy is run
+  again. A new timer also needs `sudo systemctl enable --now <its name>`.
 - When the recorder's state cannot be asked, the deploy stops with ssh's own
   status (for example 255, a lost connection) and says that the recorder was
   NOT restarted; it stops with 4 when systemd reports the unit unloaded (a
@@ -495,10 +497,17 @@ at their next run either way.
   status is the failing step's own.
 - The research clone is a separate delivery: `git push spark main`
   (section 2).
-- When `pyproject.toml` or the constraints file changed, install first, as
-  `trading`, then deploy:
+- When `pyproject.toml` or the constraints file changed, deliver the code
+  without a restart first, then install as `trading` from the runtime clone,
+  which now holds the new files, then deploy again, so that the recorder is
+  restarted after a fresh sweep on the new code with the new packages:
 
+      bash scripts/spark/deploy.sh --no-restart
       "$SSH" spark-rt 'cd forecast-model && uv pip install --python .venv/bin/python -e ".[dev,ibkr,climate,mcp,web,trading]" -c "$(ls constraints/zenbook-*.txt | tail -n 1)"'
+      bash scripts/spark/deploy.sh
+
+  Before the first push the runtime clone still holds the old `pyproject.toml`
+  and constraints file, so an install made then would put the old set back.
 
 ### 7.5 Scripts run by hand
 
@@ -507,12 +516,13 @@ for example `.venv/bin/python scripts/run_gtm_paper.py`,
 `.venv/bin/python scripts/run_ibkr_paper.py --mode approve`,
 `.venv/bin/python scripts/fit_gtm_emos.py --trend --live`,
 `.venv/bin/python scripts/backfill_ibkr_hourly.py --dry-run`,
-`.venv/bin/python scripts/fetch_climate_forecasts.py`. The Gateway settings
-come from the clone's `.env`. These scripts refuse a root that carries the
-mirror marker, and from the Zenbook or as `scura` they cannot reach the
-Gateway at all.
+`.venv/bin/python scripts/fetch_climate_forecasts.py --pilot`. The Gateway
+settings come from the clone's `.env`. These scripts refuse a root that
+carries the mirror marker, and from the Zenbook or as `scura` they cannot
+reach the Gateway at all.
 
-Two monthly rituals of `docs/ibkr_runbook.md` section 10 change place:
+Of the three monthly rituals of `docs/ibkr_runbook.md` section 10, the
+alert-channel test changes place in 7.3, and the other two here:
 
 - The fee date (`IBKR_FEES_VERIFIED_ON`) that counts is the one in the
   runtime clone's `.env` on the Spark.
@@ -539,14 +549,15 @@ Two monthly rituals of `docs/ibkr_runbook.md` section 10 change place:
   with `--include-raw` once if the 7.6 GB of CDS downloads should have a
   second copy too. `scripts/scheduling/register_spark_pull_task.ps1`
   registers that task enabled, and a second run replaces the registration and
-  so enables the task again: after the cutover, never run it without
-  `Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'` after it,
-  unless the pull is meant to run.
+  so enables the task again. The task is disabled on purpose in two windows:
+  between its registration for the cutover and the passing of the gate, and
+  after a rollback. In those windows run the script only followed by
+  `Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'`.
 - `scripts/spark/push_snapshot.sh` refuses a marked source, so nothing is
   pushed from the Zenbook any more. Neither copy script deletes anything.
 - The parity check of section 4 compares two mirrors now. Both must hold the
-  same bytes: refresh both right after a sweep has finished (the heartbeat of
-  7.3 shows when), then score.
+  same bytes: refresh both right after a sweep has finished (the recorder's
+  heartbeat file, `recorder_state.json` of 7.3, shows when), then score.
 
 ### 7.7 Backups and the restore check
 
@@ -607,15 +618,17 @@ address needs no restart.
 container, checks that the Spark no longer holds a session, and only then
 copies the Spark's live root into the Zenbook's kept root
 `~/quant_data_zenbook_final` (nothing is deleted there). It ends by printing
-what the account holder does: disable the units on the Spark, put the kept
-root back with `scripts/scheduling/swap_live_root_for_mirror.ps1` and its
-`-Undo` switch, re-enable the four scheduled tasks, log in on the Zenbook.
-Only exit 0 allows that login. Exit 4 means the Spark may still hold the
-session (it could not be reached, a stop was refused, or the check found a
-Gateway): do not log in on the Zenbook. The script prints
+what the account holder does: disable the units on the Spark, disable the pull
+task `\Spark\Spark Pull` (left enabled it refuses the unmarked root and never
+pings, so `offbox-pull` goes late within three days), put the kept root back
+with `scripts/scheduling/swap_live_root_for_mirror.ps1` and its `-Undo` switch,
+re-enable the four scheduled tasks, log in on the Zenbook. Only exit 0 allows
+that login. Exit 4 means the Spark may still hold the session (it could not be
+reached, the connection to it was lost, a stop was refused, or the check found
+a Gateway): do not log in on the Zenbook. The script prints
 `Do NOT log in on the Zenbook` then, and also when it is interrupted (Ctrl-C,
-a closed terminal, a lost connection) after it has first asked the Spark and
-before the check has passed, because the Spark may be stopped only half way.
+a closed terminal, a kill) after it has first asked the Spark and before the
+check has passed, because the Spark may be stopped only half way.
 Exit 2 is a usage error and exit 3 a kept root that is missing or carries the
 mirror marker: nothing was done. Any other exit without that warning is a
 copy that failed after the session was released: run the script again.

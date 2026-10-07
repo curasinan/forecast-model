@@ -174,8 +174,9 @@ itself; whether the jobs should then move is decided that day.
 Unit files are installed and changed by the account holder with `sudo`
 (they live in the repo under `deploy/spark/`, so the change is reviewed
 first). A sudoers drop-in, also reviewed and installed by hand, lets `scura`
-start, stop and restart exactly these units without a password and nothing
-else; that is what a deploy needs.
+start and stop the units above and the services behind the timers, and restart
+`ibkr-recorder.service`, without a password, and nothing else and no other
+verb; that is what a deploy needs.
 
 **Deploy:** one script run from the Zenbook pushes `main` to the runtime
 clone (`trading@spark`), reports whether any unit file differs from the

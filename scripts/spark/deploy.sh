@@ -24,9 +24,12 @@
 #      The timers' services are one-shot and pick the new code up at their next run.
 #   4. Print the deployed commit and the units' states.
 # Not done here: Python dependencies. When pyproject.toml or the constraints file changed,
-# rebuild the runtime clone's venv first (docs/spark_runbook.md section 7.4). The sudoers
-# drop-in and the Gateway's compose file are not compared either: a change to one of them
-# is installed by hand in the same sitting.
+# run this script with --no-restart first (it pushes main and leaves the recorder alone),
+# then, as the trading user, install into the runtime clone's venv (the clone now holds the
+# new files), then run this script again, so that the recorder restarts on the new code with
+# the new packages (docs/spark_runbook.md section 7.4). An install made before the first
+# push would put the old set back. The sudoers drop-in and the Gateway's compose file are
+# not compared either: a change to one of them is installed by hand in the same sitting.
 # Exit: 0 done, 2 usage, 3 a unit file must be installed by hand first; any other status is
 # the failing step's own.
 set -euo pipefail

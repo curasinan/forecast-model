@@ -40,10 +40,11 @@ variable `HEARTBEAT_URL_OFFBOX` (the script's header says how):
 ```
 
 The script registers the task enabled, and a second run replaces the
-registration, so it enables a task that was disabled on purpose. After the
-cutover, never run it without
-`Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'` after it,
-unless the pull is meant to run.
+registration, so it enables a task that was disabled on purpose. The task is
+disabled on purpose in two windows: between its registration for the cutover
+and the passing of the gate, and after a rollback. In those windows run the
+script only followed by
+`Disable-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull'`.
 
 Log: `logs\spark_pull_task.log`. The pull refuses a `~/quant_data` that does
 not carry the file `.mirror-of-spark`. Remove the task with

@@ -1,7 +1,8 @@
 # Install as /etc/sudoers.d/forecast-runtime, mode 0440, after `visudo -cf` accepts it.
-# Lets the operator start, stop and restart the runtime's units from a deploy or a
-# rollback, without a password, and nothing else. Installing or changing a unit file
-# stays a manual sudo step.
+# Lets the operator start and stop the runtime's units (the recorder, the four timers and
+# the four services behind them) and restart the recorder, from a deploy or a rollback,
+# without a password, and nothing else: no other unit, no other verb. Installing or
+# changing a unit file stays a manual sudo step.
 Cmnd_Alias FORECAST_UNITS = \
     /usr/bin/systemctl start ibkr-recorder.service, \
     /usr/bin/systemctl stop ibkr-recorder.service, \
