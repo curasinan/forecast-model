@@ -10,6 +10,7 @@ import sys
 from contextlib import closing
 from datetime import date
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import patch
 
 import pandas as pd
@@ -392,3 +393,190 @@ def test_the_real_order_is_back_once_the_reordered_one_is_done(root, tmp_path, c
     assert restore_check.MANIFEST_FILES == REAL_ORDER
     rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
     assert rc == 0, capsys.readouterr().out
+
+
+# ---- a book torn mid-transaction, and the journal that makes it whole again ----
+
+
+class Torn(NamedTuple):
+    before: bytes   # the book as the last commit left it
+    torn: bytes     # the book as a stop in the middle of the next transaction left it
+    journal: bytes  # the hot rollback journal of that transaction
+
+
+def _integrity(book: Path) -> str:
+    """The first line of SQLite's integrity check of `book`, opened read-only."""
+    with closing(sqlite3.connect(f"file:{book.as_posix()}?mode=ro", uri=True)) as conn:
+        return conn.execute("PRAGMA integrity_check").fetchone()[0]
+
+
+def _rows(book: Path, sql: str) -> list[tuple]:
+    with closing(sqlite3.connect(book)) as conn:
+        return conn.execute(sql).fetchall()
+
+
+@pytest.fixture
+def torn(tmp_path) -> Torn:
+    """A paper book of 300 rows, and the same book as a stop in the middle of a transaction
+    leaves it. The transaction rewrites every row through a ten-page cache, so pages of its
+    new state have been spilled into the book file when the book and its journal are read
+    with the transaction still open: the two files a process killed there leaves behind."""
+    book = tmp_path / "torn_source" / BOOK[-1]
+    book.parent.mkdir()
+    with closing(sqlite3.connect(book)) as conn:
+        conn.execute("CREATE TABLE positions (question_id TEXT, size REAL)")
+        conn.execute("CREATE TABLE trade_log (order_id TEXT PRIMARY KEY, status TEXT)")
+        conn.execute("INSERT INTO trade_log VALUES ('a', 'open')")
+        conn.executemany("INSERT INTO positions VALUES (?, ?)",
+                         [(f"q{i:05d}-" + "x" * 40, 1.5) for i in range(300)])
+        conn.commit()
+    before = book.read_bytes()
+    with closing(sqlite3.connect(book, isolation_level=None)) as writer:
+        writer.execute("PRAGMA cache_size = 10")
+        writer.execute("BEGIN")
+        writer.execute("UPDATE positions SET question_id = question_id || ?, size = size + 1",
+                       ("y" * 200,))
+        tore = book.read_bytes()
+        hot = book.with_name(book.name + "-journal").read_bytes()
+        writer.execute("ROLLBACK")
+    # The tests below mean nothing unless the book really is torn, and torn for good: the
+    # book file alone is not a database that passes the check any more.
+    assert hot and tore != before
+    alone = tmp_path / "torn_alone" / BOOK[-1]
+    alone.parent.mkdir()
+    alone.write_bytes(tore)
+    assert _integrity(alone) != "ok"
+    return Torn(before, tore, hot)
+
+
+def _place(root: Path, book: bytes, journal: bytes | None) -> Path:
+    """Put `book` in the root in place of its paper book, with `journal` beside it if given."""
+    path = root.joinpath(*BOOK)
+    path.write_bytes(book)
+    if journal is not None:
+        path.with_name(path.name + "-journal").write_bytes(journal)
+    return path
+
+
+def test_a_book_torn_mid_transaction_is_made_whole_by_the_journal_beside_it(
+        root, torn, tmp_path, capsys):
+    # The kept root of a rollback: a stop that landed mid-transaction left the book torn, and
+    # rollback.sh copied its hot journal along. SQLite rolls the journal back on the next
+    # open that may write, so the restored copy is opened that way once before it is checked.
+    book = _place(root, torn.torn, torn.journal)
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(root), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "RESTORE OK: 4 files" in out
+    restored = scratch.joinpath(*BOOK)
+    assert _integrity(restored) == "ok"
+    # the book as the last commit left it: the interrupted rewrite of every row is gone
+    assert _rows(restored, "SELECT count(*), min(size), max(size) FROM positions") == [
+        (300, 1.5, 1.5)]
+    assert _rows(restored, "SELECT order_id FROM trade_log") == [("a",)]
+    # the source is only read: the torn book and its journal are as they were
+    assert book.read_bytes() == torn.torn
+    assert book.with_name(book.name + "-journal").read_bytes() == torn.journal
+
+
+def test_the_same_torn_book_without_its_journal_fails(root, torn, tmp_path, capsys):
+    # The control of the test above: it is the journal that makes the book pass.
+    _place(root, torn.torn, None)
+    rc = restore_check.main(["--from", str(root), "--scratch", str(tmp_path / "scratch")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: integrity check says" in out
+    assert "RESTORE OK" not in out
+
+
+STALE_JOURNALS = {
+    "a header SQLite has zeroed": lambda torn: b"\0" * 512,
+    "an empty file": lambda torn: b"",
+    "bytes that are no journal": lambda torn: b"this is not a journal " * 20,
+    "a hot journal whose transaction never reached the book": lambda torn: torn.journal,
+}
+
+
+@pytest.mark.parametrize("kind", STALE_JOURNALS)
+def test_a_stale_journal_beside_a_consistent_book_is_no_failure(
+        kind, root, torn, tmp_path, capsys):
+    # A journal SQLite ignores or discards, or rolls back onto a book it matches page for page:
+    # carrying it along must not turn a good book into a FAIL. (A read-only open cannot deal
+    # with the last two kinds: it stops on "attempt to write a readonly database".)
+    _place(root, torn.before, STALE_JOURNALS[kind](torn))
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(root), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "RESTORE OK: 4 files" in out
+    restored = scratch.joinpath(*BOOK)
+    assert _integrity(restored) == "ok"
+    assert _rows(restored, "SELECT count(*), min(size), max(size) FROM positions") == [
+        (300, 1.5, 1.5)]
+
+
+def test_a_day_directory_book_that_no_longer_matches_its_record_fails_on_the_hash(
+        day_dir, torn, tmp_path, capsys):
+    # For a backup day directory the manifest decides: the backup wrote its book with SQLite's
+    # backup API, nothing lies beside it, and a journal that turns up beside a book that is
+    # not the one the manifest lists does not make that book pass.
+    book = day_dir.joinpath(*BOOK)
+    book.write_bytes(torn.torn)
+    book.with_name(book.name + "-journal").write_bytes(torn.journal)
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: sha256 or size differs from the reference" in out
+    assert "RESTORE OK" not in out
+
+
+def test_a_commit_that_lives_only_in_the_wal_beside_the_book_is_in_the_restored_book(
+        root, tmp_path, capsys):
+    # A book in WAL mode keeps its newest commits in "<book>-wal" until a checkpoint; a restore
+    # that left the WAL behind would pass the check and silently lack them.
+    book = tmp_path / "wal_source" / BOOK[-1]
+    book.parent.mkdir()
+    with closing(sqlite3.connect(book)) as conn:
+        conn.execute("CREATE TABLE positions (question_id TEXT, size REAL)")
+        conn.execute("CREATE TABLE trade_log (order_id TEXT PRIMARY KEY, status TEXT)")
+        conn.execute("INSERT INTO trade_log VALUES ('a', 'open')")
+        conn.commit()
+        conn.execute("PRAGMA journal_mode = WAL")
+    with closing(sqlite3.connect(book, isolation_level=None)) as writer:
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("INSERT INTO trade_log VALUES ('b', 'open')")  # committed into the WAL
+        files = {suffix: book.with_name(book.name + suffix).read_bytes()
+                 for suffix in ("", "-wal", "-shm")}
+    assert files["-wal"]  # the last connection's close would have folded it into the book
+    target = root.joinpath(*BOOK)
+    for suffix, data in files.items():
+        target.with_name(target.name + suffix).write_bytes(data)
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(root), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    restored = scratch.joinpath(*BOOK)
+    assert _integrity(restored) == "ok"
+    assert _rows(restored, "SELECT order_id FROM trade_log ORDER BY order_id") == [
+        ("a",), ("b",)]
+
+
+@pytest.mark.parametrize("present", [("-journal", "-wal", "-shm"), ("-wal",), ()])
+def test_the_files_beside_the_book_are_carried_when_they_exist_and_never_required(
+        present, root, tmp_path, monkeypatch):
+    target = root.joinpath(*BOOK)
+    for suffix in present:
+        target.with_name(target.name + suffix).write_bytes(f"beside the book {suffix}".encode())
+    # judging the book is the business of the tests above; here the carried files stay as they are
+    monkeypatch.setattr(restore_check, "_check_content", lambda key, path: None)
+    scratch = tmp_path / "scratch"
+    assert restore_check.restore_and_verify(root, scratch) == []
+    restored = scratch.joinpath(*BOOK)
+    for suffix in ("-journal", "-wal", "-shm"):
+        side = restored.with_name(restored.name + suffix)
+        if suffix in present:
+            assert side.read_bytes() == f"beside the book {suffix}".encode()
+        else:
+            assert not side.exists()

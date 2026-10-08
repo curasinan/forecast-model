@@ -12,6 +12,23 @@ files are copied into the scratch root, and the restored files are verified:
   * the paper book is present and passes SQLite's integrity check and has its tables;
   * every .parquet file reads, every .json file parses, every .jsonl line parses.
 
+A hot journal. A stop that lands in the middle of a SQLite transaction leaves the
+book torn (pages of the new state written, others not) with its rollback journal,
+ibkr_paper.db-journal, beside it: the journal is hot. SQLite makes the book whole
+again by rolling the journal back, and only a connection that may write does so: a
+read-only open stops on "attempt to write a readonly database", so a check that only
+reads would fail exactly the book the journal exists for. The restore therefore
+carries a -journal, -wal and -shm lying beside the SOURCE book into the scratch
+beside the restored one (each only if the source has it, none required), opens the
+restored copy read-write once, which rolls a hot journal back (or replays a WAL), and
+only then runs the read-only integrity check. The sha256 and size are compared before
+that, on the book as copied. For a backup day directory, whose book the backup wrote
+with SQLite's backup API with nothing beside it, the manifest's record still decides;
+a whole root has no manifest, its reference is the source itself, and it is the
+roll-back followed by the check that makes the result mean something. A torn book
+without its journal is judged as it lies, and usually fails. The roll-back happens in
+the scratch: the source is never opened read-write.
+
 The source is only read. The scratch root must not exist or must be empty.
 Exit 0 all good, 1 at least one failure (each printed), 2 copy invalid/unreadable
 or scratch not empty or not a directory.
@@ -43,6 +60,9 @@ REQUIRED_TABLES = ("positions", "trade_log")
 # The paper book by name, not "the first entry of MANIFEST_FILES": the requirement below must
 # stay on the book if that tuple is ever reordered.
 PAPER_DB_KEY = "/".join((TICKS_DIR, *PAPER_DB_REL))
+# What SQLite keeps beside a book: the rollback journal of a transaction that was cut off, and
+# the write-ahead log with its index. Carried along when the source holds them.
+BOOK_SIDE_SUFFIXES = ("-journal", "-wal", "-shm")
 
 
 def _reference(copy: Path) -> dict[str, dict | None]:
@@ -68,8 +88,21 @@ def _reference(copy: Path) -> dict[str, dict | None]:
     return reference
 
 
+def _carry_side_files(src: Path, restored: Path) -> None:
+    """Copy the journal, WAL and shared-memory file lying beside the source book, if any."""
+    for suffix in BOOK_SIDE_SUFFIXES:
+        side = src.with_name(src.name + suffix)
+        if side.is_file():
+            shutil.copy2(side, restored.with_name(restored.name + suffix))
+
+
 def _check_book(path: Path) -> str | None:
     try:
+        # One read-write open first (of the scratch copy): the first read of a connection that
+        # may write rolls back a hot journal beside the book and replays a WAL, which the
+        # read-only connection below cannot do.
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as conn:
             verdict = conn.execute("PRAGMA integrity_check").fetchone()
             tables = {row[0] for row in
@@ -147,6 +180,10 @@ def restore_and_verify(copy: Path, scratch: Path, failures: list[str] | None = N
             failures.append(f"FAIL {key}: sha256 or size differs from the reference "
                             f"({actual['size']} bytes restored, {expected['size']} expected)")
             continue
+        if key == PAPER_DB_KEY:
+            # After the comparison above, which is of the book as copied: the open that checks
+            # the book rolls a hot journal back, and that changes the file.
+            _carry_side_files(src, restored)
         problem = _check_content(key, restored)
         if problem:
             failures.append(f"FAIL {key}: {problem}")
