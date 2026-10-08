@@ -451,6 +451,13 @@ healthy is the unit's exit status:
 
     "$SSH" spark 'systemctl show ibkr-health.service -p ExecMainStatus -p ExecMainExitTimestamp'
 
+`ExecMainStatus` is the probe's own exit status: 0 healthy, 1 a problem found and
+alerted, 3 the probe crashed. A run that stopped at `ExecStartPre` (the owner-rule
+pre-check) never started the probe and leaves `ExecMainStatus` at the previous
+run's value, so a failed pre-check does not show there:
+`systemctl status ibkr-health.service` (or `journalctl -u ibkr-health.service`)
+is what shows it.
+
 To run the probe now, exactly as the timer does:
 `"$SSH" spark 'sudo -n /usr/bin/systemctl start ibkr-health.service'`. It is a
 real run of the alert state machine. The alert-channel test of
@@ -600,9 +607,20 @@ alert-channel test changes place in 7.3, and the other two here:
 | `paper-backup` | `paper-book-backup.service`, on success | every day |
 | `offbox-pull` | the Zenbook's pull task, on success | within three days |
 
-A late check means the thing that pings it is not running: for
-`spark-health`, the Spark itself is off or offline. The ping addresses are
-capabilities. On the Spark they live in
+A late check means the thing that pings it is not running. For `spark-health`
+that is one of three things, and each has its own first place to look:
+
+- The Spark itself is off or offline: it does not answer over ssh.
+- The probe crashed. A probe that dies on an uncaught exception, an import failure
+  included, exits 3, which is neither pinged nor a successful run, so the unit is
+  `failed`: `systemctl status ibkr-health.service` shows it, and
+  `journalctl -u ibkr-health.service -n 50 --no-pager` the traceback.
+- The owner-rule pre-check failed. `ibkr-health.service` stops before the probe when
+  `ibgw-owner-rule.service` is not active, and the Gateway's ports would then be
+  unguarded: look at `ibgw-owner-rule.service` first, with
+  `systemctl status ibgw-owner-rule.service`, before anything else.
+
+The ping addresses are capabilities. On the Spark they live in
 `/home/trading/.config/forecast-model/heartbeat.env` (mode 600), on the
 Zenbook in the user-level variable `HEARTBEAT_URL_OFFBOX`.
 `scripts/spark/heartbeat_ping.py` never prints them; never paste one into a

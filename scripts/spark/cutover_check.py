@@ -25,7 +25,11 @@ on what happened at or after --since, the moment the Spark's units started:
           fewer for every row an earlier Spark run concluded, and that is not the
           book breaking. filled, partially_filled, cancelled and unchanged may
           differ between the two runs; the line prints each one that did, and the
-          derivation of the examined count it expected (passing or failing);
+          derivation of the examined count it expected (passing or failing), and
+          ends with the two runs it compared, by their UTC times, and the number of
+          not-ok runs between them: a not-ok Spark run that concluded rows between the
+          two breaks the identity without the book being broken, and that is how such a
+          FAIL is told from a broken book;
   parity  the two score payloads pass the registered parity gate; compare_json's
           own output follows the verdict line, every line indented four spaces.
 
@@ -224,6 +228,24 @@ def _carry_over(before: dict[str, int], after: dict[str, int]) -> tuple[bool, st
     return True, detail
 
 
+def _stamp(when: datetime) -> str:
+    """A time as the gate prints it: UTC, to the second, with a trailing Z."""
+    return f"{when.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
+
+
+def _compared(runs: list[tuple[datetime, dict]], before: int, after: int) -> str:
+    """The two ledger runs (by position in `runs`) a carry-over verdict compares: their UTC
+    times and how many not-ok runs lie between them in the ledger.
+
+    A not-ok Spark run that concluded rows between the two breaks the identity without the
+    book being broken; this tells such a FAIL from a broken book. Two times and a count are
+    all that is printed of the ledger: a record carries the paper account id.
+    """
+    not_ok = sum(1 for _, run in runs[before + 1:after] if not run.get("ok"))
+    return (f"(before {_stamp(runs[before][0])}, after {_stamp(runs[after][0])}, "
+            f"{not_ok} not-ok {'run' if not_ok == 1 else 'runs'} between)")
+
+
 def _unevaluated(what: str) -> str:
     """The detail of a line that could not be judged; `what` is a class name, never data."""
     return f"could not be evaluated ({what})"
@@ -256,29 +278,32 @@ def check_sync(root: Path, since: datetime) -> tuple[bool, str]:
     runs = _ledger_runs(ledger)
     if isinstance(runs, str):
         return False, runs
-    after = [(when, run) for when, run in runs if when >= since]
-    before_ok = [run for when, run in runs if when < since and run.get("ok")]
+    # Positions in the ledger, which is in time order: the compared runs are named by them.
+    after = [number for number, (when, _) in enumerate(runs) if when >= since]
+    before_ok = [number for number, (when, run) in enumerate(runs)
+                 if when < since and run.get("ok")]
     if not after:
         return False, "no sync run since the cutover"
     # Two conditions. The newest run since the cutover must be ok ...
-    newest_when, newest = after[-1]
+    newest_when, newest = runs[after[-1]]
     if not newest.get("ok"):
-        stamp = f"{newest_when.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
-        return False, f"the newest sync run since the cutover ({stamp}): ok is false"
+        return False, f"the newest sync run since the cutover ({_stamp(newest_when)}): ok is false"
     if not before_ok:
         return False, "no earlier ok run to compare the book with"
     # ... and the book is judged on the FIRST ok run since: it is the one that has to carry
     # the Zenbook's book over. Every later run examines one row fewer per row an earlier
     # Spark run concluded, so none of them is held to the identity against the Zenbook's run.
-    first_ok = next(run for _, run in after if run.get("ok"))  # exists: the newest is ok
+    before = before_ok[-1]
+    first_ok = next(number for number in after if runs[number][1].get("ok"))  # the newest is ok
     counts = []
-    for record, which in ((before_ok[-1], "the last ok sync run before the cutover"),
+    for number, which in ((before, "the last ok sync run before the cutover"),
                           (first_ok, "the first ok sync run since the cutover")):
-        found = _counts(record, which)
+        found = _counts(runs[number][1], which)
         if isinstance(found, str):
             return False, found
         counts.append(found)
-    return _carry_over(*counts)
+    passed, detail = _carry_over(*counts)
+    return passed, f"{detail} {_compared(runs, before, first_ok)}"
 
 
 def check_parity(payloads: list[str] | None) -> tuple[bool, str]:

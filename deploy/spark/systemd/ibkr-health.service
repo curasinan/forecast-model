@@ -6,6 +6,9 @@
 # external check goes late.
 [Unit]
 Description=IBKR recorder and paper-sync health probe
+# Ordered after the owner rule: after a reboot the catch-up run of the persistent timer can
+# start while that oneshot unit is still activating, and the pre-check below answers 3 then.
+After=ibgw-owner-rule.service
 
 [Service]
 Type=oneshot

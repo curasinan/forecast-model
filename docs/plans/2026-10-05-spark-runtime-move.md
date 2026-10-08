@@ -4929,7 +4929,7 @@ git push spark-rt main
 "$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python -m pytest -q 2>&1 | tail -n 1'
 ```
 
-Expected: no failure and `All checks passed!` on the Zenbook; `0` uncommitted files; the fast-forward; no failure and `All checks passed!` from both clones on the Spark. The counts are not fixed numbers, because more work may have landed: the Spark's passed count is the Zenbook's, minus the tests that need Windows PowerShell (`tests/test_deploy/test_powershell_scripts.py`, skipped there), plus the one POSIX-only test (the umask test of `tests/test_monitoring/test_backup_paper_book.py`, skipped on the Zenbook). Whether `main` also goes to GitHub (`git push origin main`) is the account holder's call: ask, do not assume.
+Expected: no failure and `All checks passed!` on the Zenbook; `0` uncommitted files; the fast-forward; no failure and `All checks passed!` from both clones on the Spark. The counts are not fixed numbers, because more work may have landed: the Spark's passed count is the Zenbook's, minus the tests that need Windows PowerShell (its Windows-only tests, in `tests/test_deploy/test_powershell_scripts.py`, skipped there; the three text tests of that file run on the Spark too), plus the one POSIX-only test (the umask test of `tests/test_monitoring/test_backup_paper_book.py`, skipped on the Zenbook). Whether `main` also goes to GitHub (`git push origin main`) is the account holder's call: ask, do not assume.
 
 - [ ] **Step 2 (account holder): install the units, the sudoers drop-in and the owner rule**
 
@@ -5136,7 +5136,7 @@ Get-ScheduledTask -TaskPath '\IBKR\','\Climate\','\Spark\' | Format-Table TaskNa
 | What it shows | Where the evening is | The way out |
 | --- | --- | --- |
 | the four tasks `Ready` or `Running`, `zenbook session: exit=1` | before step 3 | nothing to undo |
-| the four tasks `Disabled`, no `quant_data_zenbook_final` | steps 3 to 6 | call it off: run `wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/rollback.sh" --no-copy` (it stops the Spark's container if it is up, runs the piped session check and requires its exit 0), and only after exit 0 re-enable the four tasks and log in on the Zenbook |
+| the four tasks `Disabled`, no `quant_data_zenbook_final` | steps 3 to 6 | call it off: in one Git Bash call run `source scripts/spark/env.sh` and then `wsl.exe -d Ubuntu -- bash "$REPO_WSL/scripts/spark/rollback.sh" --no-copy` (it stops the Spark's container if it is up, runs the piped session check and requires its exit 0), and only after exit 0 re-enable the four tasks and log in on the Zenbook |
 | `quant_data_zenbook_final` exists, the pull task `Disabled` | steps 7 to 10 | step 11, the rollback, for ANY failure: a login that does not work, a unit that does not start, a gate line that fails |
 | the units `enabled active`, the pull task `Ready` | step 12 or later | the cutover stands; from here a rollback is runbook section 7.9 |
 
@@ -5165,7 +5165,7 @@ Nothing on the Zenbook may start IB Gateway by itself at logon: the first logon 
 
 ```powershell
 Get-ScheduledTask | Where-Object { ($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -match 'gateway|ibc' } | Format-Table TaskPath, TaskName, State
-Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' | Format-List | Out-String | Select-String -Pattern 'gateway|ibc'
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' | Format-List | Out-String -Stream | Select-String -Pattern 'gateway|ibc'
 Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp" | Where-Object Name -match 'gateway|ibc'
 ```
 
@@ -5359,7 +5359,7 @@ source scripts/spark/env.sh
 "$SSH" spark 'sudo -n /usr/bin/systemctl start ibkr-health.service; echo "probe unit: rc=$?"; systemctl show ibkr-health.service --timestamp=unix -p ExecMainStatus -p ExecMainExitTimestamp'
 ```
 
-Expected: `sync: rc=0`; `test alert delivered via telegram` and the message on the phone; `probe unit: rc=0`, `ExecMainStatus=0` and an exit time after `SINCE`. The external check `spark-health` stays green with this run. `ExecMainStatus=1` means the probe found a problem; `"$SSH" spark-rt 'tail -n 3 forecast-model/logs/ibkr_health.log'` says which.
+Expected: `sync: rc=0`; `test alert delivered via telegram` and the message on the phone; `probe unit: rc=0`, `ExecMainStatus=0` and an exit time after `SINCE`. The external check `spark-health` stays green with this run. `ExecMainStatus=1` means the probe found a problem; `"$SSH" spark-rt 'tail -n 3 forecast-model/logs/ibkr_health.log'` says which. `probe unit: rc=1` means the unit itself failed, which is not the same thing: `ExecMainStatus=3` is a probe that crashed (an uncaught exception or a broken import; nothing was pinged, and the traceback is in `"$SSH" spark 'journalctl -u ibkr-health.service -n 30 --no-pager'`), and a run that stopped at the owner-rule pre-check never started the probe, so `ExecMainStatus` still shows the previous run's value and `"$SSH" spark 'systemctl status ibkr-health.service --no-pager'` is what shows it (look at `ibgw-owner-rule.service` first).
 
 - [ ] **Step 10: The gate**
 
@@ -5459,7 +5459,7 @@ git add docs/spark_runtime_cutover_* docs/spark_runbook.md docs/ibkr_runbook.md 
 git commit -m "Record the cutover of the runtime to the Spark"
 ```
 
-Expected: `2 passed`. Land it with `git -C /c/Users/asus/OneDrive/Desktop/new_work merge --ff-only spark-runtime-move` and deliver it with `bash scripts/spark/deploy.sh --no-restart` (the main checkout is no longer the runtime, so the hour no longer matters).
+Expected: `4 passed`. Land it with `git -C /c/Users/asus/OneDrive/Desktop/new_work merge --ff-only spark-runtime-move` and deliver it with `bash scripts/spark/deploy.sh --no-restart` (the main checkout is no longer the runtime, so the hour no longer matters).
 
 ---
 
@@ -5694,7 +5694,7 @@ git add docs/spark_runtime_cutover_* docs/spark_runbook.md docs/ibkr_runbook.md 
 git commit -m "Accept the runtime on the Spark and retire the Zenbook's scheduled tasks"
 ```
 
-Expected: `2 passed`, the suite green. Land it as in Task 12 step 13.
+Expected: `4 passed`, the suite green. Land it as in Task 12 step 13.
 
 - [ ] **Step 11 (account holder): retire the Zenbook's runtime**
 

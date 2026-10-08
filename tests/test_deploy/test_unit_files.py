@@ -141,6 +141,10 @@ def test_the_health_unit_fails_while_the_owner_rule_is_not_active():
     assert values(unit, "Service", "ExecStartPre") == [
         "/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service"]
     assert (UNIT_DIR / "ibgw-owner-rule.service").is_file()
+    # And it waits for the owner rule to finish starting: after a reboot the persistent catch-up
+    # run of the timer can start while that oneshot unit is still activating, and is-active
+    # answers 3 for "activating" too, so the run would fail and the next ping wait an hour.
+    assert values(unit, "Unit", "After") == ["ibgw-owner-rule.service"]
 
 
 def test_the_owner_rule_admits_trading_on_the_api_and_the_operator_on_the_screen():

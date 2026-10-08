@@ -48,6 +48,17 @@ def _epoch(ts: str) -> float:
     return datetime.fromisoformat(ts).astimezone(timezone.utc).timestamp()
 
 
+def _compared(before: str, after: str, between: int = 0) -> str:
+    """What the sync line ends with: the two runs it compared, by their UTC times, and the
+    number of not-ok runs between them in the ledger."""
+
+    def utc(ts: str) -> str:
+        return f"{datetime.fromisoformat(ts).astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
+
+    runs = "run" if between == 1 else "runs"
+    return f" (before {utc(before)}, after {utc(after)}, {between} not-ok {runs} between)"
+
+
 def _systemd(status: int, exited: str | None, raw: str | None = None, calls: list | None = None):
     """A stand-in for subprocess.run that answers `systemctl show ibkr-health.service ...`.
 
@@ -427,10 +438,14 @@ def test_without_an_ok_run_before_the_cutover_there_is_no_book_to_compare(site, 
 def test_an_untouched_book_carries_over(site, capsys):
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    # The derivation of the identity is printed with the verdict, and nothing else is: no
-    # count differs between the two runs, so there is no "counts that differ" clause.
+    # The derivation of the identity is printed with the verdict, and then the two runs it
+    # compared (the Zenbook's last ok run and the Spark's first, by UTC time) with the number
+    # of not-ok runs between them: no count differs between the two runs, so there is no
+    # "counts that differ" clause.
     assert ("PASS sync: book carried over "
-            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)") in out.splitlines()
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled) "
+            "(before 2026-10-19T14:30:00Z, after 2026-10-20T16:20:00Z, 0 not-ok runs between)"
+            ) in out.splitlines()
 
 
 def test_a_fill_in_the_zenbooks_last_run_does_not_fail_the_sync(site, capsys):
@@ -443,7 +458,8 @@ def test_a_fill_in_the_zenbooks_last_run_does_not_fail_the_sync(site, capsys):
     assert rc == 0, out
     assert ("PASS sync: book carried over "
             "(examined 3 -> 2, expected 2 = 3 - 1 filled - 0 cancelled); "
-            "counts that differ between the two runs: filled 1 -> 0") in out.splitlines()
+            "counts that differ between the two runs: filled 1 -> 0"
+            + _compared(BEFORE, AFTER)) in out.splitlines()
     assert "venue activity" not in out  # the counts differ for more reasons than the venue
 
 
@@ -461,6 +477,7 @@ def test_rows_the_zenbooks_last_run_concluded_are_not_examined_again(
     assert any(line.startswith(f"PASS sync: book carried over (examined {examined} -> 3, "
                                f"expected 3 = {examined} - {filled} filled - "
                                f"{cancelled} cancelled)")
+               and line.endswith(_compared(BEFORE, AFTER))
                for line in out.splitlines()), out
 
 
@@ -472,7 +489,7 @@ def test_venue_activity_between_the_two_syncs_is_reported_not_failed(site, capsy
     assert ("PASS sync: book carried over "
             "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled); "
             "counts that differ between the two runs: cancelled 0 -> 1, unchanged 3 -> 2"
-            ) in out.splitlines()
+            + _compared(BEFORE, AFTER)) in out.splitlines()
 
 
 def test_every_count_that_may_differ_is_printed_with_both_values(site, capsys):
@@ -484,7 +501,8 @@ def test_every_count_that_may_differ_is_printed_with_both_values(site, capsys):
     assert ("PASS sync: book carried over "
             "(examined 5 -> 4, expected 4 = 5 - 1 filled - 0 cancelled); "
             "counts that differ between the two runs: filled 1 -> 2, partially_filled 1 -> 0, "
-            "cancelled 0 -> 1, unchanged 3 -> 1") in out.splitlines()
+            "cancelled 0 -> 1, unchanged 3 -> 1" + _compared(BEFORE, AFTER)
+            ) in out.splitlines()
 
 
 def test_a_book_that_lost_its_rows_fails_and_names_the_identity(site, capsys):
@@ -494,7 +512,8 @@ def test_a_book_that_lost_its_rows_fails_and_names_the_identity(site, capsys):
     rc, out = _run(site, capsys)
     assert rc == 1
     _only_failed(out, "sync", "the book did not carry over: "
-                              "examined 3 -> 0, expected 2 = 3 - 1 filled - 0 cancelled")
+                              "examined 3 -> 0, expected 2 = 3 - 1 filled - 0 cancelled"
+                              + _compared(BEFORE, AFTER))
 
 
 def test_a_book_that_gained_rows_fails_and_names_the_identity(site, capsys):
@@ -502,7 +521,8 @@ def test_a_book_that_gained_rows_fails_and_names_the_identity(site, capsys):
     rc, out = _run(site, capsys)
     assert rc == 1
     _only_failed(out, "sync", "the book did not carry over: "
-                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled")
+                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled"
+                              + _compared(BEFORE, AFTER))
 
 
 def test_a_change_in_the_venue_orders_the_book_does_not_know_fails(site, capsys):
@@ -513,7 +533,7 @@ def test_a_change_in_the_venue_orders_the_book_does_not_know_fails(site, capsys)
     # that held reads as itself (3 -> 3 against an expected 3).
     _only_failed(out, "sync", "the book did not carry over: "
                               "examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled; "
-                              "unmatched_venue_orders 0 -> 1")
+                              "unmatched_venue_orders 0 -> 1" + _compared(BEFORE, AFTER))
 
 
 def test_both_identities_are_named_when_both_break(site, capsys):
@@ -522,7 +542,7 @@ def test_both_identities_are_named_when_both_break(site, capsys):
     assert rc == 1
     _only_failed(out, "sync", "the book did not carry over: "
                               "examined 3 -> 2, expected 3 = 3 - 0 filled - 0 cancelled; "
-                              "unmatched_venue_orders 0 -> 1")
+                              "unmatched_venue_orders 0 -> 1" + _compared(BEFORE, AFTER))
 
 
 def test_the_sync_is_judged_on_the_first_ok_run_after_and_the_last_ok_run_before(site, capsys):
@@ -534,11 +554,15 @@ def test_the_sync_is_judged_on_the_first_ok_run_after_and_the_last_ok_run_before
             _sync(JUST_BEFORE, ok=False, **foreign),      # a failed run: never the reference
             _sync(AFTER_EARLY, ok=False, **foreign),      # a failed run since: never the first
             _sync(AFTER_MID),                             # the first ok run since: the same book
+            _sync("2026-10-20T16:12:00+00:00", ok=False, **foreign),  # after the first ok run
             _sync(AFTER, examined=7, unchanged=7))        # the newest run since: not judged
     rc, out = _run(site, capsys)
     assert rc == 0, out
+    # Compared: BEFORE and AFTER_MID. Between them lie two failed runs, one on each side of the
+    # cutover; the failed runs before the reference and after the first ok run are not between.
     assert ("PASS sync: book carried over "
-            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)") in out.splitlines()
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)"
+            + _compared(BEFORE, AFTER_MID, 2)) in out.splitlines()
 
 
 def test_the_book_is_judged_against_the_first_ok_run_not_the_newest(site, capsys):
@@ -555,7 +579,7 @@ def test_the_book_is_judged_against_the_first_ok_run_not_the_newest(site, capsys
     assert ("PASS sync: book carried over "
             "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled); "
             "counts that differ between the two runs: filled 0 -> 1, unchanged 3 -> 2"
-            ) in out.splitlines()
+            + _compared(BEFORE, AFTER_EARLY)) in out.splitlines()
 
 
 def test_a_newest_run_that_looks_right_does_not_rescue_a_first_run_that_broke_the_book(
@@ -569,7 +593,59 @@ def test_a_newest_run_that_looks_right_does_not_rescue_a_first_run_that_broke_th
     rc, out = _run(site, capsys)
     assert rc == 1
     _only_failed(out, "sync", "the book did not carry over: "
-                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled")
+                              "examined 3 -> 4, expected 3 = 3 - 0 filled - 0 cancelled"
+                              + _compared(BEFORE, AFTER_EARLY))
+
+
+def test_a_failed_run_that_concluded_rows_between_the_two_is_counted_in_the_failure(
+        site, capsys):
+    # The Spark's first run failed after it had concluded a fill, and its next run, the first ok
+    # one, examines one row fewer than the Zenbook's last: the identity breaks without the book
+    # breaking. The line says which two runs it compared and that one failed run lies between
+    # them, which is what tells this FAIL from a broken book (the gate is then run again).
+    _ledger(site,
+            _sync(BEFORE),
+            _sync(AFTER_EARLY, ok=False, examined=3, filled=1, unchanged=2,
+                  notes=["must-not-be-printed"]),
+            _sync(AFTER, examined=2, unchanged=2))
+    rc, out = _run(site, capsys)
+    assert rc == 1
+    _only_failed(out, "sync", "the book did not carry over: "
+                              "examined 3 -> 2, expected 3 = 3 - 0 filled - 0 cancelled"
+                              + _compared(BEFORE, AFTER, 1))
+    assert "1 not-ok run between)" in out  # the singular
+    assert "must-not-be-printed" not in out  # nothing else of a record is ever printed
+
+
+def test_the_failed_runs_between_are_counted_across_the_cutover_and_only_between(site, capsys):
+    # Three failed runs: one before the reference (not between), one between the reference and
+    # the cutover and one between the cutover and the first ok run (both counted).
+    _ledger(site,
+            _sync(LONG_BEFORE, ok=False),
+            _sync(MID_BEFORE),
+            _sync(BEFORE),
+            _sync(JUST_BEFORE, ok=False),
+            _sync(AFTER_EARLY, ok=False),
+            _sync(AFTER))
+    rc, out = _run(site, capsys)
+    assert rc == 0, out
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)"
+            + _compared(BEFORE, AFTER, 2)) in out.splitlines()
+
+
+@pytest.mark.parametrize("before, after", [
+    ("2026-10-19T17:30:00+03:00", "2026-10-20T18:20:00+02:00"),  # offsets: 14:30Z and 16:20Z
+    ("2026-10-19T14:30:00", "2026-10-20T16:20:00"),              # no offset: read as UTC
+])
+def test_the_two_runs_are_named_in_utc_whatever_their_records_carry(site, capsys, before, after):
+    _ledger(site, _sync(before), _sync(after))
+    rc, out = _run(site, capsys)
+    assert rc == 0, out
+    assert ("PASS sync: book carried over "
+            "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled) "
+            "(before 2026-10-19T14:30:00Z, after 2026-10-20T16:20:00Z, 0 not-ok runs between)"
+            ) in out.splitlines()
 
 
 def _ledger_with_a_broken_record(site, which: str, **changes) -> None:

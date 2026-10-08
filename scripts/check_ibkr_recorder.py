@@ -1013,9 +1013,10 @@ def main(argv: list[str] | None = None) -> int:
     # alert or alert-state failure must never prevent the sink write. Each is
     # wrapped in its own try/except so one channel's exception can't propagate
     # out of main() and skip the next -- an uncaught exception here would
-    # still exit 1 (CPython's default), but only by accident, and only after
-    # silently dropping whichever channel came second. The exit code stays
-    # deliberate: 0 only when everything is healthy.
+    # end the run through the crash hook at the top of the file (exit 3, not
+    # 1: no ping, a failed unit), but only after silently dropping whichever
+    # channel came second. The exit code stays deliberate: 0 only when
+    # everything is healthy.
     if status != "OK":
         try:
             _append_health_log(args.health_log_path, status, message, now=now)
