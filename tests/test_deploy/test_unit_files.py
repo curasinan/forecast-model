@@ -138,8 +138,10 @@ def test_the_health_unit_fails_while_the_owner_rule_is_not_active():
     """A failed owner rule at boot leaves Docker to start the Gateway unguarded in silence.
     This run fails instead, so nothing is pinged and the external check goes late."""
     unit = parse_unit(UNIT_DIR / "ibkr-health.service")
+    # Any failure of the check exits 3. SuccessExitStatus=1 covers this command too, and a bare
+    # is-active exits 1 when the system bus cannot be reached, which would let the run go on.
     assert values(unit, "Service", "ExecStartPre") == [
-        "/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service"]
+        "/bin/sh -c '/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service || exit 3'"]
     assert (UNIT_DIR / "ibgw-owner-rule.service").is_file()
     # And it waits for the owner rule to finish starting: after a reboot the persistent catch-up
     # run of the timer can start while that oneshot unit is still activating, and is-active

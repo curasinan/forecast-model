@@ -532,6 +532,38 @@ def test_a_day_directory_book_that_no_longer_matches_its_record_fails_on_the_has
     assert "RESTORE OK" not in out
 
 
+def test_the_book_is_hashed_as_copied_before_a_journal_beside_it_rolls_it_back(
+        day_dir, torn, tmp_path, capsys):
+    # The order inside the restore. The manifest's record here was taken from the consistent
+    # book, while the day directory holds the torn book with its hot journal. Rolled back
+    # first, the torn book would become byte for byte the book of the record and pass the
+    # hash; compared first, as it is, it differs, and nothing is carried or rolled back.
+    premise = tmp_path / "premise" / BOOK[-1]
+    premise.parent.mkdir()
+    premise.write_bytes(torn.torn)
+    premise.with_name(premise.name + "-journal").write_bytes(torn.journal)
+    with closing(sqlite3.connect(premise)) as conn:  # the open that rolls the journal back
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    assert premise.read_bytes() == torn.before  # so a roll-back first would hide the tear
+
+    book = day_dir.joinpath(*BOOK)
+    book.write_bytes(torn.before)
+    manifest = json.loads((day_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    manifest["ibkr_ticks/paper/ibkr_paper.db"] = file_record(book)  # of the consistent book
+    (day_dir / MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    book.write_bytes(torn.torn)
+    book.with_name(book.name + "-journal").write_bytes(torn.journal)
+    scratch = tmp_path / "scratch"
+    rc = restore_check.main(["--from", str(day_dir), "--scratch", str(scratch)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL ibkr_ticks/paper/ibkr_paper.db: sha256 or size differs from the reference" in out
+    assert "RESTORE OK" not in out
+    restored = scratch.joinpath(*BOOK)
+    assert not restored.with_name(restored.name + "-journal").exists()  # not carried along
+    assert restored.read_bytes() == torn.torn  # and not rolled back: the book as it was copied
+
+
 def test_a_commit_that_lives_only_in_the_wal_beside_the_book_is_in_the_restored_book(
         root, tmp_path, capsys):
     # A book in WAL mode keeps its newest commits in "<book>-wal" until a checkpoint; a restore

@@ -22,8 +22,10 @@ EnvironmentFile=/home/trading/.config/forecast-model/alerts.env
 EnvironmentFile=/home/trading/.config/forecast-model/heartbeat.env
 # The Gateway's ports are private only while the owner rule stands. If it failed at boot,
 # Docker starts the Gateway unguarded and says nothing: fail this run instead, which pings
-# nothing, so the external check goes late.
-ExecStartPre=/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service
+# nothing, so the external check goes late. Any failure of the pre-check exits 3, never 1:
+# SuccessExitStatus=1 below covers this command too, and is-active itself exits 1 when the
+# system bus cannot be reached, which would let the run go on.
+ExecStartPre=/bin/sh -c '/usr/bin/systemctl is-active --quiet ibgw-owner-rule.service || exit 3'
 ExecStart=/home/trading/forecast-model/.venv/bin/python -u scripts/spark/heartbeat_ping.py --url-env HEARTBEAT_URL_HEALTH --ok-exit 0 1 -- /home/trading/forecast-model/.venv/bin/python -u scripts/check_ibkr_recorder.py
 SuccessExitStatus=1
 TimeoutStartSec=300

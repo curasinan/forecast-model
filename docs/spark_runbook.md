@@ -453,10 +453,10 @@ healthy is the unit's exit status:
 
 `ExecMainStatus` is the probe's own exit status: 0 healthy, 1 a problem found and
 alerted, 3 the probe crashed. A run that stopped at `ExecStartPre` (the owner-rule
-pre-check) never started the probe and leaves `ExecMainStatus` at the previous
-run's value, so a failed pre-check does not show there:
-`systemctl status ibkr-health.service` (or `journalctl -u ibkr-health.service`)
-is what shows it.
+pre-check) never started the probe: systemd resets `ExecMainStatus` to 0 and
+leaves `ExecMainExitTimestamp` empty, and the unit is `failed`, so a 0 with no
+exit time is not a healthy probe. `systemctl status ibkr-health.service` (or
+`journalctl -u ibkr-health.service`) shows the failed pre-check.
 
 To run the probe now, exactly as the timer does:
 `"$SSH" spark 'sudo -n /usr/bin/systemctl start ibkr-health.service'`. It is a
@@ -608,7 +608,7 @@ alert-channel test changes place in 7.3, and the other two here:
 | `offbox-pull` | the Zenbook's pull task, on success | within three days |
 
 A late check means the thing that pings it is not running. For `spark-health`
-that is one of three things, and each has its own first place to look:
+that is one of four things, and each has its own first place to look:
 
 - The Spark itself is off or offline: it does not answer over ssh.
 - The probe crashed. A probe that dies on an uncaught exception, an import failure
@@ -619,6 +619,10 @@ that is one of three things, and each has its own first place to look:
   `ibgw-owner-rule.service` is not active, and the Gateway's ports would then be
   unguarded: look at `ibgw-owner-rule.service` first, with
   `systemctl status ibgw-owner-rule.service`, before anything else.
+- The wrapper ran but sent no ping: `HEARTBEAT_URL_HEALTH` is unset (or is not an
+  https address), or the ping itself failed. The probe ran (exit 0 or 1), so the unit
+  is not `failed`; `journalctl -u ibkr-health.service -n 50 --no-pager` shows
+  `heartbeat: not sent` or `heartbeat: failed`.
 
 The ping addresses are capabilities. On the Spark they live in
 `/home/trading/.config/forecast-model/heartbeat.env` (mode 600), on the
