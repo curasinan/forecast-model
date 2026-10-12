@@ -121,11 +121,16 @@ Never run on the Spark (all under `scripts/`):
   are pinned by digest: never `docker compose pull`, never edit the compose
   file without the operator. NVIDIA driver packages are on `apt-mark hold`:
   no `apt upgrade`.
-- Memory: with vLLM loaded 22-24 GiB is available and the realistic budget
-  for forecast work is about 15 GiB. Read it with `free -h` (`docker stats`
-  does not show vLLM's CUDA memory). For anything larger, finish the LLM
-  batch first, then stop the vLLM service on the Spark:
-  `cd ~/stack && docker compose stop qwenflash`.
+- Memory, measured 2026-10-11 with Flash-Next loaded: weights 74.3 GiB and KV
+  cache 10 GiB, about 87 GiB for vLLM in all; about 34 GiB of page cache holds
+  the PLE sidecar, which vLLM reads through mmap; truly free is under 1 GiB.
+  `free -h` counts that page cache as available (the 22-24 GiB this line used
+  to quote), but a job that takes it evicts the sidecar and slows the LLM. So
+  with Flash-Next loaded a host-memory job takes its memory from that cache,
+  and there is no room for a GPU job at all. `docker stats` does not show
+  vLLM's CUDA memory because the cgroup is not charged for it (section 7.10).
+  For anything larger, finish the LLM batch first, then stop the vLLM service
+  on the Spark: `cd ~/stack && docker compose stop qwenflash`.
 - Tests, from the Zenbook:
   `"$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python -m pytest -q'`.
   The suite isolates the home itself: `tests/conftest.py` points the home at
@@ -679,3 +684,31 @@ the first thing the kernel kills when memory runs out: research jobs score
 +500, the LLM -500, the Gateway and the runtime -900.
 `bash scripts/spark/research_run.sh -- cat /proc/self/oom_score_adj` prints
 `500`. Use tmux for a long job: it runs in the foreground of its shell.
+
+The ceiling bounds host memory only. CUDA allocations are not charged to a
+cgroup on the Spark (2026-10-11: `docker stats` showed the vLLM container at
+6.36 GiB while vLLM held about 87 GiB), so a job's GPU side is bounded by
+`analysis/gpu_budget.py` instead: every torch job calls `apply_gpu_budget()`
+before its first CUDA allocation, and
+`tests/test_architecture/test_gpu_budget_guard.py` fails for a file that
+imports torch without it. The budget comes from the launcher:
+
+    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python <job>
+
+`--gpu-budget` hands the job `RESEARCH_GPU_BUDGET_GIB`; the job may ask for
+less, never for more. The cap covers PyTorch's own allocator, not the CUDA
+context, cuBLAS workspaces or another framework's allocator, so leave a few
+GiB of headroom. Host and GPU memory come out of the same 128 GB: the ceiling
+plus the budget must fit what is free with the LLM where it is (section 2).
+With Flash-Next loaded that is nothing, so GPU jobs wait until `qwenflash` is
+stopped. Keep GPU jobs in the research clone: the guard sees only the repo.
+
+The check that the ceiling does not see CUDA memory runs with no LLM loaded
+and a torch venv (the research `.venv` has none):
+
+    bash scripts/spark/research_run.sh --memory 1G -- ~/work/wx-dl/.venv/bin/python scripts/spark/cgroup_cuda_check.py --alloc-gib 2 --out ~/llm_eval/cgroup_cuda_check.json
+
+Exit 0 with `VERDICT: cuda_outside_cgroup` confirms it. Exit 137 from the
+launcher would mean the ceiling does cover CUDA memory, and this paragraph is
+then wrong. Exit 1 is no verdict; exit 3 says why the machine cannot run the
+check (most often: the LLM is still loaded).

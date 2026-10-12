@@ -759,3 +759,33 @@ def test_research_run_takes_any_positive_whole_number_with_a_unit(value):
     done = run_script("research_run.sh", "--memory", value, "--dry-run", "--", "true")
     assert done.returncode == 0, done.stderr
     assert f"-p MemoryMax={value} " in done.stdout
+
+
+def test_research_run_hands_the_gpu_budget_to_the_job_in_gib():
+    done = run_script("research_run.sh", "--memory", "8G", "--gpu-budget", "20G", "--dry-run",
+                      "--", "python", "job.py")
+    assert done.returncode == 0, done.stderr
+    (line,) = done.stdout.splitlines()
+    assert " -- env RESEARCH_GPU_BUDGET_GIB=20 bash -c " in line
+    assert "-p MemoryMax=8G" in line and line.endswith(" python job.py")
+
+
+def test_research_run_without_a_gpu_budget_takes_any_inherited_one_away():
+    done = run_script("research_run.sh", "--dry-run", "--", "true",
+                      RESEARCH_GPU_BUDGET_GIB="99")
+    assert done.returncode == 0, done.stderr
+    assert " -- env -u RESEARCH_GPU_BUDGET_GIB bash -c " in done.stdout
+    assert "RESEARCH_GPU_BUDGET_GIB=" not in done.stdout
+
+
+@pytest.mark.parametrize("value", ["20", "0G", "020G", "20g", "1.5G", "20GB", "512M", "G"])
+def test_research_run_refuses_a_gpu_budget_that_is_not_whole_gib(value):
+    done = run_script("research_run.sh", "--gpu-budget", value, "--dry-run", "--", "true")
+    assert done.returncode == 2
+    assert "20G" in done.stderr and "DRY-RUN" not in done.stdout
+
+
+def test_research_run_refuses_a_gpu_budget_flag_without_a_value():
+    done = run_script("research_run.sh", "--gpu-budget")
+    assert done.returncode == 2
+    assert "--gpu-budget needs a value" in done.stderr
