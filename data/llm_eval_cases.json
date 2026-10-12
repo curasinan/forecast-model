@@ -1,0 +1,352 @@
+{
+  "version": 1,
+  "about": "Gold-labelled extraction cases for comparing local models with scripts/llm_eval.py. Case fixture-izmir is the request whose reply tests/test_llm/fixtures/vllm_chat_reply_schema.json captured from Flash-Next on 2026-10-03, and smoke-izmir is the request of scripts/llm_smoke.py; the tests pin both to their sources. The other texts are synthetic, written for this set: their numbers are not facts about the world, and each gold value is what its text states. A gold value {\"$any\": [...]} accepts any of the listed values. Strings compare without case, accents or extra spaces; numbers within 1e-9; arrays in any order.",
+  "system": "You extract structured data from the text you are given. Use null for anything the text does not state. Write dates as YYYY-MM-DD, months as YYYY-MM and quarters as YYYY-Qn. Write numbers as plain JSON numbers: no units, no percent signs, no thousands separators. Answer with a JSON object only.",
+  "cases": [
+    {
+      "id": "fixture-izmir",
+      "schema_name": "reply",
+      "messages": [
+        {"role": "user", "content": "In 2024 the city council of Izmir voted on the tram line."}
+      ],
+      "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "year": {"type": "integer"}},
+        "required": ["city", "year"],
+        "additionalProperties": false
+      },
+      "gold": {"city": "Izmir", "year": 2024}
+    },
+    {
+      "id": "smoke-izmir",
+      "messages": [
+        {"role": "system", "content": "You extract structured data from text."},
+        {"role": "user", "content": "Extract the city, the year, and whether the motion passed. Answer with a JSON object only.\n\nIn 2024 the city council of Izmir voted on extending the tram line to the university campus; the motion passed with 31 votes in favour."}
+      ],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "city": {"type": "string"},
+          "year": {"type": "integer"},
+          "passed": {"type": "boolean"}
+        },
+        "required": ["city", "year", "passed"],
+        "additionalProperties": false
+      },
+      "gold": {"city": "Izmir", "year": 2024, "passed": true}
+    },
+    {
+      "id": "us-cpi-distractor",
+      "instruction": "Extract the month the report covers, the month-over-month change in percent and the 12-month change in percent.",
+      "text": "The Bureau of Labor Statistics said on Wednesday that consumer prices rose 0.4% in September 2026 from August, after a 0.2% gain the month before. Over the past 12 months, prices were up 3.1%.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "month": {"type": "string"},
+          "mom_pct": {"type": "number"},
+          "yoy_pct": {"type": "number"}
+        },
+        "required": ["month", "mom_pct", "yoy_pct"],
+        "additionalProperties": false
+      },
+      "gold": {"month": "2026-09", "mom_pct": 0.4, "yoy_pct": 3.1}
+    },
+    {
+      "id": "fed-hold-range",
+      "instruction": "Extract the rate decision and the lower and upper ends of the target range in percent.",
+      "text": "The Federal Reserve left its benchmark rate unchanged in a range of 3.75% to 4.00% on Wednesday, defying calls from the White House for a cut.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "decision": {"type": "string", "enum": ["cut", "hold", "hike"]},
+          "lower_pct": {"type": "number"},
+          "upper_pct": {"type": "number"}
+        },
+        "required": ["decision", "lower_pct", "upper_pct"],
+        "additionalProperties": false
+      },
+      "gold": {"decision": "hold", "lower_pct": 3.75, "upper_pct": 4.0}
+    },
+    {
+      "id": "tcmb-cut-decimal-comma",
+      "instruction": "Extract the rate decision, the previous policy rate and the new policy rate in percent.",
+      "text": "Türkiye Cumhuriyet Merkez Bankası, politika faizini yüzde 40,5'ten yüzde 38'e indirdi.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "decision": {"type": "string", "enum": ["cut", "hold", "hike"]},
+          "previous_pct": {"type": "number"},
+          "new_pct": {"type": "number"}
+        },
+        "required": ["decision", "previous_pct", "new_pct"],
+        "additionalProperties": false
+      },
+      "gold": {"decision": "cut", "previous_pct": 40.5, "new_pct": 38}
+    },
+    {
+      "id": "bist-close-separators",
+      "instruction": "Extract the index name, the signed daily change in percent (negative for a fall) and the closing level.",
+      "text": "BIST 100 endeksi günü yüzde 1,24 düşüşle 10.482,37 puandan tamamladı.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "index": {"type": "string"},
+          "change_pct": {"type": "number"},
+          "close": {"type": "number"}
+        },
+        "required": ["index", "change_pct", "close"],
+        "additionalProperties": false
+      },
+      "gold": {"index": {"$any": ["BIST 100", "BIST100", "BIST-100"]}, "change_pct": -1.24, "close": 10482.37}
+    },
+    {
+      "id": "noaa-month-rank-word",
+      "instruction": "Extract the month the report is about, its anomaly in degrees Celsius and its rank among the warmest on record for that month.",
+      "text": "NOAA's monthly global climate report said July 2026 was 1.18°C above the 20th-century average, the third-warmest July on record; June had been 1.21°C above.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "month": {"type": "string"},
+          "anomaly_c": {"type": "number"},
+          "rank": {"type": "integer"}
+        },
+        "required": ["month", "anomaly_c", "rank"],
+        "additionalProperties": false
+      },
+      "gold": {"month": "2026-07", "anomaly_c": 1.18, "rank": 3}
+    },
+    {
+      "id": "nhc-advisory-units",
+      "instruction": "Extract the storm's name, its Saffir-Simpson category and its maximum sustained wind in mph.",
+      "text": "At 1100 AM AST, the center of Hurricane Melissa was located near latitude 17.2 North, longitude 76.5 West. Maximum sustained winds are near 145 mph (230 km/h) with higher gusts. Melissa is a category 4 hurricane on the Saffir-Simpson Hurricane Wind Scale.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "category": {"type": "integer"},
+          "max_wind_mph": {"type": "number"}
+        },
+        "required": ["name", "category", "max_wind_mph"],
+        "additionalProperties": false
+      },
+      "gold": {"name": {"$any": ["Melissa", "Hurricane Melissa"]}, "category": 4, "max_wind_mph": 145}
+    },
+    {
+      "id": "season-counts-words",
+      "instruction": "Extract the season year and the counts of named storms, hurricanes (all of them) and major hurricanes.",
+      "text": "The 2025 Atlantic season produced thirteen named storms, of which five became hurricanes and four reached major-hurricane strength.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "season": {"type": "integer"},
+          "named_storms": {"type": "integer"},
+          "hurricanes": {"type": "integer"},
+          "major_hurricanes": {"type": "integer"}
+        },
+        "required": ["season", "named_storms", "hurricanes", "major_hurricanes"],
+        "additionalProperties": false
+      },
+      "gold": {"season": 2025, "named_storms": 13, "hurricanes": 5, "major_hurricanes": 4}
+    },
+    {
+      "id": "null-when-unstated",
+      "instruction": "Extract who the package is for and its total cost.",
+      "text": "The ministry announced a new support package for farmers on Monday but gave no figure for its total cost.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "beneficiary": {"type": "string"},
+          "total_cost": {"type": ["number", "null"]}
+        },
+        "required": ["beneficiary", "total_cost"],
+        "additionalProperties": false
+      },
+      "gold": {"beneficiary": {"$any": ["farmers", "farmer"]}, "total_cost": null}
+    },
+    {
+      "id": "reported-not-confirmed",
+      "instruction": "Has the company confirmed an aircraft order? How many aircraft does the text mention?",
+      "text": "Shares of the airline rose after a newspaper reported that it is in talks to buy 50 aircraft; the company declined to comment.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "order_confirmed": {"type": "boolean"},
+          "aircraft_count": {"type": ["integer", "null"]}
+        },
+        "required": ["order_confirmed", "aircraft_count"],
+        "additionalProperties": false
+      },
+      "gold": {"order_confirmed": false, "aircraft_count": 50}
+    },
+    {
+      "id": "relative-year",
+      "instruction": "Extract the calendar year the export figure refers to and the exports in billions of dollars.",
+      "text": "Published 2026-10-12. Exports reached a record 262 billion dollars last year, the trade ministry said.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "year": {"type": "integer"},
+          "exports_bn_usd": {"type": "number"}
+        },
+        "required": ["year", "exports_bn_usd"],
+        "additionalProperties": false
+      },
+      "gold": {"year": 2025, "exports_bn_usd": 262}
+    },
+    {
+      "id": "date-format",
+      "instruction": "Extract the resolution date and the agency whose publication resolves the contract.",
+      "text": "The contract resolves at 8:00 AM CT on January 5, 2027, when NOAA publishes the annual mean.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "resolution_date": {"type": "string"},
+          "agency": {"type": "string"}
+        },
+        "required": ["resolution_date", "agency"],
+        "additionalProperties": false
+      },
+      "gold": {"resolution_date": "2027-01-05", "agency": {"$any": ["NOAA", "National Oceanic and Atmospheric Administration"]}}
+    },
+    {
+      "id": "tickers-that-fell",
+      "instruction": "List the tickers whose shares fell.",
+      "text": "Defense stocks led the gains: ASELS climbed 4.1%, while THYAO and PGSUS slipped on higher fuel costs.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "fell": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["fell"],
+        "additionalProperties": false
+      },
+      "gold": {"fell": ["THYAO", "PGSUS"]}
+    },
+    {
+      "id": "pick-the-named-city",
+      "instruction": "Extract Istanbul's September rainfall in millimetres.",
+      "text": "Rainfall in Ankara totalled 12 mm in September, well below the 41 mm recorded in Istanbul over the same month.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "city": {"type": "string"},
+          "rainfall_mm": {"type": "number"}
+        },
+        "required": ["city", "rainfall_mm"],
+        "additionalProperties": false
+      },
+      "gold": {"city": "Istanbul", "rainfall_mm": 41}
+    },
+    {
+      "id": "gdp-quarter",
+      "instruction": "Extract the quarter, its year-on-year growth in percent and the previous quarter's growth in percent.",
+      "text": "Turkey's economy grew 3.2% year on year in the second quarter of 2026, TurkStat said, slowing from 3.9% in the first quarter.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "quarter": {"type": "string"},
+          "growth_yoy_pct": {"type": "number"},
+          "previous_quarter_pct": {"type": "number"}
+        },
+        "required": ["quarter", "growth_yoy_pct", "previous_quarter_pct"],
+        "additionalProperties": false
+      },
+      "gold": {"quarter": "2026-Q2", "growth_yoy_pct": 3.2, "previous_quarter_pct": 3.9}
+    },
+    {
+      "id": "jobs-thousands-comma",
+      "instruction": "Extract the month, the unemployment rate in percent and the number of jobs added.",
+      "text": "The U.S. unemployment rate held at 4.3% in August 2026 as employers added 22,000 jobs.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "month": {"type": "string"},
+          "unemployment_pct": {"type": "number"},
+          "jobs_added": {"type": "integer"}
+        },
+        "required": ["month", "unemployment_pct", "jobs_added"],
+        "additionalProperties": false
+      },
+      "gold": {"month": "2026-08", "unemployment_pct": 4.3, "jobs_added": 22000}
+    },
+    {
+      "id": "co2-annual-mean",
+      "instruction": "Extract the year, the annual mean CO2 concentration in ppm and the increase from the year before in ppm.",
+      "text": "Carbon dioxide at Mauna Loa averaged 424.61 parts per million in 2024, up 3.53 ppm from 2023.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "year": {"type": "integer"},
+          "co2_ppm": {"type": "number"},
+          "increase_ppm": {"type": "number"}
+        },
+        "required": ["year", "co2_ppm", "increase_ppm"],
+        "additionalProperties": false
+      },
+      "gold": {"year": 2024, "co2_ppm": 424.61, "increase_ppm": 3.53}
+    },
+    {
+      "id": "negated-landfall",
+      "instruction": "Extract the storm's name and whether it made landfall in the United States.",
+      "text": "Hurricane Erin stayed well offshore and did not make landfall in the United States, though it brought rip currents to the East Coast.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "us_landfall": {"type": "boolean"}
+        },
+        "required": ["name", "us_landfall"],
+        "additionalProperties": false
+      },
+      "gold": {"name": {"$any": ["Erin", "Hurricane Erin"]}, "us_landfall": false}
+    },
+    {
+      "id": "turkish-inflation",
+      "instruction": "Extract the month, the annual inflation rate in percent and the monthly rate in percent.",
+      "text": "TÜİK verilerine göre yıllık enflasyon 2026 Eylül ayında yüzde 33,29 oldu; aylık artış yüzde 3,23 olarak gerçekleşti.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "month": {"type": "string"},
+          "annual_pct": {"type": "number"},
+          "monthly_pct": {"type": "number"}
+        },
+        "required": ["month", "annual_pct", "monthly_pct"],
+        "additionalProperties": false
+      },
+      "gold": {"month": "2026-09", "annual_pct": 33.29, "monthly_pct": 3.23}
+    },
+    {
+      "id": "state-gdp-distractors",
+      "instruction": "Extract Texas's GDP in trillions of dollars and the year of the figures.",
+      "text": "California's GDP was 4.10 trillion dollars in 2024, ahead of Texas at 2.71 trillion and New York at 2.30 trillion.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "state": {"type": "string"},
+          "gdp_trillion_usd": {"type": "number"},
+          "year": {"type": "integer"}
+        },
+        "required": ["state", "gdp_trillion_usd", "year"],
+        "additionalProperties": false
+      },
+      "gold": {"state": "Texas", "gdp_trillion_usd": 2.71, "year": 2024}
+    },
+    {
+      "id": "signed-percentage-points",
+      "instruction": "Extract the region, the unemployment rate in percent and its signed change in percentage points (negative for a fall).",
+      "text": "The jobless rate fell 0.3 percentage points to 8.5% in the euro area in July 2026.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "region": {"type": "string"},
+          "rate_pct": {"type": "number"},
+          "change_pp": {"type": "number"}
+        },
+        "required": ["region", "rate_pct", "change_pp"],
+        "additionalProperties": false
+      },
+      "gold": {"region": {"$any": ["euro area", "eurozone", "euro zone"]}, "rate_pct": 8.5, "change_pp": -0.3}
+    }
+  ]
+}
