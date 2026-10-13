@@ -1,8 +1,4 @@
-"""Thin CLIs under scripts/spark/: exit codes and outputs on the synthetic root.
-
-Same import pattern as tests/test_climate/test_noaa_labels.py: the scripts
-directory goes on sys.path and the script module is imported by name.
-"""
+"""Thin CLIs under scripts/spark/: exit codes and outputs on the synthetic root."""
 
 from __future__ import annotations
 
@@ -66,11 +62,9 @@ def test_compare_json_cli_exit_codes(tmp_path, capsys):
     assert "floor" in capsys.readouterr().out
 
 
-# ---- --differ, the machine summary and the dirty-tree warning (final review, Important 1) -----
-
 ZENBOOK = {"machine": "AMD64", "system": "Windows", "python": "3.14.2", "git_dirty": False}
 SPARK = {"machine": "aarch64", "system": "Linux", "python": "3.14.2", "git_dirty": False}
-GATE = ["--ignore", "identity.machine"]  # the registered gate's ignore, without the tolerance flags
+GATE = ["--ignore", "identity.machine"]
 
 
 def _payload(machine, *, x=1.0):
@@ -88,8 +82,6 @@ def _write(tmp_path, name, doc):
 
 
 def test_differ_fails_a_payload_compared_with_its_own_copy(tmp_path, capsys):
-    """The gap the final review found: with identity.machine ignored, a payload passes against
-    a copy of itself. --differ evaluates the RAW payloads, so the ignore does not hide it."""
     left = _write(tmp_path, "a.json", _payload(ZENBOOK))
     right = _write(tmp_path, "b.json", _payload(ZENBOOK))
     assert compare_cli.main([left, right, *GATE]) == 0  # the old gate: vacuous
@@ -166,9 +158,6 @@ def test_differ_compares_plain_json_without_tolerance(tmp_path, capsys):
 def test_differ_equality_is_the_json_text_so_nan_matches_nan_and_one_is_not_one_point_zero(
     tmp_path, capsys
 ):
-    """Two parsed NaN objects are never ``==``, which would make a copy of a payload with a NaN
-    in the subtree look different; 1 and 1.0 are different JSON text, so they count as different;
-    the order of the keys is not data."""
     nan = float("nan")
     nan_a = _write(tmp_path, "nan1.json", {"x": 1.0, "m": {"v": nan, "k": [1, {"w": nan}]}})
     nan_b = _write(tmp_path, "nan2.json", {"x": 1.0, "m": {"v": nan, "k": [1, {"w": nan}]}})
@@ -263,6 +252,4 @@ def test_parity_score_cli_writes_a_clockless_payload(
     assert "ts_utc" not in payload
     assert payload["identity"]["snapshot"]["sweep_count"] == 1
     assert not (spark_root.root / "climate_data" / "paper").exists()
-    # the CLI is rooted at --root, never at the default climate root (an unrooted write
-    # would land in the tmp dir conftest points CLIMATE_DATA_ROOT at)
     assert not (climate_default_root / "paper").exists()

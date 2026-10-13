@@ -5,7 +5,7 @@
 #
 # After the cutover /srv/quant_data is the one live root, written by the trading user only.
 # The operator's ~/quant_data is a copy of it for research and carries the marker file
-# .mirror-of-spark (design: docs/plans/2026-10-05-spark-runtime-move-design.md section 6).
+# .mirror-of-spark.
 #   * Refuses (exit 3) to write into a root WITHOUT the marker, so it can never be pointed
 #     at a live root; and refuses a source WITH the marker (that is a mirror, not the live
 #     root).

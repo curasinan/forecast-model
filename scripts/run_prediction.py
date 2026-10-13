@@ -1,16 +1,4 @@
-"""Main entry point: predict one question and show edge analysis.
-
-Phase 4: Ensemble predictor, calibration metrics, market selector.
-Bayesian + Classical ML + Claude LLM -> Ensemble (weighted combination).
-Monte Carlo confidence intervals, empirical Kelly sizing,
-evaluation tracking with Brier score, calibration curves, cumulative EV.
-
-Usage:
-    python scripts/run_prediction.py
-    python scripts/run_prediction.py --question gpt5-release-2026
-    python scripts/run_prediction.py --all
-    python scripts/run_prediction.py --scan
-"""
+"""Main entry point: predict one question and show edge analysis."""
 
 import asyncio
 import logging

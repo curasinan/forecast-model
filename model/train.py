@@ -1,26 +1,4 @@
-"""Continuous-regression price-change prediction pipeline with overfitting checks.
-
-Predicts the signed 24h price change (``price_change_24h``) for political
-Polymarket markets using a LightGBM regressor. The previous binary-classifier
-formulation discarded magnitude inside the |Δ|<0.005 dead zone and shorted
-relentlessly; the previous flat regression run produced R² = -0.12 on the
-test set — a textbook overfitting signature. This version adds six
-overfitting-prevention mechanisms:
-
-1. Three-way temporal split (60/20/20) so we don't iterate on the holdout
-2. Train-vs-validation gap monitoring with a warning when the gap is too wide
-3. Feature stability check — train on each TRAIN half, flag features whose
-   top-10 membership isn't stable across splits
-4. Learning-curve sweep over n_estimators ∈ {50,100,200,300,500}
-5. Tighter regularization: shallower trees, larger leaf-size floor, L1/L2,
-   row + column subsampling
-6. 5-seed ensemble for per-row prediction std; ``confident-only`` profit
-   simulation gates trades on pred_std < median
-
-Run:
-    python -m model.train             # train + validate, holdout untouched
-    python -m model.train --final     # also evaluate on holdout (with warning)
-"""
+"""Continuous-regression price-change prediction pipeline with overfitting checks."""
 
 from __future__ import annotations
 
@@ -43,8 +21,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from features.labels import build_training_dataset
 
-# --- Paths ----------------------------------------------------------------- #
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "polymarket.db"
 LOG_PATH = REPO_ROOT / "logs" / "training.log"
@@ -59,12 +35,6 @@ PREDICTIONS_VS_ACTUAL_PATH = RESULTS_DIR / "predictions_vs_actual.csv"
 LEARNING_CURVE_PATH = RESULTS_DIR / "learning_curve.csv"
 FEATURE_STABILITY_PATH = RESULTS_DIR / "feature_stability.csv"
 
-# --- Hyperparameters / constants ------------------------------------------ #
-#
-# Note: ``n_estimators`` is intentionally NOT listed here — it's picked by the
-# learning-curve sweep (Step 5). ``learning_rate`` is kept at 0.05 per the
-# 2026-05-23 user clarification (smaller LR pairs well with stronger
-# regularization and shallow trees).
 LGBM_PARAMS: dict = dict(
     learning_rate=0.05,
     max_depth=3,
@@ -95,9 +65,6 @@ TOP_FEATURES_TO_SAVE = 20
 TOP_FEATURES_FOR_STABILITY = 10
 CLUSTER_NULL_SENTINEL = "__none__"
 
-# The 4 features identified as 'stable' by the feature-stability check on
-# 2026-05-23 (top-10 across full TRAIN + both TRAIN halves). Used when
-# --features stable is passed.
 STABLE_FEATURES: tuple[str, ...] = (
     "momentum_24h",
     "momentum_72h",
@@ -106,8 +73,6 @@ STABLE_FEATURES: tuple[str, ...] = (
 )
 
 SUPPORTED_HORIZONS: tuple[int, ...] = (1, 6, 24)
-
-# --- Political-market regex (word-bounded, audited 2026-05-04) ------------ #
 
 POLITICAL_PATTERNS = [
     # Elections / institutions
@@ -142,9 +107,7 @@ POLITICAL_REGEX = re.compile("|".join(POLITICAL_PATTERNS), flags=re.IGNORECASE)
 log = logging.getLogger("model.train")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -165,9 +128,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Step 1: dataset assembly
-# --------------------------------------------------------------------------- #
 
 
 def load_political_market_ids(
@@ -226,9 +187,7 @@ def generate_timestamps(
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Step 2: target + feature selection
-# --------------------------------------------------------------------------- #
 
 
 def prepare_target_and_columns(
@@ -236,15 +195,7 @@ def prepare_target_and_columns(
     target_col: str = "price_change_24h",
     feature_subset: Iterable[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Drop rows with no label; identify feature columns.
-
-    ``target_col`` defaults to the 24h horizon. Pass ``price_change_6h`` or
-    ``price_change_1h`` to train against a shorter forecast horizon.
-
-    ``feature_subset`` optionally restricts the returned feature_cols to a
-    specific iterable (e.g. the 4 stable features from the stability check).
-    None means "use all non-label columns".
-    """
+    """Drop rows with no label; identify feature columns."""
     if target_col not in df.columns:
         raise RuntimeError(
             f"{target_col} column missing — was the corresponding horizon "
@@ -275,12 +226,7 @@ def encode_cluster_id(
     train: pd.DataFrame,
     *others: pd.DataFrame,
 ) -> tuple:
-    """Label-encode ``cluster_id`` fitted on ``train``, applied to ``others``.
-
-    Returns ``(train_encoded, *others_encoded, mapping_dict)``. Test/val/holdout
-    categories not seen during training receive -1 (OOV sentinel that LightGBM
-    can still split on).
-    """
+    """Label-encode ``cluster_id`` fitted on ``train``, applied to ``others``."""
     train_filled = train["cluster_id"].fillna(CLUSTER_NULL_SENTINEL).astype(str)
     categories = sorted(train_filled.unique())
     mapping: dict[str, int] = {c: i for i, c in enumerate(categories)}
@@ -300,25 +246,14 @@ def encode_cluster_id(
     return (train, *encoded_others, mapping)
 
 
-# --------------------------------------------------------------------------- #
 # Step 3: three-way temporal split
-# --------------------------------------------------------------------------- #
 
 
 def temporal_split(
     df: pd.DataFrame,
     fractions: tuple[float, float] = TRAIN_VAL_HOLDOUT_FRACTIONS,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Timestamp, pd.Timestamp]:
-    """Split chronologically into train/val/holdout by row count (NOT date range).
-
-    Rows are sorted by timestamp and then split into three blocks at the row
-    indices ``n*f1`` and ``n*f2``. This preserves the temporal-ordering
-    guarantee (every train row precedes every val row, and every val row
-    precedes every holdout row) while staying robust to gaps in the timestamp
-    distribution — earlier date-range splitting produced an empty validation
-    slice on the 6h-horizon experiment because labeled rows clustered into
-    two distinct date bands with a gap in between.
-    """
+    """Split chronologically into train/val/holdout by row count (NOT date range)."""
     f1, f2 = fractions
     df = df.copy()
     df["__ts"] = pd.to_datetime(df["timestamp"], utc=True)
@@ -335,9 +270,7 @@ def temporal_split(
     return train, val, holdout, t1, t2
 
 
-# --------------------------------------------------------------------------- #
 # Profit simulation (unchanged from the regression-only version)
-# --------------------------------------------------------------------------- #
 
 
 def simulate_profit(
@@ -419,9 +352,7 @@ def _log_sim(label: str, sim: dict) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # Model fitting helper
-# --------------------------------------------------------------------------- #
 
 
 def _fit_regressor(
@@ -444,9 +375,7 @@ def _top_n_features(model: LGBMRegressor, feature_cols: list[str], n: int) -> se
     return set(df.head(n)["feature"].tolist())
 
 
-# --------------------------------------------------------------------------- #
 # Main pipeline
-# --------------------------------------------------------------------------- #
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -506,7 +435,6 @@ def main(argv: list[str] | None = None) -> int:
     log.info("  metrics path    : %s", metrics_path)
     log.info("=" * 72)
 
-    # ---- Step 1: dataset assembly ---------------------------------------- #
     market_ids = load_political_market_ids()
     log.info(
         "Step 1a: loaded %d political market_ids (>= %d snapshots each)",
@@ -533,7 +461,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     log.info("Step 1d: build_training_dataset returned %d rows after null-fraction filter", len(df))
 
-    # ---- Step 2: target preparation -------------------------------------- #
     df, feature_cols = prepare_target_and_columns(
         df, target_col=target_col, feature_subset=feature_subset,
     )
@@ -550,7 +477,6 @@ def main(argv: list[str] | None = None) -> int:
         log.critical("Too few labeled rows (%d) — aborting.", len(df))
         return 1
 
-    # ---- Step 3: three-way temporal split -------------------------------- #
     train_df, val_df, holdout_df, t1, t2 = temporal_split(df, TRAIN_VAL_HOLDOUT_FRACTIONS)
     log.info(
         "Step 3: split at %s and %s — train=%d val=%d holdout=%d",
@@ -564,7 +490,6 @@ def main(argv: list[str] | None = None) -> int:
         log.critical("--final was passed but the holdout slice is empty. Aborting.")
         return 1
 
-    # ---- Step 4: feature encoding (only if cluster_id is in the subset) -- #
     if "cluster_id" in feature_cols:
         train_df, val_df, holdout_df, cluster_mapping = encode_cluster_id(
             train_df, val_df, holdout_df
@@ -584,7 +509,6 @@ def main(argv: list[str] | None = None) -> int:
     y_val = val_df[target_col].astype(float).values
     y_holdout = holdout_df[target_col].astype(float).values
 
-    # ---- Step 5: learning-curve sweep ------------------------------------ #
     log.info(
         "Step 5: learning-curve sweep over n_estimators=%s",
         list(LEARNING_CURVE_N_ESTIMATORS),
@@ -611,7 +535,6 @@ def main(argv: list[str] | None = None) -> int:
         [{"n_estimators": n, "val_mae": v[1]} for n, v in sweep_results.items()]
     ).to_csv(LEARNING_CURVE_PATH, index=False)
 
-    # ---- Step 6: main model = sweep model at optimal_n ------------------- #
     main_model = sweep_results[optimal_n][0]
     log.info(
         "Step 6: main model = sweep model at n_estimators=%d (reused, no extra fit)",
@@ -627,7 +550,6 @@ def main(argv: list[str] | None = None) -> int:
     for _, row in top_importances.iterrows():
         log.info("          %s: %s", row["feature"], int(row["importance"]))
 
-    # ---- Step 7: train-vs-val gap monitoring ----------------------------- #
     y_pred_train = main_model.predict(X_train)
     y_pred_val = main_model.predict(X_val)
 
@@ -662,7 +584,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         overfitting_warning = True
 
-    # ---- Step 8: feature stability --------------------------------------- #
     half = len(train_df) // 2
     X_train_a, y_train_a = X_train.iloc[:half], y_train[:half]
     X_train_b, y_train_b = X_train.iloc[half:], y_train[half:]
@@ -699,7 +620,6 @@ def main(argv: list[str] | None = None) -> int:
         })
     pd.DataFrame(stability_rows).to_csv(FEATURE_STABILITY_PATH, index=False)
 
-    # ---- Step 9: confidence ensemble (5 seeds) --------------------------- #
     log.info(
         "Step 9: confidence ensemble — training 4 additional seeds (42 reuses main model)",
     )
@@ -721,14 +641,12 @@ def main(argv: list[str] | None = None) -> int:
         float(pred_std.min()), float(pred_std.max()),
     )
 
-    # ---- Step 10: save predictions_vs_actual.csv ------------------------- #
     pd.DataFrame({
         "predicted": y_pred_val,
         "actual": y_val,
         "pred_std": pred_std,
     }).to_csv(PREDICTIONS_VS_ACTUAL_PATH, index=False)
 
-    # ---- Step 11: profit simulation (full + confident-only) -------------- #
     log.info("Step 10: profit simulation (threshold=±%.4f, label=%s)", buy_threshold, target_col)
     full_sim = simulate_profit(
         val_df, y_pred_val,
@@ -738,21 +656,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     _log_sim("FULL      ", full_sim)
 
-    # Confidence gate (revised 2026-05-26): the prior implementation filtered
-    # ALL val rows by ``pred_std < median(all pred_std)``, which on regularized
-    # short-horizon models eliminated every actual trade — the most-confident
-    # predictions are tiny ones that never cross the trade threshold. Fix: first
-    # select rows where ``|y_pred| > threshold`` (the trade candidates), then
-    # within that subset keep rows whose ``pred_std`` is below the candidate
-    # subset's own median. This filters noisy trades rather than eliminating
-    # all trades.
     candidate_mask = np.abs(y_pred_val) > buy_threshold
     n_candidates = int(candidate_mask.sum())
     if n_candidates >= 2:
         candidate_stds = pred_std[candidate_mask]
         candidate_std_median = float(np.median(candidate_stds))
-        # Build a full-length mask that is True only for candidates with
-        # below-median pred_std (relative to the candidate subset).
         confident_in_candidates = candidate_stds < candidate_std_median
         confident_mask = np.zeros_like(candidate_mask, dtype=bool)
         confident_mask[candidate_mask] = confident_in_candidates
@@ -784,7 +692,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     _log_sim("CONFIDENT ", confident_sim)
 
-    # ---- Step 12: persist artifacts -------------------------------------- #
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -853,7 +760,6 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
 
-    # ---- Step 13: holdout (only if --final) ------------------------------ #
     if args.final:
         log.warning(
             "HOLDOUT SET ACCESSED — do not iterate further after viewing these results."

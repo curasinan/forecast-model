@@ -1,15 +1,4 @@
-"""Fixtures for the Spark parity tooling tests (analysis/spark_parity.py).
-
-A synthetic quant-data root with the layout the tooling assumes:
-ibkr_ticks/quotes/date=*/quotes-HHMMSSZ.parquet (recorder-shaped, the 13
-SWEEP_SCHEMA columns), climate_data/labels/labels_ledger.parquet
-(climate.storage LEDGER_COLUMNS), climate_data/models/gtm_emos.json (a
-one-lead identity EMOS model) and the two reduced CDS products that
-build_training_frame reads. The sweep columns are spelled out here on
-purpose so these tests never import the recorder, which drags in the venue
-layer. An autouse fixture (climate_default_root) also redirects the default
-climate data root to an empty tmp dir for every test in this directory.
-"""
+"""Fixtures for the Spark parity tooling tests (analysis/spark_parity.py)."""
 
 from __future__ import annotations
 
@@ -163,14 +152,7 @@ def universe_json(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def climate_default_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The default climate data root, redirected to an empty tmp dir for every test here.
-
-    climate.paths.data_root(None) resolves CLIMATE_DATA_ROOT and otherwise the
-    operator's real ~/quant_data/climate_data. score_snapshot takes no root, so an
-    unrooted write_paper_payload / append_paper_history added to it would land there,
-    out of sight of every assertion on the synthetic root. With the variable set,
-    such a write lands here instead, and the "never writes" tests assert on <root>/paper.
-    """
+    """The default climate data root, redirected to an empty tmp dir for every test here."""
     root = tmp_path / "default_root"
     monkeypatch.setenv("CLIMATE_DATA_ROOT", str(root))
     return root

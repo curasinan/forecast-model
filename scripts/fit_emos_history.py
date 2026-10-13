@@ -1,10 +1,4 @@
-"""Fit EMOS per station x metric x lead_day from historical training frames.
-
-Reads forecast_history_daily + obs_daily (built by the backfill collectors),
-fits weather.emos per group, and persists params as JSON under
-<data_root>/models/emos/. Cold-start params are never persisted: groups below
---min-samples are skipped.
-"""
+"""Fit EMOS per station x metric x lead_day from historical training frames."""
 
 from __future__ import annotations
 
@@ -84,8 +78,6 @@ def fit_group(
         pred = predict_emos(params, m, v)
         crps_values.append(crps_gaussian(y, pred.mu, pred.sigma))
     mean_crps = sum(crps_values) / len(crps_values)
-    # Record what actually labelled these rows, not what was requested:
-    # settlement-quality CLI vs fallback ASOS changes how CRPS should be read.
     source_counts = {
         str(k): int(v) for k, v in frame["label_source"].value_counts().items()
     }

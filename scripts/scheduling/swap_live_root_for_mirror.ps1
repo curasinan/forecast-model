@@ -1,23 +1,3 @@
-# Turn this machine's live quant-data root into the kept root and put an empty,
-# marked mirror in its place -- or, with -Undo, put the kept root back.
-#
-# Run in PowerShell from the repo root. Forward: at the cutover (plan Task 12),
-# only after the Zenbook's Gateway is closed, its four scheduled tasks are
-# disabled and the final push has been verified. -Undo: at a rollback, after
-# scripts/spark/rollback.sh has ended with exit 0.
-#
-#   .\scripts\scheduling\swap_live_root_for_mirror.ps1          # quant_data -> quant_data_zenbook_final; a new quant_data with the marker
-#   .\scripts\scheduling\swap_live_root_for_mirror.ps1 -Undo    # the mirror -> quant_data_mirror_retired; the kept root -> quant_data
-#
-# Every step is checked and the first failure ends the script with exit 1 and a
-# line that starts "swap refused:". The reason this is a script and not four
-# pasted lines: a rename that Windows refuses (some program holds a file open
-# inside the root) is a non-terminating error, and the lines after it would
-# then create the marker file inside the LIVE root. The pull would take that
-# root for a mirror and write into it, and the rollback would have no kept
-# root to go back to. Close anything that has a file open under the root first.
-# -Undo is all or nothing: if it has retired the mirror and then cannot rename the kept
-# root, it puts the mirror back and the "swap refused:" line says so, so it can be run again.
 param(
     [switch]$Undo,
     [string]$UserHome = $env:USERPROFILE
@@ -69,9 +49,6 @@ if (Test-Path $root) {
     if (Test-Path $root) { Stop-Swap "the mirror is still at $root; nothing else was changed" }
     $mirrorRetired = $true
 }
-# -Undo is all or nothing: if the kept root cannot be renamed after the mirror has been retired,
-# the mirror goes back where it was, so that -Undo can simply be run again. (A re-run would
-# otherwise stop at "$retired already exists" with no mirror at $root.)
 try {
     Rename-Item -Path $kept -NewName 'quant_data'
 } catch {

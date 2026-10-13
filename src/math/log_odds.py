@@ -1,15 +1,4 @@
-"""Log-odds (logit/sigmoid) transforms for bounded probability prices.
-
-Prediction market prices are bounded [0, 1]. Standard models assume unbounded
-real numbers. The logit transform maps probabilities to the real line where
-diffusion models and linear operations apply correctly.
-
-    logit(p) = ln(p / (1 - p))     maps (0,1) -> (-inf, +inf)
-    sigmoid(x) = 1 / (1 + e^(-x))  maps (-inf, +inf) -> (0,1)
-
-This is the same sigmoid at the heart of every neural network and logistic
-regression. It guarantees prices stay in (0,1) by construction.
-"""
+"""Log-odds (logit/sigmoid) transforms for bounded probability prices."""
 
 import math
 
@@ -36,9 +25,5 @@ def odds_from_prob(p: float) -> float:
 
 
 def implied_probability(price: float) -> float:
-    """Market price IS the implied probability in a prediction market.
-
-    In Polymarket, YES price of $0.35 = 35% implied probability.
-    This function exists for clarity and to clamp edge cases.
-    """
+    """Market price IS the implied probability in a prediction market."""
     return max(0.01, min(0.99, price))

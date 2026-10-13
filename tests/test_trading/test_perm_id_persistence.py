@@ -1,23 +1,4 @@
-"""Task 1.3: the venue's permId (assigned at order ack) must survive into
-both durable records -- trade_log (SQLite) and the ibkr_paper_runs.jsonl
-run ledger -- so a later reconciliation task can join the paper book to
-venue state by permId (str-normalized on both sides).
-
-Final-review finding I-1 (below the original test): the adapter reads
-``trade.order.permId`` after a fixed 1s sleep, so a slow Gateway can ack an
-order before IB has assigned its permId. That row used to be stored with
-``perm_id = ""`` forever -- ``reconcile_paper_book`` skips it on every run
-with only a note while the sync ledger kept ``ok: true``, silently
-dropping the order out of fill capture. Two fixes are pinned here:
-
-- BACKFILL: ``TradingExecutor.sync()`` re-reads the venue's open orders
-  (read-only) and fills in any of this run's missing permIds, matched by
-  venue order id AND leg contract.
-- LOUDNESS: a candidate row still missing its permId is counted
-  (``ReconcileReport.skipped_missing_perm_id``) and makes the sync run
-  record ``ok: false`` / exit 1, so the health probe's SYNC_STALE axis
-  fires instead of the gap staying silent.
-"""
+"""The venue's permId must survive into both trade_log and the run ledger."""
 
 from __future__ import annotations
 
@@ -37,10 +18,6 @@ YES_CON = 712856754  # _ibkr_market()'s YES leg
 
 
 class FakeVenueWithPermId(FakeVenue):
-    """FakeVenue whose ack carries a venue permId, like the real IBKR adapter
-    (src/venues/ibkr/adapter.py: `raw={"perm_id": getattr(trade.order, "permId", None), ...}`).
-    """
-
     def _place_order(self, request):
         self.requests.append(request)
         self._n += 1
@@ -61,20 +38,10 @@ def test_perm_id_flows_ack_to_db(tmp_path):
     assert row == ("555000111", "placed")
 
 
-# --------------------------------------------------------------------------- #
 # I-1: permId not yet assigned at ack time
-# --------------------------------------------------------------------------- #
 
 
 class FakeVenueLatePermId(FakeVenue):
-    """The ack arrives before IB assigns a permId (``raw["perm_id"]`` is
-    ``None`` or ``0``, both seen from ib_async); the venue's open-order list
-    (``get_all_open_orders``, like ``IBKRAdapter``'s reqAllOpenOrders read)
-    carries it once assigned -- ``assigned`` maps venue order id -> permId,
-    and an unassigned one reads back as 0 exactly like ``_trade_to_order``.
-    ``foreign`` orders are other clients' resting orders.
-    """
-
     def __init__(self, ack_perm_id=None, **kwargs):
         super().__init__(read_only=False, **kwargs)
         self._ack_perm_id = ack_perm_id
@@ -124,8 +91,6 @@ def _place_one(tmp_path, venue) -> tuple[TradingExecutor, object, Path]:
 
 @pytest.mark.parametrize("ack_perm_id", [None, 0])
 def test_missing_perm_id_at_ack_is_stored_empty(tmp_path, ack_perm_id):
-    """Pins the CURRENT storage: None and 0 both become "" -- never "None"
-    or "0", which reconcile would treat as a real permId and join on."""
     venue = FakeVenueLatePermId(ack_perm_id=ack_perm_id)
     _, order, db = _place_one(tmp_path, venue)
     assert order.perm_id == ""
@@ -150,8 +115,6 @@ def test_sync_backfills_a_missing_perm_id_from_the_venue_open_orders(tmp_path, a
 
 
 def test_backfilled_row_then_reconciles_instead_of_being_skipped(tmp_path):
-    """End to end: once backfilled, the row joins the venue's open order by
-    permId and is concluded, not skipped."""
     venue = FakeVenueLatePermId(ack_perm_id=None)
     ex, order, db = _place_one(tmp_path, venue)
     venue.assigned["V1"] = 1599223399
@@ -175,9 +138,6 @@ def test_backfill_leaves_the_row_empty_when_the_venue_still_has_no_perm_id(tmp_p
 
 
 def test_backfill_never_matches_on_order_id_alone(tmp_path):
-    """IBKR order ids are per-client: another client's resting order can
-    share our venue order id. Only an order on the SAME leg contract may
-    donate its permId."""
     venue = FakeVenueLatePermId(ack_perm_id=None)
     venue.foreign.append(Order(
         order_id="V1",  # same id, different client and contract
@@ -192,9 +152,6 @@ def test_backfill_never_matches_on_order_id_alone(tmp_path):
 
 
 def test_backfill_refuses_an_ambiguous_match(tmp_path):
-    """Two different permIds claiming our (order id, contract) -- guessing
-    between them could attach our row to someone else's order. Leave it
-    empty (reconcile then counts it loudly)."""
     venue = FakeVenueLatePermId(ack_perm_id=None)
     venue.assigned["V1"] = 1599223399
     venue.foreign.append(Order(
@@ -220,10 +177,6 @@ def test_backfill_never_overwrites_a_perm_id_already_on_file(tmp_path):
 
 
 def test_a_failing_backfill_read_does_not_crash_sync(tmp_path, caplog):
-    """The backfill is best-effort: run_ibkr_paper calls sync() AFTER
-    placing, so an exception here would crash the run and lose its
-    run-ledger line. The row just stays empty -- and the next reconcile
-    flags it loudly (skipped_missing_perm_id -> ok:false)."""
     import logging
 
     class _FlakyReadVenue(FakeVenueLatePermId):
@@ -250,12 +203,6 @@ def test_simulated_executor_sync_makes_no_backfill_venue_call(tmp_path):
     assert venue.all_open_calls == 0
 
 
-# --------------------------------------------------------------------------- #
-# I-1 loudness: scripts/sync_ibkr_paper.py main() end to end (fake adapter,
-# fake settings -- no Gateway, no .env, tmp_path book only)
-# --------------------------------------------------------------------------- #
-
-
 class _FakeSettings:
     trading_mode = "paper"
 
@@ -264,9 +211,6 @@ class _FakeSettings:
 
 
 class _FakeSyncAdapter:
-    """Read-only stand-in for IBKRAdapter(role="paper_sync"): only what
-    sync_ibkr_paper.main() and reconcile_paper_book touch."""
-
     open_orders: list[Order] = []
 
     def __init__(self, settings, role, read_only):
@@ -336,8 +280,6 @@ def test_sync_main_marks_a_missing_perm_id_run_unhealthy(tmp_path, monkeypatch):
 
 
 def test_sync_main_stays_healthy_when_every_row_has_a_perm_id(tmp_path, monkeypatch):
-    """Contrast case, so the unhealthy verdict above is provably caused by
-    the missing permId and nothing else in the fixture."""
     rc, record = _run_sync_main(tmp_path, monkeypatch, perm_id_on_file="1599223399")
     assert record["skipped_missing_perm_id"] == 0
     assert record["unchanged"] == 1

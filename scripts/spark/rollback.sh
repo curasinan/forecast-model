@@ -7,8 +7,7 @@
 #
 # The Gateway session is on one machine at a time, so the ORDER below is the point: the
 # Spark gives the session up and is checked before anything is copied, and the Zenbook logs
-# in only after this script has ended with exit 0 (design:
-# docs/plans/2026-10-05-spark-runtime-move-design.md sections 4 and 6).
+# in only after this script has ended with exit 0.
 #   1. Stop the Spark's timers, then its services: one sudo-allowed systemctl call per unit.
 #   2. Stop the Gateway container: cd ~/ibgw && docker compose stop.
 #   3. Session check on the Spark: nothing listens on 4002 and the container does not run.
@@ -44,8 +43,6 @@ HOST="${SPARK_HOST:-spark}"
 SRC="$HOST:/srv/quant_data"
 DEST="${ROLLBACK_DEST:-/mnt/c/Users/asus/quant_data_zenbook_final}"
 SSH="${SPARK_SSH:-/mnt/c/Windows/System32/OpenSSH/ssh.exe}"
-# Every direct ssh call: never prompt, give up connecting after 20 s, and drop a connection
-# that has been silent for a minute. (The -e string of the copy below carries its own pair.)
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 MARKER=".mirror-of-spark"
 TIMERS="ibkr-health.timer ibkr-paper-sync.timer climate-labels.timer paper-book-backup.timer"
@@ -63,8 +60,6 @@ for arg in "$@"; do
   esac
 done
 
-# A refused destination is decided before the Spark is asked anything, so the Spark may be
-# exactly as it was, session included; --no-copy needs no destination and lets it go.
 refuse_destination() {
   echo "rollback: $1" >&2
   echo "rollback: the Spark was not touched and may still hold the session;" \
@@ -89,12 +84,6 @@ run() {
   fi
 }
 
-# From the moment the Spark is first asked to let go until the session check has passed, the
-# Spark may hold the session (stopped half way, or not at all), so every exit in that stretch
-# -- a failed step, Ctrl-C, a closed terminal, a kill -- ends with the same warning. bash
-# reports status 0 to an EXIT trap that a signal triggered, so the trap cannot read the exit
-# status: it is armed only for a real run and only once the Spark is being asked (so --help,
-# a dry run, a usage error and a refused destination stay quiet), and RELEASED disarms it.
 RELEASED=0
 WARNED=0
 warn_not_released() {
@@ -121,8 +110,6 @@ for unit in $TIMERS $SERVICES; do
   STOP_CMD+="sudo -n /usr/bin/systemctl stop $unit && "
 done
 STOP_CMD+="echo 'all runtime units are stopped'"
-# The command that decides whether the Zenbook may log in: one definition, so that what a
-# dry run prints is what the real run sends.
 CHECK_CMD="python3 - --port 4002 --container ibgw"
 
 echo "== 1/5 stop the Spark's timers and services"
@@ -150,7 +137,6 @@ if [ "$COPY" -eq 0 ]; then
 fi
 
 echo "== 4/5 copy $SRC -> $DEST (nothing is deleted there)"
-# Not the list of the other copy scripts: no "*-journal", "*.db-wal" or "*.db-shm" here (see 4).
 EXCLUDES=(--exclude "ibkr_ticks/state/" --exclude "*.tmp" --exclude "/$MARKER")
 COPY_CMD=(rsync -rlt --stats "${EXCLUDES[@]}" -e "$SSH -o BatchMode=yes -o ConnectTimeout=20"
           "$SRC/" "$DEST/")
@@ -162,8 +148,6 @@ else
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
-    # Exit 5, not rsync's own status: rsync's 3 and 4 would read as this script's "destination
-    # refused" and "the Spark may still hold the session". The status is in the message.
     echo "rollback: copy failed (rsync exit $rc); run this script again to finish the copy" \
          "before anyone logs in on the Zenbook. The Spark has given the session up." >&2
     exit 5

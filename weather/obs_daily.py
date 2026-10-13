@@ -1,9 +1,4 @@
-"""Aggregate raw station observations to local-calendar daily max/min labels.
-
-Training labels for EMOS live in the ``obs_daily`` table; market resolution
-truth stays in ``resolution_labels``. The finalized + 72h rule from
-weather.finalization applies before ``usable_for_training=1``.
-"""
+"""Aggregate raw station observations to local-calendar daily max/min labels."""
 
 from __future__ import annotations
 
@@ -34,12 +29,7 @@ DAILY_COLUMNS = [
 
 
 def observations_to_daily(df: pd.DataFrame, *, timezone_name: str) -> pd.DataFrame:
-    """Group irregular obs (observations-table shaped) into local daily rows.
-
-    n_hours_covered counts distinct elapsed UTC hour buckets with >=1 report,
-    so a 25-hour fall-back local day can reach 25 and a 23-hour spring-forward
-    day tops out at 23.
-    """
+    """Group irregular obs (observations-table shaped) into local daily rows."""
     if df.empty:
         return pd.DataFrame(columns=DAILY_COLUMNS)
     tz = ZoneInfo(timezone_name)
@@ -57,8 +47,6 @@ def observations_to_daily(df: pd.DataFrame, *, timezone_name: str) -> pd.DataFra
     temp_c = (
         pd.to_numeric(work["temp_c"], errors="coerce") if "temp_c" in work.columns else nan_col
     )
-    # Prefer F when present (ASOS native); derive the other unit — max/min
-    # commute with the linear conversion, so aggregating either is equivalent.
     temp_f = temp_f.fillna(temp_c * 9.0 / 5.0 + 32.0)
     work["_temp_f"] = temp_f
     work = work.dropna(subset=["_temp_f"])

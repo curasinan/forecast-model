@@ -1,22 +1,4 @@
-"""Evaluation metrics — how good are our predictions?
-
-Core metrics for prediction market performance:
-
-1. Brier Score: Mean squared error of probability estimates.
-   Perfect = 0.0, worst = 1.0, always-50% = 0.25.
-   This is THE standard metric for probabilistic forecasting.
-
-2. Log Loss: Penalizes confident wrong predictions harder than Brier.
-   Good for detecting overconfidence.
-
-3. Calibration: Do our 70% predictions happen 70% of the time?
-   Grouped into buckets, compared predicted vs actual rate.
-
-4. Cumulative EV: If we bet on every edge signal, what's our P&L?
-   The bottom line — did our edge signals actually make money?
-
-5. Accuracy: Simple win rate (did we predict the right side?).
-"""
+"""Evaluation metrics — how good are our predictions?"""
 
 import math
 import logging
@@ -67,34 +49,14 @@ class MetricsSummary:
 
 
 def brier_score(predictions: list[float], outcomes: list[int]) -> float:
-    """Brier score: mean squared error of probability estimates.
-
-    BS = (1/N) * Σ (p_i - o_i)²
-
-    Lower is better. 0 = perfect, 1 = worst, 0.25 = always guessing 50%.
-
-    Args:
-        predictions: List of predicted probabilities (0-1)
-        outcomes: List of actual outcomes (0 or 1)
-    """
+    """Brier score: mean squared error of probability estimates."""
     if not predictions:
         return 0.25
     return sum((p - o) ** 2 for p, o in zip(predictions, outcomes)) / len(predictions)
 
 
 def log_loss(predictions: list[float], outcomes: list[int], eps: float = 1e-7) -> float:
-    """Log loss (cross-entropy): penalizes confident wrong predictions.
-
-    LL = -(1/N) * Σ [o_i * log(p_i) + (1-o_i) * log(1-p_i)]
-
-    Unlike Brier, log loss goes to infinity for confident wrong predictions.
-    A model that says 99% YES on something that resolves NO gets hammered.
-
-    Args:
-        predictions: List of predicted probabilities (0-1)
-        outcomes: List of actual outcomes (0 or 1)
-        eps: Small value to avoid log(0)
-    """
+    """Log loss (cross-entropy): penalizes confident wrong predictions."""
     if not predictions:
         return 0.0
 
@@ -106,10 +68,7 @@ def log_loss(predictions: list[float], outcomes: list[int], eps: float = 1e-7) -
 
 
 def accuracy(predictions: list[float], outcomes: list[int]) -> float:
-    """Simple win rate: did we predict the right side?
-
-    Prediction > 0.5 means we predict YES. Check if outcome matches.
-    """
+    """Simple win rate: did we predict the right side?"""
     if not predictions:
         return 0.0
     correct = sum(
@@ -124,13 +83,7 @@ def calibration_curve(
     outcomes: list[int],
     n_bins: int = 5,
 ) -> list[CalibrationBin]:
-    """Compute calibration bins.
-
-    Groups predictions by probability range and checks:
-    do our 60-70% predictions actually happen 60-70% of the time?
-
-    Perfect calibration = the diagonal line on a reliability diagram.
-    """
+    """Compute calibration bins."""
     bin_size = 1.0 / n_bins
     bins: list[CalibrationBin] = []
 
@@ -162,12 +115,7 @@ def calibration_curve(
 
 
 def expected_calibration_error(bins: list[CalibrationBin]) -> float:
-    """ECE: weighted average of calibration errors across bins.
-
-    ECE = Σ (n_bin / n_total) * |predicted_mean - actual_rate|
-
-    Lower is better. 0 = perfectly calibrated.
-    """
+    """ECE: weighted average of calibration errors across bins."""
     total_count = sum(b.count for b in bins)
     if total_count == 0:
         return 0.0
@@ -183,16 +131,7 @@ def cumulative_ev(
     market_prices: list[float],
     edge_threshold: float = 0.05,
 ) -> float:
-    """Simulate P&L if we bet $1 on every edge signal.
-
-    For each prediction where |model - market| > threshold:
-    - If model > market (YES underpriced): buy YES at market price
-      - Win: +$(1 - market_price), Lose: -$market_price
-    - If model < market (NO underpriced): buy NO at (1 - market_price)
-      - Win: +$market_price, Lose: -$(1 - market_price)
-
-    Returns total P&L across all trades.
-    """
+    """Simulate P&L if we bet $1 on every edge signal."""
     total_pnl = 0.0
 
     for pred, outcome, market in zip(predictions, outcomes, market_prices):
@@ -223,17 +162,7 @@ def evaluate_predictor(
     n_bins: int = 5,
     edge_threshold: float = 0.05,
 ) -> MetricsSummary | None:
-    """Run full evaluation for one predictor using tracked history.
-
-    Args:
-        tracker: EvaluationTracker with stored predictions and resolutions
-        predictor_name: Which predictor to evaluate
-        n_bins: Number of calibration bins
-        edge_threshold: Minimum edge for cumulative EV trades
-
-    Returns:
-        MetricsSummary or None if not enough data.
-    """
+    """Run full evaluation for one predictor using tracked history."""
     resolved = tracker.get_resolved_predictions()
 
     # Filter to this predictor
@@ -275,10 +204,7 @@ def compare_predictors(
     tracker,
     predictor_names: list[str] | None = None,
 ) -> list[MetricsSummary]:
-    """Evaluate and compare all predictors.
-
-    Returns list of MetricsSummary sorted by Brier score (best first).
-    """
+    """Evaluate and compare all predictors."""
     resolved = tracker.get_resolved_predictions()
     if not resolved:
         return []

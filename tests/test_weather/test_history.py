@@ -40,21 +40,17 @@ def parsed(payload):
 
 
 def test_effective_init_arithmetic():
-    # EDT (UTC-4): local day 2024-06-15 ends 2024-06-16T00:00-04:00 = 06-16T04:00Z.
     assert effective_init_utc("2024-06-15", 1, TZ_NY) == "2024-06-15T04:00:00+00:00"
     assert effective_init_utc("2024-06-15", 3, TZ_NY) == "2024-06-13T04:00:00+00:00"
 
 
 def test_effective_init_dst_spring_forward():
-    # 2024-03-10 is a 23h local day; it still ends at 2024-03-11T00:00-04:00
-    # = 2024-03-11T04:00Z, so N=1 init is 03-10T04:00Z (tz-aware, not date*24).
     assert effective_init_utc("2024-03-10", 1, TZ_NY) == "2024-03-10T04:00:00+00:00"
     # The EST day before ends at 2024-03-10T00:00-05:00 = 03-10T05:00Z.
     assert effective_init_utc("2024-03-09", 1, TZ_NY) == "2024-03-09T05:00:00+00:00"
 
 
 def test_effective_init_dst_fall_back():
-    # 2024-11-03 is a 25h day (America/Chicago): ends 11-04T00:00-06:00 = 06:00Z.
     assert (
         effective_init_utc("2024-11-03", 1, "America/Chicago") == "2024-11-03T06:00:00+00:00"
     )
@@ -64,8 +60,6 @@ def test_effective_init_dst_fall_back():
 
 
 def test_lead_day_mapping(parsed):
-    # previous_day1 -> lead 0, previous_day2 -> lead 1; all-null day3 skipped;
-    # previous_day0 (values >= 1000 in the fixture) never ingested.
     assert set(parsed["lead_day"]) == {0, 1}
     assert PREVIOUS_DAY_MIN == 1 and PREVIOUS_DAY_MAX == 7
     assert (parsed["temp_max"] < 1000).all()
@@ -84,7 +78,6 @@ def test_full_local_day_aggregation(parsed):
 
 
 def test_null_handling_reduces_n_hours(parsed):
-    # previous_day2 has 4 nulls at UTC indices 10..13, all inside local 06-15.
     row = parsed[(parsed["valid_local_date"] == "2024-06-15") & (parsed["lead_day"] == 1)]
     r = row.iloc[0]
     assert r["n_hours"] == 20

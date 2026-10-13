@@ -1,34 +1,8 @@
-# Register the Zenbook's scheduled pull of the Spark's live root (\Spark\Spark Pull).
-#
-# Run from an ELEVATED PowerShell with the repo root as the current directory:
-#
-#   cd C:\Users\asus\OneDrive\Desktop\new_work
-#   .\scripts\scheduling\register_spark_pull_task.ps1
-#
-# Registration ONLY -- nothing is pulled here. The task runs at logon and every
-# six hours while the laptop is on. A run missed while it slept starts when it
-# wakes (StartWhenAvailable) and waits for a network
-# (RunOnlyIfNetworkAvailable). A run that fails -- the tailnet is not up yet,
-# the Spark is unreachable -- is retried three times, ten minutes apart, and
-# after that simply waits for the next tick: the external check 'offbox-pull'
-# is what reports a copy that is getting old.
-#
-# Before the first run:
-#   * the account holder sets the ping address for this Windows user, typed at a
-#     prompt so that it does not land in the shell's history file:
-#       [Environment]::SetEnvironmentVariable('HEARTBEAT_URL_OFFBOX', (Read-Host 'ping address of offbox-pull'), 'User')
-#   * the mirror carries its marker (the pull refuses otherwise): a cutover step.
-#
-# Remove:  Unregister-ScheduledTask -TaskPath '\Spark\' -TaskName 'Spark Pull' -Confirm:$false
-
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string]$TaskPath = "\Spark\"
 )
 
-# Interactive, as for the IBKR tasks: S4U never executed an action on this
-# machine (register_ibkr_tasks.ps1 records the finding), and the pull needs the
-# user's ssh key and WSL, which live in the logged-on session.
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType Interactive `

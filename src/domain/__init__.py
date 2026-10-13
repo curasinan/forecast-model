@@ -1,9 +1,4 @@
-"""Venue-neutral domain model for the prediction-market trading system.
-
-Everything above the venue adapters (strategy, edge detection, sizing,
-execution logic) depends on these types and NEVER on a concrete venue's
-identifiers, fee conventions, or client library.
-"""
+"""Venue-neutral domain model for the prediction-market trading system."""
 
 from src.domain.carry import CarryModel, ForecastExCouponCarry, NullCarry, StaleCarryRateError
 from src.domain.fees import FeeModel, FlatCommissionFeeModel, ZeroFeeModel

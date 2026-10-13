@@ -1,26 +1,4 @@
-"""Exploratory outcome-prediction experiment on resolved political markets.
-
-*** EXPLORATORY — tiny dataset (~78 markets), high variance. ***
-*** Diagnostic only; results must not drive trading decisions. ***
-
-For each resolved political market with ground-truth resolution and >=100
-snapshots, build a feature vector at a reference point **48 hours before its
-final snapshot** — i.e. well before the market pinned to its outcome — and
-ask whether a classifier on those features can beat the market's own price
-at predicting the resolution.
-
-The evaluation centers on the *edge check*: when the model's out-of-fold
-probability disagrees with the 48h-out market price by more than 10 points,
-who was closer to the truth? That number — not AUC — is the question that
-matters for the project's thesis.
-
-Anti-leakage mechanism: ``compute_features_batch`` is strictly causal
-(only snapshots with ``timestamp <= T_ref`` are visible), so features cannot
-see the final pin.
-
-Run:
-    python -m model.train_outcome
-"""
+"""Exploratory outcome-prediction experiment on resolved political markets."""
 
 from __future__ import annotations
 
@@ -43,15 +21,11 @@ from features.market_features import compute_features_batch
 from model.train import POLITICAL_REGEX
 from src.utils.dates import parse_iso8601
 
-# --- Paths ----------------------------------------------------------------- #
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "polymarket.db"
 LOG_PATH = REPO_ROOT / "logs" / "train_outcome.log"
 CLUSTER_CONFIG_PATH = REPO_ROOT / "config" / "market_clusters.json"
 RESULTS_PATH = REPO_ROOT / "model" / "results" / "outcome_experiment.json"
-
-# --- Experiment constants -------------------------------------------------- #
 
 MIN_SNAPSHOTS = 100
 REFERENCE_HOURS_BEFORE = 48
@@ -59,9 +33,6 @@ N_FOLDS = 5
 DISAGREEMENT_THRESHOLD = 0.10
 CALIBRATION_BINS = 4
 
-# price_now is deliberately included: the market's own price 48h out is a
-# strong prior on the outcome, and the experiment asks whether the OTHER
-# features add anything beyond it.
 FEATURE_COLS: tuple[str, ...] = (
     "price_now",
     "momentum_24h",
@@ -76,8 +47,6 @@ FEATURE_COLS: tuple[str, ...] = (
     "cluster_lead_signal",
 )
 
-# Fixed, closed category set — a global mapping adds no leakage risk and
-# per-fold re-encoding on 78 rows would add noise, not rigor.
 CLUSTER_ID_MAPPING: dict[str, int] = {
     "__none__": 0,
     "iran": 1,
@@ -85,9 +54,6 @@ CLUSTER_ID_MAPPING: dict[str, int] = {
     "trump_presidency": 3,
 }
 
-# Conservative regularization carried over from the regression model;
-# min_child_samples drops 50 -> 5 because each training fold has only ~62
-# rows (50 would forbid nearly every split).
 LGBM_PARAMS: dict = dict(
     n_estimators=50,
     learning_rate=0.05,
@@ -111,9 +77,7 @@ EXPLORATORY_WARNING = (
 log = logging.getLogger("model.train_outcome")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -134,9 +98,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Dataset assembly
-# --------------------------------------------------------------------------- #
 
 
 def load_candidate_market_ids(
@@ -172,12 +134,7 @@ def compute_reference_timestamps(
     market_ids: list[str],
     hours_before: int = REFERENCE_HOURS_BEFORE,
 ) -> tuple[dict[str, datetime], int]:
-    """Per market: T_ref = last_snapshot - hours_before.
-
-    Markets whose snapshot span is shorter than ``hours_before`` (i.e.
-    ``first_snapshot > T_ref`` — no causal data would exist at the reference
-    point) are dropped. Returns ``(refs, n_dropped)``.
-    """
+    """Per market: T_ref = last_snapshot - hours_before."""
     if not market_ids:
         return {}, 0
     placeholders = ",".join("?" * len(market_ids))
@@ -215,10 +172,7 @@ def assemble_dataset(
     db_path: Path | str = DB_PATH,
     cluster_config_path: Path | str = CLUSTER_CONFIG_PATH,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
-    """Build the (features, label) frame: one row per surviving market.
-
-    Returns (df, counts) where counts holds the funnel numbers for the report.
-    """
+    """Build the (features, label) frame: one row per surviving market."""
     candidate_ids = load_candidate_market_ids(db_path)
     labels_df = generate_outcome_labels(candidate_ids, db_path)
     labels = dict(zip(labels_df["market_id"], labels_df["outcome"]))
@@ -244,8 +198,6 @@ def assemble_dataset(
 
         price_48h = feats.get("price_now")
         if price_48h is None or (isinstance(price_48h, float) and np.isnan(price_48h)):
-            # No two-sided book at the reference point -> no market prior to
-            # compare against; the edge check would be undefined.
             n_null_price += 1
             continue
 
@@ -280,9 +232,7 @@ def assemble_dataset(
     return df, counts
 
 
-# --------------------------------------------------------------------------- #
 # Evaluation helpers
-# --------------------------------------------------------------------------- #
 
 
 def edge_check(
@@ -341,9 +291,7 @@ def calibration_bins(
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Main experiment
-# --------------------------------------------------------------------------- #
 
 
 def run_experiment(
@@ -370,7 +318,6 @@ def run_experiment(
     y = df["outcome"].to_numpy(dtype=int)
     price = df["price_now"].to_numpy(dtype=float)
 
-    # ---- Stratified k-fold, out-of-fold probabilities --------------------- #
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
     p_oof = np.full(n, np.nan)
     for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), start=1):
@@ -383,7 +330,6 @@ def run_experiment(
         )
     assert not np.isnan(p_oof).any(), "every market must receive an OOF prediction"
 
-    # ---- Metrics ----------------------------------------------------------- #
     auc_model = float(roc_auc_score(y, p_oof))
     auc_price = float(roc_auc_score(y, price))  # honest baseline: the market itself
     brier_model = float(brier_score_loss(y, p_oof))
@@ -411,7 +357,6 @@ def run_experiment(
         if edge["model_win_rate_among_disagreements"] is not None else "n/a",
     )
 
-    # ---- Feature importances (full-data fit, diagnostics only) ------------ #
     full_model = LGBMClassifier(**LGBM_PARAMS)
     full_model.fit(X, y)
     importances = sorted(
@@ -421,7 +366,6 @@ def run_experiment(
     for feat, imp in importances:
         log.info("  importance %s: %d", feat, imp)
 
-    # ---- Per-market records + question text ------------------------------- #
     conn = sqlite3.connect(db_path)
     try:
         q_by_id = dict(conn.execute(

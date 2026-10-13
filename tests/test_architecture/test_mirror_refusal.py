@@ -1,12 +1,4 @@
-"""Every entry point that writes live state refuses a root that carries the mirror marker.
-
-Each case booby-traps the first thing the entry point would do after the
-refusal (build the venue client, create the data root, start the fit), so a
-missing refusal fails here without reaching the Gateway, the network or the
-disk -- and cannot hang in a reconnect loop. The same trap, sprung on a root
-that is NOT marked, is the control: the refusal depends on the marker and on
-nothing else.
-"""
+"""Every entry point that writes live state refuses a root that carries the mirror marker."""
 
 from __future__ import annotations
 

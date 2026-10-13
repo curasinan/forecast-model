@@ -1,24 +1,4 @@
-"""Trade CLI — analyze questions and execute trades.
-
-Usage:
-    # Dry-run mode (default): simulate trades, no real money
-    python scripts/trade.py --dry-run
-
-    # Approve mode: show each trade, ask for confirmation
-    python scripts/trade.py --approve
-
-    # Auto mode: execute all risk-approved trades (use with caution!)
-    python scripts/trade.py --auto
-
-    # Analyze specific question(s)
-    python scripts/trade.py --dry-run --question gpt5-release-2025
-
-    # Show portfolio state
-    python scripts/trade.py --portfolio
-
-    # Adjust bankroll and risk limits
-    python scripts/trade.py --dry-run --bankroll 500 --max-position 25
-"""
+"""Trade CLI — analyze questions and execute trades."""
 
 import argparse
 import asyncio
@@ -208,10 +188,6 @@ async def main():
         max_daily_loss_usd=args.max_daily_loss,
     )
 
-    # Create executor
-    # Retired research venue: the Polymarket adapter is read-only, so every
-    # order simulates regardless of --live (live Polymarket execution was
-    # retired 2026-08-16; IBKR is the venue -- see scripts/run_ibkr_paper.py).
     from src.venues.polymarket import PolymarketAdapter
 
     if not dry_run:

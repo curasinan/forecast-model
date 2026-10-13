@@ -65,12 +65,7 @@ def resolve_open_meteo_ensemble_base_url() -> str:
 
 
 def resolve_open_meteo_previous_runs_base_url() -> str:
-    """Previous Runs lives on previous-runs-api.*; customer prefix when key present.
-
-    A custom base that is neither a previous-runs nor a customer host is
-    treated as self-hosted and used as-is — routing that traffic to the free
-    public host would silently bypass the licensing gate.
-    """
+    """Previous Runs lives on previous-runs-api.*; customer prefix when key present."""
     custom = settings.open_meteo_base_url.strip()
     if custom:
         if "previous-runs" in custom:
@@ -203,13 +198,7 @@ class OpenMeteoClient:
         retries: int = MAX_RETRIES,
         retry_delay: float = RETRY_DELAY_SECONDS,
     ) -> dict[str, Any]:
-        """Hourly previous-run temperatures at fixed lead offsets (day 1..N).
-
-        The Previous Runs API supports hourly variables only. timezone is
-        pinned to UTC: downstream daily aggregation treats naive timestamps
-        as UTC, so any other request timezone silently shifts local dates.
-        One model per call, matching the ensemble collector convention.
-        """
+        """Hourly previous-run temperatures at fixed lead offsets (day 1..N)."""
         hourly = ",".join(
             f"temperature_2m_previous_day{n}" for n in range(1, max_previous_day + 1)
         )

@@ -1,10 +1,4 @@
-"""Tests for the maker-fill simulator.
-
-Fill detection, adverse-selection sign math, mark-out gating, and per-offset
-aggregation are verified on synthetic snapshot sequences whose answers are known
-by construction. Order generation (pin exclusion, 12h spacing) and the political
-cohort selector are checked against a tmp_path DB.
-"""
+"""Tests for the maker-fill simulator."""
 
 from __future__ import annotations
 
@@ -31,13 +25,10 @@ def build(rows: list[tuple]) -> list[dict]:
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Fill detection + direction
-# --------------------------------------------------------------------------- #
 
 
 def test_fill_detection_and_direction():
-    # mid_0 = 0.50. The ask dips to 0.485 at t+60 (below a 0.49 limit), then recovers.
     snaps = build([
         (0,   0.49, 0.51,  0.50),
         (60,  0.48, 0.485, 0.4825),   # ask trades through a 0.49 buy limit
@@ -54,9 +45,7 @@ def test_fill_detection_and_direction():
     assert fs.simulate_order(snaps, 0, -1, 0.02)["filled"] is False   # P=0.52
 
 
-# --------------------------------------------------------------------------- #
 # Adverse-selection sign math
-# --------------------------------------------------------------------------- #
 
 
 def test_adverse_buy_sign():
@@ -75,7 +64,6 @@ def test_adverse_buy_sign():
 
 
 def test_adverse_sell_sign():
-    # Sell fills at 0.51 as the bid rises; price keeps climbing to 0.60 -> adverse.
     snaps = build([
         (0,   0.49, 0.51, 0.50),
         (60,  0.51, 0.53, 0.52),
@@ -89,7 +77,6 @@ def test_adverse_sell_sign():
 
 
 def test_net_favorable_buy():
-    # Buy fills at 0.49; price recovers to 0.55 -> favorable (negative adverse cost).
     snaps = build([
         (0,   0.49, 0.51, 0.50),
         (60,  0.48, 0.49, 0.485),
@@ -101,13 +88,10 @@ def test_net_favorable_buy():
     assert o["net_oneleg"] > 0
 
 
-# --------------------------------------------------------------------------- #
 # Mark-out gating + density
-# --------------------------------------------------------------------------- #
 
 
 def test_no_markout_excludes_from_cost_but_not_fill():
-    # Last snapshot at t+300 -> nothing within +-30min of the t+360 window end.
     snaps = build([
         (0,   0.49, 0.51, 0.50),
         (60,  0.48, 0.49, 0.485),
@@ -135,9 +119,7 @@ def test_density_flag():
     assert fs.simulate_order(sparse, 0, +1, 0.02)["dense"] is False
 
 
-# --------------------------------------------------------------------------- #
 # Order generation: pin exclusion + 12h spacing
-# --------------------------------------------------------------------------- #
 
 
 def test_pinned_market_generates_no_orders():
@@ -149,8 +131,6 @@ def test_pinned_market_generates_no_orders():
 
 
 def test_post_spacing_is_12h():
-    # 48h of 15-min snapshots -> post-times at 0h, 12h, 24h, 36h (the 48h edge has
-    # no forward window). 4 post-times x 4 orders = 16.
     snaps = build([(m, 0.49, 0.51, 0.50) for m in range(0, 48 * 60 + 1, 15)])
     orders, stats = fs.generate_orders_for_market(snaps)
     assert stats["posttimes"] == 4
@@ -159,9 +139,7 @@ def test_post_spacing_is_12h():
     assert {o["side_sign"] for o in orders} == {+1, -1}
 
 
-# --------------------------------------------------------------------------- #
 # Political cohort selection (tmp_path DB)
-# --------------------------------------------------------------------------- #
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -197,9 +175,7 @@ def test_political_cohort_selection(tmp_path):
     assert set(ids) == {"m_pol"}
 
 
-# --------------------------------------------------------------------------- #
 # Aggregation arithmetic + buffer verdict
-# --------------------------------------------------------------------------- #
 
 
 def _order(filled, dense, has_markout, drift, ttf, net_oneleg):

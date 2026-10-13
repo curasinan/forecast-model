@@ -20,9 +20,7 @@ from analysis.calibration_study import (
 BASE = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
 
 
-# --------------------------------------------------------------------------- #
 # Binning
-# --------------------------------------------------------------------------- #
 
 
 def test_bin_assignment_boundaries():
@@ -65,13 +63,10 @@ def test_bin_table_rates_and_gap():
     assert sum(b["n"] for b in bins) == len(rows)
 
 
-# --------------------------------------------------------------------------- #
 # Tradeability
-# --------------------------------------------------------------------------- #
 
 
 def test_edge_survives_costs():
-    # Bin priced 0.03, actual 0.08, spread 0.02 -> buy-YES gross 0.05, net 0.03
     bins = [{
         "bin": "0.02-0.05", "lo": 0.02, "hi": 0.05, "n": 10,
         "avg_price": 0.03, "actual_yes_rate": 0.08, "gap": 0.05,
@@ -110,9 +105,7 @@ def test_no_side_assumption_buy_no_direction():
     assert t["net_edge"] == pytest.approx(0.07)
 
 
-# --------------------------------------------------------------------------- #
 # TTE buckets
-# --------------------------------------------------------------------------- #
 
 
 def test_tte_bucket_labels():
@@ -123,9 +116,7 @@ def test_tte_bucket_labels():
     assert tte_bucket_label(-5) == "<48h"  # already past scheduled end
 
 
-# --------------------------------------------------------------------------- #
 # Reference extraction on a synthetic DB
-# --------------------------------------------------------------------------- #
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -156,11 +147,6 @@ def _make_db(tmp_path: Path) -> Path:
 
     # m1: 72h of hourly snapshots, ramp 0.30 -> 0.99, resolved YES.
     add("m1", "Will Trump win?", "1", list(range(73)))
-    # m2: 30h collection gap right before T_ref -> stale reference, dropped.
-    #     Snapshots at hours 0..10, then 41..72 (T_ref = 72-24 = 48; latest
-    #     <= 48 is hour 41 -> only 7h stale -> survives). Make the gap bigger:
-    #     hours 0..10 then 60..72. T_ref=48; latest <= 48 is hour 10 -> 38h
-    #     stale -> dropped.
     add("m2", "Will the gap market resolve?", "0",
         list(range(11)) + list(range(60, 73)))
     # m3: resolution NULL -> excluded from cohort entirely.
@@ -181,8 +167,7 @@ def test_reference_extraction_price_and_staleness(tmp_path):
     row = rows[0]
     assert row["market_id"] == "m1"
     assert row["outcome"] == 1
-    assert row["political"] is True         # 'Trump' matches the keyword filter
-    # T_ref = hour 48 of 72; ramp 0.30->0.99 linearly => price ~ 0.30 + (48/72)*0.69 = 0.76
+    assert row["political"] is True
     assert row["price"] == pytest.approx(0.76, abs=0.02)
     # Crucially NOT the pinned final value
     assert row["price"] < 0.90

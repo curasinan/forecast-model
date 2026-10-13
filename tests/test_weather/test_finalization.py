@@ -56,9 +56,6 @@ def test_is_local_day_complete_tokyo():
     )
 
 
-# ---- back-compat: collectors must keep re-exporting the old names ---- #
-
-
 def test_collect_labels_wu_backcompat():
     from collectors.weather import collect_labels_wu as wu
 

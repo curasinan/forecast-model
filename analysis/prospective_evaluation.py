@@ -1,21 +1,4 @@
-"""Pre-registered evaluation harness for the prospective LLM scoring experiment.
-
-Every metric, threshold, and subgroup below was frozen in code BEFORE any
-prospectively-scored market resolved (2026-07-08: 144 markets scored, 0
-resolved). Nothing computed later counts as post-hoc.
-
-Modes:
-    python -m analysis.prospective_evaluation             # STATUS (blinded)
-    python -m analysis.prospective_evaluation --verdict   # pre-registered verdict
-    python -m analysis.prospective_evaluation --smoke     # pilot-data code check
-
-STATUS mode is deliberately blinded: it reports ONLY how many eligible
-markets have accumulated (total and per ISO week) and never computes any
-directional statistic. This prevents optional stopping — you cannot peek at
-the answer while deciding whether to keep collecting.
-
-VERDICT mode refuses to run below the pre-registered sample-size gate.
-"""
+"""Pre-registered evaluation harness for the prospective LLM scoring experiment."""
 
 from __future__ import annotations
 
@@ -42,11 +25,6 @@ VERDICT_CSV_PATH = REPO_ROOT / "analysis" / "results" / "prospective_per_market.
 SMOKE_JSON_PATH = REPO_ROOT / "analysis" / "results" / "prospective_smoke.json"
 SMOKE_CSV_PATH = REPO_ROOT / "analysis" / "results" / "prospective_smoke.csv"
 
-# ============================================================================
-# PRE-REGISTERED CONSTANTS — frozen 2026-07-08, before any prospective market
-# resolved. DO NOT CHANGE after prospective data exists. Changing any of these
-# invalidates the pre-registration.
-# ============================================================================
 MIN_RESOLVED_FOR_VERDICT = 40        # run gate: eligible resolved markets
 DISAGREEMENT_THRESHOLD = 0.10        # |p_llm - price| to count a disagreement
 WIN_RATE_GATE = 0.55                 # primary point estimate >= this -> open
@@ -55,11 +33,6 @@ SPIKE_WINDOW_HOURS = 24              # news_volume row within this of scored_at
 BASE_RATE_DIVERGENCE_THRESHOLD = 0.15  # secondary (d) |price - base_rate|
 WILSON_Z = 1.96                      # 95% interval
 FLAGGED_CATEGORIES = ("legislation", "judicial", "leadership_stability")
-# Tie-breaking: exactly equal distance to the outcome counts as a MARKET win
-# (conservative against the LLM-edge hypothesis).
-# Zero disagreements at verdict time -> politics_closed (no exploitable
-# divergence is itself a negative result).
-# ============================================================================
 
 log = logging.getLogger("analysis.prospective_evaluation")
 
@@ -82,9 +55,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Statistics
-# --------------------------------------------------------------------------- #
 
 
 def wilson_interval(k: int, n: int, z: float = WILSON_Z) -> tuple[float, float]:
@@ -115,24 +86,12 @@ def edge_stats(rows: list[dict]) -> dict:
     }
 
 
-# --------------------------------------------------------------------------- #
-# Eligible-row loader (shared by status counting and the verdict run-gate)
-# --------------------------------------------------------------------------- #
-
-
 def load_eligible_rows(
     db_path: Path | str = DB_PATH,
     retrospective: int = 0,
     skip_final_snapshot_guard: bool = False,
 ) -> list[dict]:
-    """One row per eligible resolved market with its earliest surviving score.
-
-    Contamination guards (pre-registered):
-      (a) recognized_outcome=1 scores dropped BEFORE the earliest-score pick;
-      (b) market excluded when its earliest surviving scored_at is later than
-          its final snapshot (skippable only for --smoke, whose pilot rows
-          were all scored post-resolution by construction).
-    """
+    """One row per eligible resolved market with its earliest surviving score."""
     conn = sqlite3.connect(db_path)
     try:
         score_rows = conn.execute(
@@ -231,9 +190,7 @@ def _nearest_snapshot_midpoint(
     return best
 
 
-# --------------------------------------------------------------------------- #
 # STATUS mode (blinded — accumulation counts only)
-# --------------------------------------------------------------------------- #
 
 
 def run_status(db_path: Path | str = DB_PATH) -> dict:
@@ -254,9 +211,7 @@ def run_status(db_path: Path | str = DB_PATH) -> dict:
     return {"eligible": len(rows), "by_week": by_week}
 
 
-# --------------------------------------------------------------------------- #
 # VERDICT mode
-# --------------------------------------------------------------------------- #
 
 
 def _spike_gated(rows: list[dict], db_path: Path | str) -> list[dict]:
@@ -281,9 +236,7 @@ def _spike_gated(rows: list[dict], db_path: Path | str) -> list[dict]:
 
 
 def _base_rate_check(rows: list[dict]) -> dict:
-    """Secondary (d): LLM-independent. Where price diverged from the category
-    base rate by > threshold at scoring time, was the base rate closer to the
-    resolution than the price?"""
+    """Secondary (d): LLM-independent."""
     with open(BASE_RATES_PATH, "r", encoding="utf-8") as f:
         base_rates: dict = json.load(f)
 
@@ -342,7 +295,6 @@ def run_verdict(
             )
             return 1
 
-    # --- Primary (pre-registered) ----------------------------------------- #
     primary = edge_stats(rows)
     if primary["n_disagreements"] == 0:
         verdict = "politics_closed"
@@ -362,7 +314,6 @@ def run_verdict(
              "SMOKE VERDICT (not real)" if smoke else "PRE-REGISTERED VERDICT",
              verdict, WIN_RATE_GATE, MIN_RESOLVED_FOR_VERDICT)
 
-    # --- Secondaries (labeled; never touch the verdict) -------------------- #
     sec_a = {"label": "secondary", "name": "confidence_gated_high",
              **edge_stats([r for r in rows if r["confidence"] == "high"])}
     sec_b = {"label": "secondary", "name": "spike_gated",
@@ -380,7 +331,6 @@ def run_verdict(
         detail = {k: v for k, v in s.items() if k not in ("label",)}
         log.info("SECONDARY %s", json.dumps(detail, default=str))
 
-    # --- Outputs ------------------------------------------------------------ #
     json_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
@@ -419,9 +369,7 @@ def run_verdict(
     return 0
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
 
 
 def main(argv: list[str] | None = None) -> int:

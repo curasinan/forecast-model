@@ -1,11 +1,4 @@
-"""Tests for Task 2.2: the durable health-alert sink (H3), the data-flow-aware
-DEGRADED check (M6), and the paper-sync freshness check (operator-mandated
-2026-08-25).
-
-Everything runs against tmp_path fixtures -- no Gateway, no ib_async, no
-network. Alert wiring is asserted by monkeypatching the probe module's
-send_alert reference (mirrors tests/test_monitoring/test_check_ibkr_recorder.py).
-"""
+"""Tests for the durable health-alert sink, the DEGRADED check and paper-sync freshness."""
 
 from __future__ import annotations
 
@@ -71,9 +64,7 @@ def _argv(data_root: Path, *, extra: list[str] | None = None,
 
 
 def _status_lines(health_log: Path) -> list[str]:
-    """The durable log's per-run status lines. Each send attempt also appends
-    an ALERT_SENT / ALERT_FAILED line (tests/test_monitoring/
-    test_health_alert_transitions.py pins those); this file pins the sink."""
+    """The durable log's per-run status lines."""
     lines = health_log.read_text(encoding="utf-8").splitlines()
     return [line for line in lines if " ALERT_" not in line]
 
@@ -91,9 +82,7 @@ def alerts(monkeypatch) -> list[str]:
     return calls
 
 
-# --------------------------------------------------------------------------- #
 # Durable sink (H3): non-OK appends one line, OK appends nothing
-# --------------------------------------------------------------------------- #
 
 
 def test_stale_appends_exactly_one_status_line_to_health_log(tmp_path, alerts):
@@ -112,8 +101,6 @@ def test_stale_appends_exactly_one_status_line_to_health_log(tmp_path, alerts):
     assert "STALE" in rest
     # Timestamp parses and is UTC-ISO.
     datetime.fromisoformat(ts)
-    # Beside it, the one alert attempt of this run (first unhealthy run ->
-    # transition alert) left its own line.
     assert len(health_log.read_text(encoding="utf-8").splitlines()) == 2
 
 
@@ -130,8 +117,6 @@ def test_ok_appends_nothing_to_health_log(tmp_path, alerts):
 
 
 def test_two_consecutive_failures_append_two_status_lines(tmp_path, alerts):
-    """The sink accumulates -- it is a durable log, not a single-slot marker --
-    even though the second run of an unchanged outage sends no second alert."""
     _write_state(tmp_path, age_minutes=120)
     _healthy_sync_runs(tmp_path)
     health_log = tmp_path / "ibkr_health.log"
@@ -143,22 +128,8 @@ def test_two_consecutive_failures_append_two_status_lines(tmp_path, alerts):
     assert len(alerts) == 1
 
 
-# --------------------------------------------------------------------------- #
-# The sink and the alert are independently best-effort (fix for the review
-# finding: an unguarded _append_health_log call could raise and skip
-# send_alert entirely -- e.g. permission-denied logs/, full disk, an AV file
-# lock, all plausible over 365 unattended days).
-# --------------------------------------------------------------------------- #
-
-
 def test_sink_raising_does_not_prevent_send_alert(tmp_path, alerts, monkeypatch, capsys):
-    """A durable-sink write failure must not skip the Telegram attempt.
-
-    Built without --quiet (unlike the shared ``_argv`` helper) specifically
-    to also pin that the failure note reaches stderr -- ``_argv``'s baked-in
-    --quiet would suppress it, same as it already suppresses send_alert's
-    own failure note.
-    """
+    """A durable-sink write failure must not skip the Telegram attempt."""
     def boom(log_path, status, message, now=None):
         raise OSError("permission denied (simulated)")
 
@@ -175,11 +146,9 @@ def test_sink_raising_does_not_prevent_send_alert(tmp_path, alerts, monkeypatch,
 
     rc = probe.main(argv)
 
-    assert rc == 1  # exit code stays deliberate, not an accidental uncaught-exception 1
+    assert rc == 1
     assert len(alerts) == 1
     assert "STALE" in alerts[0]
-    # The failure is noted, by the exception's class name only like every other
-    # note this probe prints (its stderr lands in logs/ibkr_health_task.log).
     err = capsys.readouterr().err
     assert "_append_health_log failed (OSError)" in err
     assert "permission denied" not in err
@@ -206,9 +175,7 @@ def test_send_alert_raising_still_writes_sink_line(tmp_path, monkeypatch):
     assert "STALE" in rest
 
 
-# --------------------------------------------------------------------------- #
 # M6: DEGRADED -- fresh heartbeat, thin data flow
-# --------------------------------------------------------------------------- #
 
 
 def test_degraded_when_rows_below_half_universe(tmp_path, alerts):
@@ -225,8 +192,6 @@ def test_degraded_when_rows_below_half_universe(tmp_path, alerts):
 
 
 def test_no_degraded_when_universe_size_zero(tmp_path, alerts):
-    """universe_size 0 must never divide -- and must not manufacture a false
-    DEGRADED just because the field happens to be zero/absent."""
     _write_state(tmp_path, age_minutes=5, rows=10, universe_size=0)
     _healthy_sync_runs(tmp_path)
 
@@ -258,9 +223,6 @@ def test_rows_at_half_universe_is_not_degraded(tmp_path, alerts):
 
 
 def test_stale_outranks_degraded(tmp_path, alerts):
-    """A stale heartbeat with thin rows is STALE, not DEGRADED (DEGRADED only
-    applies when the heartbeat IS fresh -- M6 layers on top of, not instead
-    of, staleness)."""
     _write_state(tmp_path, age_minutes=120, rows=10, universe_size=2900)
     _healthy_sync_runs(tmp_path)
 
@@ -271,9 +233,7 @@ def test_stale_outranks_degraded(tmp_path, alerts):
     assert "DEGRADED" not in alerts[0]
 
 
-# --------------------------------------------------------------------------- #
 # Operator-mandated: SYNC_STALE (26h default)
-# --------------------------------------------------------------------------- #
 
 
 def test_sync_stale_when_last_ok_27h_old(tmp_path, alerts):
@@ -320,8 +280,6 @@ def test_sync_stale_when_file_missing(tmp_path, alerts):
 
 
 def test_sync_malformed_line_is_skipped_not_fatal(tmp_path, alerts):
-    """A garbage line before a valid ok:true line must not crash the probe,
-    and must not hide the valid success."""
     text = "not json at all\n" + _sync_line(ok=True, age_hours=1.0) + "\n"
     _write_state(tmp_path, age_minutes=5)
     _write_sync_runs_raw(tmp_path, text)
@@ -356,9 +314,7 @@ def test_max_sync_age_hours_override(tmp_path, alerts):
     assert alerts == []
 
 
-# --------------------------------------------------------------------------- #
 # Precedence + combined message when both axes fail
-# --------------------------------------------------------------------------- #
 
 
 def test_both_axes_failing_recorder_leads_message_mentions_both(tmp_path, alerts):
@@ -373,9 +329,6 @@ def test_both_axes_failing_recorder_leads_message_mentions_both(tmp_path, alerts
     message = alerts[0]
     assert "STALE" in message
     assert "SYNC_STALE" in message
-    # Recorder status leads (comes first) in the combined message. (Anchored on
-    # the sync axis's own sentence: the alert prefix, "[OK -> STALE+SYNC_STALE]",
-    # names both failing axes ahead of the message.)
     assert message.index("ibkr recorder STALE") < message.index("ibkr paper sync SYNC_STALE")
     # The durable sink's status field is the recorder status, not SYNC_STALE.
     (line,) = _status_lines(health_log)
@@ -394,16 +347,10 @@ def test_degraded_and_sync_stale_both_mentioned(tmp_path, alerts):
     assert "SYNC_STALE" in alerts[0]
 
 
-# --------------------------------------------------------------------------- #
 # Secrets rule: the Telegram token must never appear in any log line
-# --------------------------------------------------------------------------- #
 
 
 def test_token_never_logged_with_misconfigured_telegram(tmp_path, monkeypatch, caplog):
-    """A CRITICAL alert with telegram misconfigured (blank creds -> log_only
-    fallback in monitoring.heartbeat.send_alert) must reach a log line, and
-    that line -- like the durable sink file -- must never contain the token
-    string."""
     secret_token = "123456:AA_super_secret_token_value"
     monkeypatch.setenv("ALERT_METHOD", "telegram")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", secret_token)

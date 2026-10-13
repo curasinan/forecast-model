@@ -1,21 +1,4 @@
-"""Append-only first-print label ledger (Rule 603(e) vintage discipline).
-
-Settlement on ForecastEx climate contracts is irrevocable: the FIRST
-published value governs (docs/venue_semantics.md, Rule 603(e)). The
-ledger therefore never overwrites:
-
-- A period's first row is its vintage: 'live_first_print' when captured
-  by a live incremental run (within ~24h of publication, so effectively
-  the first print), or 'backfill_current_vintage' when backfilled from
-  history (which can only reflect the CURRENT revised values, not what
-  was first published).
-- A later fetch showing a DIFFERENT value for an already-seen period
-  appends an is_revision=True row; the original row is never touched.
-
-latest_values() resolves each period to its first-print row -- the
-settlement-relevant value -- while revision_history() exposes source
-drift separately.
-"""
+"""Append-only first-print label ledger (Rule 603(e) vintage discipline)."""
 
 from __future__ import annotations
 
@@ -81,19 +64,7 @@ def append_observations(
     backfill: bool,
     root: Path | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Append fetched observations under first-print discipline.
-
-    Per (series, period):
-      - unseen             -> append (vintage per backfill flag)
-      - seen, same value   -> skip (idempotent re-runs)
-      - seen, new value    -> append revision row; original untouched
-
-    'Same value' compares against the most recently recorded value for
-    the period (first print or latest revision), so an already-recorded
-    revision is not re-appended on every run.
-
-    Returns {series: {"new": n, "revisions": n, "skipped": n}}.
-    """
+    """Append fetched observations under first-print discipline."""
     ledger = load_ledger(root)
     last_value: dict[tuple[str, str], float] = {
         (r.series, r.period): r.value for r in ledger.itertuples(index=False)
@@ -143,11 +114,7 @@ def append_observations(
 
 
 def latest_values(series: str, root: Path | None = None) -> dict[str, float]:
-    """period -> settlement-relevant value: the FIRST-PRINT row wins.
-
-    Rule 603(e): the first-published value governs settlement, so
-    revisions never override it here. See revision_history() for drift.
-    """
+    """period -> settlement-relevant value: the FIRST-PRINT row wins."""
     ledger = load_ledger(root)
     sub = ledger[(ledger["series"] == series) & (~ledger["is_revision"])]
     return dict(zip(sub["period"], sub["value"]))

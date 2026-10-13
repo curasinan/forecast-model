@@ -15,7 +15,6 @@ TR_D = ["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"]
 TR_M = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"]
 datestr = f"{now.day} {TR_M[now.month-1]} {now.year} {TR_D[now.weekday()]}"
 
-# --- session-state guard: resolve/validate mode against actual Istanbul time ---
 OPEN_H, CLOSE_H = 10.0, 18.1
 hhmm = now.hour + now.minute / 60
 weekday = now.weekday() < 5

@@ -1,11 +1,4 @@
-"""Carry semantics: what a position earns (or costs) per day just by existing.
-
-ForecastEx pays a daily-accruing incentive coupon on position market value
-(advertised ~3.14% APY; VERIFY from statements or accrual observation —
-never hardcode, see docs/venue_semantics.md question 5). Polymarket pays
-nothing. Carry changes both EV and Kelly sizing: a position with zero
-directional edge can still have positive expected value under a coupon.
-"""
+"""Carry semantics: what a position earns (or costs) per day just by existing."""
 
 from __future__ import annotations
 
@@ -37,11 +30,7 @@ class NullCarry(CarryModel):
 
 
 class ForecastExCouponCarry(CarryModel):
-    """ForecastEx incentive coupon, from a runtime-verified APY.
-
-    The rate must come with a verification date; if it is older than
-    `max_age_days` this raises instead of silently sizing on a stale rate.
-    """
+    """ForecastEx incentive coupon, from a runtime-verified APY."""
 
     def __init__(self, apy: float, verified_on: date, max_age_days: int = 30):
         if not 0.0 <= apy < 0.5:

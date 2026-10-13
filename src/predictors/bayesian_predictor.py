@@ -1,17 +1,4 @@
-"""Level 1 Predictor: Bayesian updating with evidence-driven likelihood estimation.
-
-This is the foundational predictor. Instead of arbitrary rules, it uses
-Bayes' theorem to update a prior probability based on each piece of evidence.
-
-The approach:
-1. Start with a prior (market price or 0.5 if no market data)
-2. For each evidence item, estimate likelihood ratios based on features
-3. Apply Bayesian updating sequentially
-4. The final posterior is our probability estimate
-
-This is transparent, interpretable, and educational — you can trace
-exactly how each piece of evidence shifted the probability.
-"""
+"""Level 1 Predictor: Bayesian updating with evidence-driven likelihood estimation."""
 
 from src.math.bayesian import BayesianUpdater
 from src.models.evidence import EvidenceBundle
@@ -30,14 +17,7 @@ class BayesianPredictor(BasePredictor):
         features: dict[str, float],
         bundle: EvidenceBundle,
     ) -> list[tuple[str, float, float]]:
-        """Estimate likelihood ratios from features.
-
-        Returns list of (description, P(evidence|YES), P(evidence|NO)).
-
-        These are heuristic estimates — they get refined with calibration data
-        over time. The key insight is that even rough Bayesian updating beats
-        arbitrary scoring rules because it handles evidence combination correctly.
-        """
+        """Estimate likelihood ratios from features."""
         updates: list[tuple[str, float, float]] = []
 
         # Evidence volume signal
@@ -88,8 +68,6 @@ class BayesianPredictor(BasePredictor):
         bundle: EvidenceBundle,
         features: dict[str, float],
     ) -> Prediction:
-        # Start with market price as prior (the crowd's best estimate)
-        # If no market data, start at 0.5 (maximum ignorance)
         market_price = features.get("market_yes_price", 0.5)
         prior = market_price if market_price not in (0.0, 1.0) else 0.5
 

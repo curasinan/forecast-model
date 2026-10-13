@@ -1,10 +1,4 @@
-"""IBKR ForecastEx adapter behind the venue-neutral VenueAdapter port.
-
-Read-only by design in this build: only role='live_trading' may construct a
-writable adapter, and even then order transmission only works on a PAPER account
--- enabling it is a manual, deliberate act by the account holder after paper
-validation, never a commit in this migration.
-"""
+"""IBKR ForecastEx adapter behind the venue-neutral VenueAdapter port."""
 
 from __future__ import annotations
 
@@ -103,13 +97,7 @@ class IBKRAdapter(VenueAdapter):
 
     # -- lifecycle ---------------------------------------------------------
     def connect(self) -> None:
-        """Connect (reusing an existing session), then verify the account mode.
-
-        Mode is inferred from the account prefix (DU/DF = paper, the only
-        API-visible signal). A disagreement with settings.trading_mode raises
-        ModeMismatchError; account id and mode are logged at WARNING so every
-        run states which account it touched (spec Stage 7).
-        """
+        """Connect (reusing an existing session), then verify the account mode."""
         if self.ib is None or not self.ib.isConnected():
             self.ib = connect_ib(self.role, self.settings)
         accounts = list(self.ib.managedAccounts())
@@ -187,8 +175,7 @@ class IBKRAdapter(VenueAdapter):
         return quotes
 
     def get_order_book(self, market_id: MarketId, depth: int = 5) -> OrderBook:
-        """Top-of-book only: a depth feed exists on FORECASTX but reqMktDepth
-        wiring is a Stage 5 recorder task. Sizes are unknown at this level."""
+        """Top-of-book only; sizes are unknown at this level."""
         quotes = self.get_quotes([market_id])
         quote = quotes[0] if quotes else None
         bids = [OrderBookLevel(price=quote.bid, size=0.0)] if quote and quote.bid else []
@@ -229,18 +216,11 @@ class IBKRAdapter(VenueAdapter):
         ]
 
     def get_open_orders(self) -> list[Order]:
-        # openTrades() rather than openOrders(): the bare order list lacks the
-        # contract, and the domain Order needs a MarketId.
         ib = self._require_ib()
         return [self._trade_to_order(trade) for trade in ib.openTrades()]
 
     def get_all_open_orders(self) -> list[Order]:
-        """Every resting order visible to this session, own or foreign.
-
-        reqAllOpenOrders() (unlike openTrades()) surfaces GTC orders placed by
-        other client ids -- their orderId is meaningless here, so callers must
-        join on `venue_meta["perm_id"]` instead.
-        """
+        """Every resting order visible to this session, own or foreign."""
         ib = self._require_ib()
         return [self._trade_to_order(trade) for trade in ib.reqAllOpenOrders()]
 
@@ -267,14 +247,7 @@ class IBKRAdapter(VenueAdapter):
 
     # -- orders ------------------------------------------------------------
     def _place_order(self, request: OrderRequest) -> OrderAck:
-        """Transmit an order -- PAPER accounts only.
-
-        Live transmission is enabled manually by the account holder after
-        paper validation; no code path in this repository can do it. The
-        check is on the verified account mode (DU/DF prefix), not on
-        configuration, so a mis-set IBKR_TRADING_MODE cannot open the door
-        (connect() already refuses on a mode mismatch).
-        """
+        """Transmit an order -- PAPER accounts only."""
         if self.mode != "paper":
             raise VenueError(
                 "live order transmission is disabled in code: connected account is "
@@ -336,8 +309,6 @@ class IBKRAdapter(VenueAdapter):
                 "fee facts unverified: set IBKR_COMMISSION_PER_CONTRACT and "
                 "IBKR_FEES_VERIFIED_ON from a whatIf probe (see docs/venue_semantics.md)"
             )
-        # YES+NO mid sums to ~1.00 with commission billed separately (verified
-        # 2026-08-16), hence price_sum=1.0.
         return FlatCommissionFeeModel(
             s.commission_per_contract, price_sum=1.0, verified_on=s.fees_verified_on
         )
@@ -365,16 +336,11 @@ class IBKRAdapter(VenueAdapter):
             title=row["long_name"] or row["local_symbol"],
             no_id=no_id,
             expiry=_parse_expiry(row["expiry"]),
-            # ForecastEx resolution timing is scheduled, not estimated (the
-            # venue's structural advantage). The contract's last-trade date is
-            # the best venue-native approximation of it; the underlying macro
-            # release calendar (BLS/BEA/FOMC timestamps) is finer-grained and
-            # is a Stage 6 USER-DECISION data source, not wired yet.
             scheduled_resolution_time=_parse_expiry(row["expiry"]),
             strike=row["strike"],
             tick_size=row["min_tick"],
             multiplier=float(row["multiplier"]) if row["multiplier"] else 1.0,
-            size_increment=1.0,  # minSize=sizeIncrement=1 contract (verified 2026-08-18)
+            size_increment=1.0,
             currency=row["currency"] or "USD",
             venue_meta={
                 "local_symbol": row["local_symbol"],

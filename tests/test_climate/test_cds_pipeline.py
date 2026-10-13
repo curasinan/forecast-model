@@ -22,9 +22,6 @@ from climate.reduce import (
 )
 from scripts.fetch_climate_forecasts import parse_years, recent_init_months
 
-# ---------------------------------------------------------------- request builders
-
-
 def test_build_seas5_request_snapshot():
     req = build_seas5_request(2026, [7, 8], range(1, 7))
     assert req == {
@@ -61,15 +58,8 @@ def test_build_era5_monthly_request_snapshot():
     }
 
 
-# ---------------------------------------------------------------- synthetic reductions
-
-
 def _synthetic_seas5(nc_path: Path) -> None:
-    """t2m = latitude value + member index; lat-symmetric grid.
-
-    Cos-weighted mean of the latitude term is exactly 0 (odd function on a
-    symmetric grid), so the expected global mean is just the member index.
-    """
+    """t2m = latitude value + member index; lat-symmetric grid."""
     lats = np.array([-60.0, -30.0, 0.0, 30.0, 60.0])
     lons = np.array([0.0, 90.0, 180.0, 270.0])
     members = np.array([0, 1, 2])
@@ -162,9 +152,6 @@ def test_era5_frame_handles_expver_dim(tmp_path):
     assert np.allclose(df["t2m_global_K"], [290.0], atol=1e-9)
 
 
-# ---------------------------------------------------------------- parquet append/dedupe
-
-
 def test_append_parquet_dedupes_and_keeps_first(tmp_path):
     path = tmp_path / "out.parquet"
     df1 = pd.DataFrame({"k": [1, 2], "v": [10.0, 20.0]})
@@ -192,9 +179,6 @@ def test_reduce_files_are_idempotent(tmp_path):
     _, etotal1 = reduce_era5_file(nc2, root)
     _, etotal2 = reduce_era5_file(nc2, root)
     assert etotal1 == etotal2 == 2
-
-
-# ---------------------------------------------------------------- fetch idempotency
 
 
 def test_fetch_skips_existing_file_without_client(tmp_path, monkeypatch):
@@ -252,9 +236,6 @@ def test_fetch_reraises_client_errors(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="licences not accepted"):
         fetch("d", {}, tmp_path / "fail.nc")
     assert not (tmp_path / "fail.nc").exists()
-
-
-# ---------------------------------------------------------------- CLI helpers
 
 
 def test_parse_years_range_and_list():

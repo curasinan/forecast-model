@@ -1,12 +1,4 @@
-"""Polymarket read-only venue adapter and the sanctioned CLOB client factory.
-
-Retained for research and backtesting only (migration spec Stage 1): the
-adapter is ALWAYS read-only, holds no account, and can never place orders.
-Market data comes from the Gamma API via PolymarketCollector; order books
-need the CLOB client, which research scripts obtain from
-``readonly_clob_client`` — this module is inside src/venues/, the only
-package permitted to import py_clob_client (ruff TID251).
-"""
+"""Polymarket read-only venue adapter and the sanctioned CLOB client factory."""
 
 from __future__ import annotations
 
@@ -37,13 +29,7 @@ HEALTH_TIMEOUT_SECONDS = 5.0
 
 
 def readonly_clob_client(host: str = CLOB_HOST, chain_id: int = POLYGON_CHAIN_ID) -> Any:
-    """Unauthenticated, read-only Polymarket CLOB client.
-
-    Imports py_clob_client lazily so callers keep their lazy-failure
-    semantics: importing this module never requires the package, only
-    calling this factory does. Raises ImportError with install guidance
-    when the package is missing.
-    """
+    """Unauthenticated, read-only Polymarket CLOB client."""
     try:
         from py_clob_client.client import ClobClient
     except ImportError as exc:
@@ -55,13 +41,7 @@ def readonly_clob_client(host: str = CLOB_HOST, chain_id: int = POLYGON_CHAIN_ID
 
 
 class PolymarketAdapter(VenueAdapter):
-    """Polymarket seen through the venue port. ALWAYS read-only.
-
-    Research/backtesting adapter only: no wallet, no API credentials, no
-    account state. Order placement and cancellation always raise
-    VenueReadOnlyError; positions, balances, and open orders are empty by
-    construction, not by lookup.
-    """
+    """Polymarket seen through the venue port. ALWAYS read-only."""
 
     name = POLYMARKET
 
@@ -139,10 +119,7 @@ class PolymarketAdapter(VenueAdapter):
         )
 
     def get_quotes(self, market_ids: Sequence[MarketId]) -> list[Quote]:
-        """Gamma yes_price as a point-in-time snapshot (no bid/ask depth).
-
-        Markets the Gamma API cannot find are skipped, not errored.
-        """
+        """Gamma yes_price as a point-in-time snapshot (no bid/ask depth)."""
         quotes: list[Quote] = []
         for market_id in market_ids:
             condition_id = self._native(market_id)
@@ -159,9 +136,6 @@ class PolymarketAdapter(VenueAdapter):
             )
         return quotes
 
-    # -- account -----------------------------------------------------------
-    # Research-only adapter with no wallet or credentials: there is no
-    # account to query, so these are empty by construction.
     def get_positions(self) -> list[Position]:
         return []
 

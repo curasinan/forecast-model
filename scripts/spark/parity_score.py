@@ -1,12 +1,4 @@
-"""Parity probe: score a frozen quant-data snapshot with the operational model.
-
-    python scripts/spark/parity_score.py --root ~/quant_data_snapshot --out ~/quant_data_snapshot/parity/zenbook.json
-    python scripts/spark/parity_score.py --root ~/quant_data --out ~/parity_spark.json   # on the Spark
-
-Research-only (design section 5.2): never writes paper/gtm_signals.json or
-a history line, applies no staleness gate. Compare two outputs with
-scripts/spark/compare_json.py --ignore identity.machine.
-"""
+"""Parity probe: score a frozen quant-data snapshot with the operational model."""
 
 from __future__ import annotations
 

@@ -1,16 +1,4 @@
-"""Climate data root -- keep parquet ledgers off OneDrive sync.
-
-Mirrors weather/paths.py: the repo lives under OneDrive, but data files
-(parquet/SQLite) must not, because cloud sync mid-write risks corruption.
-Default root is ~/quant_data/climate_data, overridable via the
-CLIMATE_DATA_ROOT environment variable.
-
-NOT %LOCALAPPDATA% (the old default, migrated 2026-08-25): a packaged
-(MSIX) app virtualises AppData per-app, so the same path resolves to two
-different stores depending on whether the writer runs inside the packaged
-app or outside it (Task Scheduler). The whole climate ledger had ended up
-in the container-private copy, invisible to any scheduled job.
-"""
+"""Climate data root -- keep parquet ledgers off OneDrive sync."""
 
 from __future__ import annotations
 
@@ -21,13 +9,7 @@ ENV_VAR = "CLIMATE_DATA_ROOT"
 
 
 def root_path(override: str | Path | None = None) -> Path:
-    """The climate data directory :func:`data_root` returns, without creating it.
-
-    Priority:
-      1. explicit override argument
-      2. CLIMATE_DATA_ROOT environment variable
-      3. ~/quant_data/climate_data
-    """
+    """The climate data directory :func:`data_root` returns, without creating it."""
     if override is not None and str(override).strip():
         return Path(override).expanduser().resolve()
     if os.environ.get(ENV_VAR, "").strip():

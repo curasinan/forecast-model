@@ -1,16 +1,4 @@
-"""Risk manager — pre-trade safety checks.
-
-Every trade must pass ALL risk checks before execution:
-1. Edge threshold: minimum edge % to trade
-2. Position limits: max $ per market, max total exposure
-3. Daily loss limit: stop trading if daily loss exceeds threshold
-4. VPIN filter: block trades when informed trading is detected
-5. Confidence floor: require minimum model confidence
-6. Kelly cap: never exceed half-Kelly sizing
-7. Liquidity check: don't trade illiquid markets
-
-This is the safety gate between "we detected an edge" and "we place a trade."
-"""
+"""Risk manager — pre-trade safety checks."""
 
 import logging
 from dataclasses import dataclass, field
@@ -49,7 +37,7 @@ class RiskLimits:
     # Position sizing
     max_position_usd: float = 50.0  # Max $ per single market
     max_total_exposure_usd: float = 200.0  # Max total across all positions
-    max_group_usd: float = 15.0  # Max $ committed per correlated print (H5, Task 3.6)
+    max_group_usd: float = 15.0
     kelly_cap: float = 0.25  # Never bet more than 25% of bankroll
     max_kelly_fraction: float = 0.50  # Cap raw Kelly at 50%
 
@@ -77,11 +65,7 @@ class RiskCheckResult:
 
 
 class RiskManager:
-    """Pre-trade risk assessment.
-
-    Every trade proposal goes through check_trade() before execution.
-    The risk manager can approve, reject, or adjust position size.
-    """
+    """Pre-trade risk assessment."""
 
     def __init__(self, limits: RiskLimits | None = None, bankroll: float = 1000.0):
         self.limits = limits or RiskLimits()
@@ -196,21 +180,6 @@ class RiskManager:
             size = min(size, remaining_capacity)
             passed.append(f"exposure headroom: ${remaining_capacity:.0f}")
 
-        # 7a. Group concentration cap (H5, Task 3.6). Skipped ENTIRELY when
-        # group_key is "" -- that is the regress note: every pre-existing
-        # caller (group_key defaults to "") sees identical checks_passed/
-        # checks_failed and adjusted_size_usd to before this cap existed.
-        #
-        # `self._group_exposure[group_key]` is the group's ledger: it
-        # already combines whatever `seed_group_exposure` restored from the
-        # DB's open book (resting/committed orders, possibly from a prior
-        # process) with whatever THIS process has itself added via
-        # `add_exposure(..., group_key=...)` for intents already accepted
-        # earlier in this same run. Counting both together -- not just
-        # this run's own adds -- is the missing-position-dedup fix applied
-        # to a group cap: a ledger that only counted this run's adds would
-        # let a second run's intent ride a group a PRIOR run already
-        # filled up to $29.64 on.
         if group_key:
             group_committed = self._group_exposure.get(group_key, 0.0)
             group_headroom = self.limits.max_group_usd - group_committed
@@ -281,72 +250,22 @@ class RiskManager:
         self._peak_bankroll = max(self._peak_bankroll, self._bankroll)
 
     def seed_exposure(self, total_usd: float) -> None:
-        """Restore exposure this process did not itself accumulate.
-
-        Every `RiskManager` starts a fresh process at `_total_exposure ==
-        0.0`, but real GTC orders resting at the venue -- or commitments
-        already recorded in this book by an earlier process -- still count
-        against the venue's real risk (audit finding C2). Call this once
-        at startup with `load_open_commitments(db_path)["total_usd"]`
-        before evaluating any intent.
-
-        `max`, deliberately never a plain assignment or `+=`: at startup
-        `_total_exposure` is 0, so `max(0, total_usd) == total_usd` either
-        way. But `add_exposure` may already have run for trades THIS
-        process placed since the last seed (or since construction) -- a
-        re-seed must be idempotent and must never claw back exposure this
-        process has already observed and added on top of the seed.
-        """
+        """Restore exposure this process did not itself accumulate."""
         self._total_exposure = max(self._total_exposure, total_usd)
 
     def group_exposure(self) -> dict[str, float]:
-        """Read-only snapshot of the live per-group ledger (H5, Task 3.6;
-        controller ruling R16 fix for finding I-1).
-
-        This is the COMMITTED BOOK per correlated print, not just this
-        process's own placements: whatever `seed_group_exposure` restored
-        from the DB's open book (a prior process's, or the venue's,
-        resting commitments) MAX'd against whatever `add_exposure(...,
-        group_key=...)` has added since. A run's printed report should
-        read this (see `src.trading.executor.render_group_commitments`)
-        rather than summing its own decisions, which can never show a
-        commitment dedup correctly kept out of that run altogether (e.g.
-        the three resting gtm:2026-12 orders, $29.64).
-
-        A COPY, not the live dict -- callers must not be able to mutate
-        `RiskManager` state through the object this returns.
-        """
+        """Read-only snapshot of the live per-group ledger."""
         return dict(self._group_exposure)
 
     def seed_group_exposure(self, by_group: dict[str, float]) -> None:
-        """Restore per-group commitments this process did not itself accumulate.
-
-        The group-cap analogue of `seed_exposure` (H5, Task 3.6): call it
-        once at startup with `load_open_commitments(db_path)["by_group"]`
-        so a fresh process inherits what the DB's open book already has
-        riding on each correlated print, not just the total. `max` per
-        group, for the identical idempotence reason as `seed_exposure`: a
-        re-seed must never claw back group exposure this process has
-        already added via `add_exposure(..., group_key=...)` for trades
-        placed since the last seed.
-        """
+        """Restore per-group commitments this process did not itself accumulate."""
         for group_key, amount in by_group.items():
             self._group_exposure[group_key] = max(
                 self._group_exposure.get(group_key, 0.0), amount
             )
 
     def add_exposure(self, amount: float, group_key: str = "") -> None:
-        """Track that we've opened a new position.
-
-        `group_key` (H5, Task 3.6) additionally attributes `amount` to a
-        correlated-group ledger, e.g. "gtm:2026-12" -- so THIS RUN's
-        accepted intents count against `max_group_usd` together with
-        whatever `seed_group_exposure` restored from the DB's open book
-        (the missing-position-dedup lesson: a cap must count the resting
-        book plus this run's own adds, not either one alone). "" (the
-        default) means "no group": total exposure still moves, but no
-        group bucket does -- matching `check_trade`'s "" semantics.
-        """
+        """Track that we've opened a new position."""
         self._total_exposure += amount
         if group_key:
             self._group_exposure[group_key] = (

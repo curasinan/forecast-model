@@ -1,22 +1,4 @@
-"""Daily backup of ``data/polymarket.db`` with 7-copy rotation.
-
-Copies the live database to ``data/backups/polymarket_YYYYMMDD_HHMMSS.db``
-using the **SQLite online backup API** (``sqlite3.Connection.backup``) rather
-than a plain file copy. The DB runs in ``journal_mode=delete`` and the
-snapshot collector writes every 15 minutes, so a naive ``shutil.copy`` at
-3 AM can land mid-transaction and produce a torn ~500 MB file that won't
-open. The backup API yields a transactionally-consistent snapshot even
-under concurrent writers.
-
-Disk budget: 7 retained copies x ~500 MB ≈ 3.5 GB steady-state in
-``data/backups/`` (git-ignored).
-
-Runnable for the scheduler (daily at 3 AM):
-    python -m monitoring.backup_db
-
-Exit code 0 on success, 1 on any failure (so the scheduler's LastTaskResult
-reflects backup health).
-"""
+"""Daily backup of ``data/polymarket.db`` with 7-copy rotation."""
 
 from __future__ import annotations
 
@@ -37,9 +19,7 @@ BACKUP_GLOB = "polymarket_*.db"
 log = logging.getLogger("monitoring.backup_db")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -60,9 +40,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Backup + rotation
-# --------------------------------------------------------------------------- #
 
 
 def backup_database(
@@ -71,11 +49,7 @@ def backup_database(
     keep: int = KEEP_BACKUPS,
     now: datetime | None = None,
 ) -> Path:
-    """Create a consistent backup copy and prune old ones.
-
-    Returns the path of the new backup file. Raises on failure (missing
-    source DB, disk errors) — the CLI wrapper converts that to exit 1.
-    """
+    """Create a consistent backup copy and prune old ones."""
     src_path = Path(db_path)
     if not src_path.exists():
         raise FileNotFoundError(f"source database not found at {src_path}")
@@ -115,11 +89,7 @@ def _prune_old_backups(
     backup_dir: Path | str,
     keep: int = KEEP_BACKUPS,
 ) -> list[Path]:
-    """Delete all but the newest ``keep`` backups. Returns the deleted paths.
-
-    Sorted by filename — the YYYYMMDD_HHMMSS stamp makes lexicographic order
-    equal chronological order, so no reliance on filesystem mtimes.
-    """
+    """Delete all but the newest ``keep`` backups. Returns the deleted paths."""
     dest_dir = Path(backup_dir)
     backups = sorted(dest_dir.glob(BACKUP_GLOB))
     to_delete = backups[:-keep] if keep > 0 else backups
@@ -136,9 +106,7 @@ def _prune_old_backups(
     return deleted
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
 
 
 def main() -> int:

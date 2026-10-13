@@ -1,13 +1,4 @@
-"""Convert model predictions into maker-adjusted edge signals.
-
-For each market the latest snapshot's best_bid / best_ask / midpoint / spread
-is joined to the model's ``predicted_change`` value. The maker-adjusted edge
-is ``|predicted_change| - spread/2`` — half-spread is treated as the
-adverse-selection cost a resting maker faces in expectation. Rows whose
-``adjusted_edge`` falls below the configured floor (default 0.005) are
-marked ``tradeable=False`` but still returned so downstream stages and
-diagnostics can see what was dropped and why.
-"""
+"""Convert model predictions into maker-adjusted edge signals."""
 
 from __future__ import annotations
 
@@ -40,9 +31,7 @@ EDGE_COLUMNS: tuple[str, ...] = (
 log = logging.getLogger("decision.edge_calculator")
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 def compute_edges(
@@ -50,24 +39,7 @@ def compute_edges(
     db_path: Path | str = DEFAULT_DB_PATH,
     min_edge_threshold: float = DEFAULT_MIN_EDGE_THRESHOLD,
 ) -> pd.DataFrame:
-    """Compute the per-market maker-adjusted edge from model predictions.
-
-    Parameters
-    ----------
-    predictions_df : DataFrame
-        Must contain columns ``market_id`` (str-coerceable) and
-        ``predicted_change`` (float — the 6h price-change prediction).
-    db_path : Path or str
-        SQLite path; the latest snapshot per market_id is read here.
-    min_edge_threshold : float
-        Rows with ``adjusted_edge < min_edge_threshold`` get ``tradeable=False``.
-
-    Returns
-    -------
-    DataFrame with columns: ``market_id, direction, predicted_change,
-    adjusted_edge, current_midpoint, best_bid, best_ask, spread, tradeable``.
-    Empty-but-typed if ``predictions_df`` is empty.
-    """
+    """Compute the per-market maker-adjusted edge from model predictions."""
     if predictions_df.empty:
         return _empty_edges_df()
 
@@ -85,16 +57,13 @@ def compute_edges(
     snaps = _fetch_latest_snapshots(db_path, market_ids)
     df = df.merge(snaps, on="market_id", how="left")
 
-    # adjusted_edge = |predicted_change| - spread/2 (half-spread = maker adverse-selection proxy)
     pred = df["predicted_change"].astype(float)
     spread = df["spread"].astype(float)
     df["adjusted_edge"] = pred.abs() - (spread / 2.0)
 
-    # Direction: positive prediction -> buy; negative -> sell; exact zero -> None
     direction = np.where(pred > 0, "buy", np.where(pred < 0, "sell", None))
     df["direction"] = direction
 
-    # Tradeable iff: edge crosses threshold AND we have a valid book quote AND direction not None
     has_book = df["best_bid"].notna() & df["best_ask"].notna() & df["spread"].notna()
     has_direction = df["direction"].notna()
     edge_ok = df["adjusted_edge"] >= min_edge_threshold
@@ -111,9 +80,7 @@ def compute_edges(
     return result
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _empty_edges_df() -> pd.DataFrame:
@@ -140,12 +107,7 @@ def _fetch_latest_snapshots(
     db_path: Path | str,
     market_ids: list[str],
 ) -> pd.DataFrame:
-    """Return one row per market_id with its most-recent snapshot fields.
-
-    Chunks the IN clause to stay under SQLite's variable-count limit.
-    Markets without any snapshot row are simply absent from the result —
-    the caller's left-join leaves their book columns NaN.
-    """
+    """Return one row per market_id with its most-recent snapshot fields."""
     frames: list[pd.DataFrame] = []
     conn = sqlite3.connect(db_path)
     try:

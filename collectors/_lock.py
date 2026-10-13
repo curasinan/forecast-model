@@ -1,10 +1,4 @@
-"""Cross-platform PID lock for skipping overlapping collector runs.
-
-The lock file stores the owning process's PID. A new invocation checks the
-file; if the PID still names a live process, it raises ``LockHeld`` so the
-caller can exit cleanly (as opposed to stacking another run on top of an
-in-flight one). Stale locks (file exists, PID is dead) are reclaimed.
-"""
+"""Cross-platform PID lock for skipping overlapping collector runs."""
 
 from __future__ import annotations
 
@@ -36,8 +30,6 @@ def _pid_alive(pid: int) -> bool:
         if handle:
             ctypes.windll.kernel32.CloseHandle(handle)
             return True
-        # ERROR_ACCESS_DENIED (5) means the process exists but we can't
-        # query it — still treat it as alive for locking purposes.
         return ctypes.windll.kernel32.GetLastError() == 5
     try:
         os.kill(pid, 0)

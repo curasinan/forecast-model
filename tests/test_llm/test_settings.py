@@ -41,8 +41,6 @@ def test_unrelated_env_is_ignored(monkeypatch):
 
 
 def test_empty_env_values_mean_unset(monkeypatch):
-    # .env.example documents "LLM_TEMPERATURE=" as "use the server default";
-    # without env_ignore_empty an empty string is a ValidationError on a float.
     monkeypatch.setenv("LLM_MODEL", "qwen-test")
     monkeypatch.setenv("LLM_TEMPERATURE", "")
     monkeypatch.setenv("LLM_MAX_TOKENS", "")

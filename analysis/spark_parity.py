@@ -1,29 +1,4 @@
-"""Spark research-mirror parity tooling.
-
-Design: docs/plans/2026-09-30-spark-research-split-design.md, section 5.
-
-Research-only. Nothing here writes an operational file: no
-``paper/gtm_signals.json``, no history line, no ledger. The CLIs under
-``scripts/spark/`` are thin wrappers over these functions.
-
-Layout assumed under a quant-data root (``~/quant_data`` on both machines,
-``~/quant_data_snapshot`` for the Zenbook-side frozen copy)::
-
-    <root>/ibkr_ticks/quotes/date=YYYY-MM-DD/quotes-HHMMSSZ.parquet
-    <root>/ibkr_ticks/quotes_hourly/date=*/*.parquet          (optional)
-    <root>/ibkr_ticks/contracts_cache.db                       (optional)
-    <root>/ibkr_ticks/paper/ibkr_paper.db                      (optional)
-    <root>/climate_data/forecasts/seas5_global_mean.parquet
-    <root>/climate_data/reference/era5_global_mean.parquet
-    <root>/climate_data/labels/labels_ledger.parquet
-    <root>/climate_data/models/gtm_emos.json
-    <root>/climate_data/paper/ibkr_paper_runs.jsonl            (optional)
-    <root>/climate_data/reports/gtm_emos_diagnostics.json      (optional)
-
-Entries without a marker are required: a missing one is a verify_mirror
-failure, not a skip. That includes the two CDS products (SEAS5 and ERA5),
-which build_training_frame reads, so a mirror without them cannot be scored.
-"""
+"""Spark research-mirror parity tooling."""
 
 from __future__ import annotations
 
@@ -64,8 +39,6 @@ DIAG_REL = REPORT_JSON_REL
 LEDGER_REL = ("labels", "labels_ledger.parquet")
 HEARTBEAT_REL = (TICKS_DIR, "state", "recorder_state.json")
 
-# Everything the scoring probe reads, hashed into the compared identity block
-# (relative to the quant-data root). Absent entries hash to None on both sides.
 INPUT_FILES = (
     (CLIMATE_DIR, *SEAS5_REL),
     (CLIMATE_DIR, *ERA5_REL),
@@ -75,8 +48,6 @@ INPUT_FILES = (
     (TICKS_DIR, CONTRACTS_DB),
 )
 
-# The operational files a push or a refit must never change on the LIVE root:
-# manifested (sha256, size, mtime) before and after, and diffed.
 MANIFEST_FILES = (
     (TICKS_DIR, *PAPER_DB_REL),
     (TICKS_DIR, "paper", "ibkr_sync_runs.jsonl"),
@@ -89,17 +60,11 @@ MANIFEST_FILES = (
     (CLIMATE_DIR, *LEDGER_REL),
 )
 
-# --------------------------------------------------------------------------- #
 # Mirror integrity
-# --------------------------------------------------------------------------- #
 
 
 def check_parquet(path: Path) -> str | None:
-    """None when ``path`` is a complete parquet file, else the error text.
-
-    Reads the whole table, not just the footer: a torn copy of a small
-    sweep file can still carry a plausible footer offset.
-    """
+    """None when ``path`` is a complete parquet file, else the error text."""
     try:
         pq.read_table(path)
     except Exception as exc:  # noqa: BLE001 -- any reader error IS the finding
@@ -108,15 +73,7 @@ def check_parquet(path: Path) -> str | None:
 
 
 def check_sqlite(path: Path) -> str | None:
-    """None when ``PRAGMA quick_check`` answers ``ok``, else the error text.
-
-    Opens read-only and closes explicitly (Windows keeps an open handle
-    alive until GC, which would block a later rewrite in tests). The URI is
-    built with ``Path.as_uri`` so a ``#`` or ``?`` in the path cannot cut it
-    short and drop ``mode=ro`` (SQLite would then create a stray file and
-    report a false ok). A 0-byte file is refused up front: SQLite treats it
-    as an empty, valid database.
-    """
+    """None when ``PRAGMA quick_check`` answers ``ok``, else the error text."""
     target = Path(path)
     if target.is_file() and target.stat().st_size == 0:
         return "empty file (0 bytes)"
@@ -142,13 +99,7 @@ def hourly_files(ticks_root: Path) -> list[Path]:
 
 
 def verify_mirror(root: Path) -> list[str]:
-    """Every unreadable or missing canonical file under ``root``, as 'relpath: error'.
-
-    Never skips silently: a missing REQUIRED file (the newest sweep, the
-    SEAS5 and ERA5 products, the labels ledger, the model) is a failure; the
-    optional trees (hourly bars, the two SQLite files) are checked only when
-    present. Empty list = readable.
-    """
+    """Every unreadable or missing canonical file under ``root``, as 'relpath: error'."""
     root = Path(root)
     ticks = root / TICKS_DIR
     climate = root / CLIMATE_DIR
@@ -171,8 +122,6 @@ def verify_mirror(root: Path) -> list[str]:
         if err:
             failures.append(f"{_rel(hourly[-1])}: {err}")
 
-    # The three inputs build_training_frame reads are REQUIRED: a mirror
-    # without them cannot be scored, and a torn copy must be named here.
     for required in (climate.joinpath(*SEAS5_REL), climate.joinpath(*ERA5_REL), ledger_path(climate)):
         if not required.exists():
             failures.append(f"{_rel(required)}: missing")
@@ -198,9 +147,7 @@ def verify_mirror(root: Path) -> list[str]:
     return failures
 
 
-# --------------------------------------------------------------------------- #
 # Snapshot identity
-# --------------------------------------------------------------------------- #
 
 
 def _sha256(path: Path) -> str:
@@ -212,13 +159,7 @@ def _sha256(path: Path) -> str:
 
 
 def snapshot_identity(root: Path) -> dict[str, Any]:
-    """What was scored, computed from the files under ``root`` on THIS machine.
-
-    Both parity payloads carry the identity their own machine computed;
-    ``compare_json`` then asserts the two blocks are equal, which is the
-    independent witness that both runs read the same bytes (a check
-    written by the process it certifies proves nothing).
-    """
+    """What was scored, computed from the files under ``root`` on THIS machine."""
     root = Path(root)
     ticks = root / TICKS_DIR
     climate = root / CLIMATE_DIR
@@ -276,18 +217,10 @@ def inputs_sha256(root: Path) -> dict[str, str | None]:
 
 
 def code_identity(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
-    """Commit the scoring code ran at, and whether the tree was dirty.
-
-    ``git_sha`` goes into the COMPARED identity block, so two payloads only
-    count as comparable when both machines ran the same commit. ``dirty``
-    is informational (the report is edited on the Zenbook while a run
-    happens) and belongs in the ignored machine block.
-    """
+    """Commit the scoring code ran at, and whether the tree was dirty."""
 
     def _git(*args: str) -> str | None:
         try:
-            # --no-optional-locks: `git status` would otherwise refresh and
-            # rewrite .git/index (taking its lock); this probe stays read-only.
             done = subprocess.run(
                 ["git", "--no-optional-locks", "-C", str(repo_root), *args],
                 capture_output=True, text=True, timeout=30, check=False,
@@ -301,18 +234,11 @@ def code_identity(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     return {"git_sha": sha or "unknown", "dirty": bool(status) if status is not None else None}
 
 
-# --------------------------------------------------------------------------- #
 # Operational manifest (proof the LIVE root was not touched)
-# --------------------------------------------------------------------------- #
 
 
 def operational_manifest(root: Path) -> dict[str, dict[str, Any] | None]:
-    """(sha256, size, mtime_ns) of every operational file under ``root``; None when absent.
-
-    Taken before and after anything that reads the LIVE root (a push, a
-    refit) and diffed byte-for-byte: an equal manifest is the proof that
-    the paper book, the ledgers and the operational model were not touched.
-    """
+    """(sha256, size, mtime_ns) of every operational file under ``root``; None when absent."""
     root = Path(root)
     out: dict[str, dict[str, Any] | None] = {}
     for parts in MANIFEST_FILES:
@@ -327,9 +253,7 @@ def operational_manifest(root: Path) -> dict[str, dict[str, Any] | None]:
     return out
 
 
-# --------------------------------------------------------------------------- #
 # JSON compare
-# --------------------------------------------------------------------------- #
 
 
 @dataclass
@@ -358,19 +282,7 @@ def compare_json(
     _path: str = "",
     _result: CompareResult | None = None,
 ) -> CompareResult:
-    """Recursive structural compare of two JSON documents.
-
-    Floats (and an int against a float) agree when
-    ``|a-b| <= atol + rtol*max(|a|,|b|)``; NaN equals NaN; None never equals
-    NaN. Ints, bools, strings and None are exact: two ints are compared with
-    ``!=`` before any float conversion, so an id that differs by 1 cannot
-    hide inside the tolerance (design 5.3). Dict key sets and list lengths
-    must match. ``ignore`` holds dotted paths (``identity.machine``) whose
-    subtrees are skipped. Every mismatch is reported with its path; the
-    result also carries the largest differences seen among the
-    tolerance-compared numbers, so a passing run still shows how close it
-    was. ``n_numeric`` counts every number pair, ints included.
-    """
+    """Recursive structural compare of two JSON documents."""
     result = _result if _result is not None else CompareResult()
     ignored = set(ignore)
     if _path in ignored:
@@ -399,8 +311,6 @@ def compare_json(
     if _is_number(left) and _is_number(right):
         result.n_numeric += 1
         if isinstance(left, int) and isinstance(right, int):
-            # exact: _is_number already kept bools out, and no float conversion
-            # may blur two large ids or counts into "within tolerance"
             if left != right:
                 result.mismatches.append(f"{_path}: {left!r} != {right!r}")
             return result
@@ -427,16 +337,7 @@ def compare_json(
 
 
 def subtree(payload: Any, path: str) -> Any:
-    """The value at the dotted ``path`` of a parsed JSON ``payload``.
-
-    The same dotted paths ``compare_json`` takes for ``ignore``
-    (``identity.machine``), walked through dict keys only: a list is a value,
-    never descended into, and a key that itself contains a dot cannot be
-    addressed. Raises ``KeyError(path)`` when any step is absent or passes
-    through something that is not an object, so an absent subtree stays
-    distinguishable from a present ``null`` (or 0, False, {}, []). The CLI's
-    ``--differ`` uses it on the raw payloads, before any ``--ignore``.
-    """
+    """The value at the dotted ``path`` of a parsed JSON ``payload``."""
     node = payload
     for key in path.split("."):
         if not isinstance(node, dict) or key not in node:
@@ -445,9 +346,7 @@ def subtree(payload: Any, path: str) -> Any:
     return node
 
 
-# --------------------------------------------------------------------------- #
 # Machine info and the scoring probe
-# --------------------------------------------------------------------------- #
 
 MACHINE_PACKAGES = ("numpy", "scipy", "pandas", "pyarrow")
 PROBE_MARKER = "spark_parity"
@@ -478,24 +377,7 @@ def score_snapshot(
     identity: dict[str, Any],
     summary: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """``climate.paper.run_paper`` on a frozen snapshot, minus the wall clock.
-
-    A parity probe, not an operator entrypoint: no staleness gate (that
-    belongs to scripts/run_gtm_paper.py, and this probe must work on a
-    stale mirror); gate inputs pinned to zero with the live-paper gate
-    REQUIRED, so ``go_live.passed`` is False by construction on both
-    machines and can never be mistaken for an operational verdict; a
-    top-level ``probe`` marker for the same reason; nothing written under
-    ``paper/``. The bridge the frame was built with travels along, so a
-    parity failure can be localised to the LAPACK fit rather than the CDF.
-
-    The identity has to be able to witness the run, or this raises
-    ``RuntimeError``: a ``code_sha`` of None or "unknown" is refused (two
-    machines that both fail to read git would compare equal), and so is a
-    scored sweep that is not the identity's ``newest_sweep`` (the identity
-    and the scorer list the sweep folder separately, so a root that moved
-    between the two would be vouched for on bytes that were not scored).
-    """
+    """``climate.paper.run_paper`` on a frozen snapshot, minus the wall clock."""
     if identity.get("code_sha") in (None, "unknown"):
         raise RuntimeError(
             f"identity code_sha is unusable ({identity.get('code_sha')!r}): two machines that "
@@ -513,8 +395,6 @@ def score_snapshot(
         resolved_months=0,
         require_live_paper=True,
     )
-    # sweep_ts_from_path(None) is None: an identity without a newest sweep, or with
-    # one that is not a recorder path, has nothing to vouch for the scored sweep
     named = sweep_ts_from_path(identity.get("newest_sweep"))
     if named is None:
         raise RuntimeError(

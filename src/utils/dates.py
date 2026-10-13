@@ -6,13 +6,7 @@ from datetime import datetime, timezone
 
 
 def parse_iso8601(value: str | None) -> datetime | None:
-    """Parse an ISO 8601 timestamp into a tz-aware UTC datetime, or None.
-
-    Accepts both ``...Z`` and ``...+00:00`` suffixes. Naive timestamps are
-    assumed to be UTC. Returns ``None`` for empty / unparseable input rather
-    than raising, so callers can use this in bulk operations on possibly-
-    dirty data without per-row try/except.
-    """
+    """Parse an ISO 8601 timestamp into a tz-aware UTC datetime, or None."""
     if not value:
         return None
     s = value.strip()

@@ -101,7 +101,6 @@ def test_join_happy_path(seeded):
 
 
 def test_availability_filter_drops_slow_model(seeded):
-    # decision 06:00 local on day D-1: ecmwf (lag 7h) misses it, gfs/icon make it.
     reg = _registry()
     strict = build_training_frame(seeded, _spec(decision_hour_local=6), registry=reg)
     assert strict.empty  # full ensemble required, one model dropped
@@ -214,7 +213,6 @@ def test_unit_mismatch_rows_excluded(seeded):
     conn.commit()
     conn.close()
     frame = build_training_frame(seeded, _spec(), registry=_registry())
-    # icon's F row for 05-02 was replaced by the celsius one -> composition breaks.
     assert "2024-05-02" not in set(frame["valid_local_date"])
 
 

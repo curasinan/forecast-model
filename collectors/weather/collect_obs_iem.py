@@ -160,11 +160,7 @@ def backfill_station(
     sleep_s: float = 2.0,
     db_path: Path | None = None,
 ) -> int:
-    """Historical backfill over [start, end] local dates (YYYY-MM-DD).
-
-    The fetch window is extended by one UTC day on each side so boundary
-    local days aggregate completely regardless of station timezone.
-    """
+    """Historical backfill over [start, end] local dates (YYYY-MM-DD)."""
     fetch_start = date.fromisoformat(start) - timedelta(days=1)
     fetch_end = date.fromisoformat(end) + timedelta(days=2)  # exclusive-ish end of day
     total = 0
@@ -198,11 +194,7 @@ def aggregate_station_daily(
     min_hours: int = DEFAULT_MIN_HOURS_COVERED,
     now: datetime | None = None,
 ) -> int:
-    """Aggregate stored obs into obs_daily for local dates [start, end].
-
-    Reads back from SQLite (not the fetched frame) so re-runs heal days that
-    were partial when first aggregated.
-    """
+    """Aggregate stored obs into obs_daily for local dates [start, end]."""
     station = load_station_registry().require(icao)
     fetch_start = (date.fromisoformat(start) - timedelta(days=1)).isoformat()
     fetch_end = (date.fromisoformat(end) + timedelta(days=1)).isoformat()

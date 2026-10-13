@@ -1,15 +1,4 @@
-"""Record ForecastEx delayed-quote sweeps to parquet.
-
-Thin wrapper around src.venues.ibkr.recorder.QuoteRecorder. Settings are
-env-driven: IBKR_PORT and IBKR_TRADING_MODE MUST be set (environment or
-.env) -- IBKRSettings has no defaults for them by design and construction
-fails loudly otherwise (migration spec Stage 7).
-
-Usage:
-    python scripts/record_ibkr_ticks.py --once            # single sweep, then exit
-    python scripts/record_ibkr_ticks.py                   # loop every IBKR_RECORD_INTERVAL_MINUTES
-    python scripts/record_ibkr_ticks.py --interval-minutes 5
-"""
+"""Record ForecastEx delayed-quote sweeps to parquet."""
 
 from __future__ import annotations
 
@@ -33,7 +22,7 @@ def main() -> int:
                     help="universe snapshot used to seed an empty contract cache")
     args = ap.parse_args()
 
-    settings = IBKRSettings()  # loud ValidationError if IBKR_PORT / IBKR_TRADING_MODE unset
+    settings = IBKRSettings()
     if args.interval_minutes is not None:
         settings.record_interval_minutes = args.interval_minutes
 

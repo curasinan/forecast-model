@@ -21,8 +21,5 @@ class BaseCollector(ABC):
         ...
 
     def is_available(self) -> bool:
-        """Check if this collector has valid credentials and can operate.
-
-        Override in subclasses that need API keys.
-        """
+        """Check if this collector has valid credentials and can operate."""
         return True

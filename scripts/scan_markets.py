@@ -1,11 +1,4 @@
-"""Scan Polymarket for high-entropy tech markets.
-
-Ranks markets by opportunity score = entropy × volume.
-High uncertainty + enough liquidity = best targets for our model.
-
-Usage:
-    python scripts/scan_markets.py
-"""
+"""Scan Polymarket for high-entropy tech markets."""
 
 import asyncio
 import sys

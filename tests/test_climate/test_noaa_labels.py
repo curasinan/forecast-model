@@ -79,9 +79,6 @@ MM_TXT = """\
 """
 
 
-# ---------------------------------------------------------------- parsers
-
-
 def test_parse_gtm_json():
     rows = parse_cag_json(GTM_JSON, "gtm", "monthly", CAG_URL)
     assert rows == [
@@ -130,9 +127,6 @@ def test_parse_gml_monthly_uses_average_and_skips_sentinels():
     assert [r.period for r in rows] == ["1958-03", "2026-07"]
     assert rows[0].value == 315.71  # 'average' column, not deseasonalized
     assert rows[1] == LabelObservation("acd_monthly", "2026-07", 429.12, GML_CO2_MONTHLY_URL)
-
-
-# ----------------------------------------------------------------- ledger
 
 
 def _obs(series="gtm", period="2026-07", value=1.18, url=CAG_URL):
@@ -208,9 +202,6 @@ def test_ledger_multiple_series_partitioned(tmp_path):
     assert latest_values("gtm", root=root) == {"2026-07": 1.18}
     assert latest_values("acd_annual", root=root) == {"2025": 427.35}
     assert latest_values("gt", root=root) == {}
-
-
-# -------------------------------------------------------------- collector
 
 
 def _fake_fetchers(gtm_rows=None):

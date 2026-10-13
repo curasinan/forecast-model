@@ -1,18 +1,8 @@
-"""Source credibility weighting.
-
-Not all sources are equally reliable. A Reuters report carries more weight
-than a random blog post. This extractor scores evidence by source credibility
-and produces weighted sentiment and credibility ratio features.
-
-The credibility scores are hand-tuned starting values. Over time these
-should be calibrated against actual prediction accuracy by source.
-"""
+"""Source credibility weighting."""
 
 from src.features.base import BaseFeatureExtractor
 from src.models.evidence import EvidenceBundle
 
-# Credibility scores: 0.0 = untrustworthy, 1.0 = highly credible
-# These are starting estimates — refine with calibration data over time
 SOURCE_CREDIBILITY: dict[str, float] = {
     # Tier 1: Major wire services and established tech press
     "Reuters": 0.95,
@@ -78,7 +68,6 @@ class CredibilityExtractor(BaseFeatureExtractor):
         high_cred = [c for c in credibilities if c >= 0.75]
         high_ratio = len(high_cred) / len(credibilities)
 
-        # Credibility-weighted sentiment: weight each item's sentiment by source credibility
         weighted_sentiments = []
         total_weight = 0.0
         for item, cred in zip(bundle.items, credibilities):

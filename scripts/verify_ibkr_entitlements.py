@@ -1,49 +1,4 @@
-"""Stage 0 entitlement verification gate for the IBKR ForecastEx migration.
-
-Standalone diagnostic. Connects to a running IB Gateway or TWS session and
-answers, empirically, the questions that gate the rest of the migration:
-
-  1. Which account(s) this session holds, account type, and base currency
-     (legal entity must be confirmed in Client Portal; the API does not
-     expose it directly -- the report says what evidence was observed).
-  2. Whether event-contract / prediction-market trading permissions appear
-     to be enabled (inferred from contract discovery + whatIf order probes).
-  3. Raw contract specification fields for at least three live ForecastEx
-     contracts, resolved via reqContractDetails -- never hardcoded.
-  4. The discovered contract universe with count (reported as a lower
-     bound, with the discovery method noted).
-  5. Paper/live contract-set parity (via --snapshot on one session and
-     --compare on the other).
-  6. Which order types are accepted (contract metadata `orderTypes` plus
-     whatIfOrder probes for LMT / MKT / conditional; whatIf never
-     transmits an order).
-
-Usage:
-    # First run (e.g. against the paper Gateway on port 4002):
-    python scripts/verify_ibkr_entitlements.py --port 4002
-
-    # Live session, saving a universe snapshot:
-    python scripts/verify_ibkr_entitlements.py --port 4001 --snapshot data/ibkr_universe_live.json
-
-    # Paper session, comparing against the live snapshot:
-    python scripts/verify_ibkr_entitlements.py --port 4002 --compare data/ibkr_universe_live.json
-
-Exit codes:
-    0  PASS
-    1  connection or unexpected failure
-    2  event-contract permissions appear to be absent
-    3  zero prediction-market contracts discovered
-    4  paper session does not expose the (compared) live contract set
-
-Notes:
-    - Requires a running, logged-in IB Gateway (ports 4001 live / 4002 paper)
-      or TWS (7496 live / 7497 paper) with API socket clients enabled.
-    - The whatIf probes require "Read-Only API" to be UNCHECKED in the
-      Gateway/TWS API settings. whatIf orders are margin/commission checks
-      only; nothing is ever transmitted to the exchange.
-    - Uses delayed market data (type 4) so no paid subscription is needed
-      for the YES+NO price-sum check.
-"""
+"""Stage 0 entitlement verification gate for the IBKR ForecastEx migration."""
 
 from __future__ import annotations
 
@@ -59,9 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 if sys.platform == "win32":
-    # ib_async uses raw sockets; the selector loop is the safe choice on Windows.
-    # The policy API is deprecated (removal in 3.16) but still the only way to
-    # steer ib_async's internally created loop; revisit when ib_async does.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -77,9 +29,6 @@ except ImportError:
     print("FATAL: ib_async is not installed. Run: pip install ib_async")
     sys.exit(1)
 
-# Probe candidates. These are PROBES, not assumptions: the script reports which
-# of them the API actually answers to. Discovered values win; these lists only
-# seed the search.
 CANDIDATE_EXCHANGES = ["FORECASTX", "IBEOS"]
 CANDIDATE_SEC_TYPES = ["EVENT", "EC", "FUT", "OPT", "IND", "CONTFUT", "CMDTY"]
 SEED_SEARCH_TERMS = [
@@ -146,8 +95,6 @@ def fmt_dict(d: dict, indent: str = "    ") -> str:
 
 
 def connect(host: str, port: int | None, client_id: int, rep: Report) -> tuple[IB, int]:
-    # Without this, any request dropped during a Gateway<->IBKR connectivity
-    # blip (error 1100) blocks its sync wrapper forever and hangs the script.
     IB.RequestTimeout = 60
     ports = [port] if port else DEFAULT_PORTS
     last_exc: Exception | None = None
@@ -200,19 +147,14 @@ def section_account(ib: IB, rep: Report) -> dict:
     rep.add("")
     rep.add("NOTE: the servicing IBKR legal entity is not exposed via the API.")
     rep.add("Confirm it in Client Portal (Settings -> Account Settings) and")
-    rep.add("record it in docs/venue_semantics.md. Turkey-resident accounts are")
+    rep.add("record it in docs/venue_semantics.md. Non-US-resident accounts are")
     rep.add("typically held by a non-US entity; product availability follows the")
     rep.add("entity, which is exactly what the probes below measure.")
     return {"accounts": accounts, "modes": modes, "summary": summary_rows}
 
 
 def chain_via_secdef(ib: IB, sym: str, rep: Report, found: dict[int, dict]) -> None:
-    """Resolve a symbol's event-contract chain via reqSecDefOptParams.
-
-    Used when the direct OPT-wildcard chain request gets no response (observed
-    2026-08-16 for FF, CPI and others). Resolves the underlying IND first, asks
-    for the option parameters, then resolves a sample of concrete contracts.
-    """
+    """Resolve a symbol's event-contract chain via reqSecDefOptParams."""
     try:
         ind = ib.reqContractDetails(Contract(symbol=sym, secType="IND", exchange="FORECASTX"))
     except Exception:  # noqa: BLE001
@@ -258,8 +200,6 @@ def discover_universe(ib: IB, rep: Report, only_symbols: list[str] | None = None
     responding: set[tuple[str, str]] = set()
 
     if only_symbols:
-        # Follow-up mode: skip the broad probes; go secdef-first per symbol,
-        # falling back to the slow OPT wildcard only if secdef finds nothing.
         rep.add(f"Follow-up mode: chains only, for {only_symbols}")
         prev = IB.RequestTimeout
         for sym in only_symbols:
@@ -285,9 +225,6 @@ def discover_universe(ib: IB, rep: Report, only_symbols: list[str] | None = None
         rep.add(f"  of which tradable (non-IND): {len(tradable)}")
         return found
 
-    # Probe A: wildcard reqContractDetails per (exchange, secType).
-    # Observed 2026-08-16: these all time out (no response at all) — keep them
-    # as cheap probes with a short timeout in case the API behavior changes.
     rep.add("Probe A: reqContractDetails wildcards per (exchange, secType)")
     prev_timeout = IB.RequestTimeout
     IB.RequestTimeout = 10
@@ -361,10 +298,6 @@ def discover_universe(ib: IB, rep: Report, only_symbols: list[str] | None = None
     except Exception as exc:  # noqa: BLE001
         rep.add(f"  scanner probe failed: {exc!r}")
 
-    # Probe D: the tradable event contracts are derivatives on the discovered
-    # underlyings (observed 2026-08-16: reqMktDepthExchanges lists OPT and FOP
-    # on FORECASTX, and the IND definitions reject orders with error 10345).
-    # Resolve the per-underlying chains by symbol wildcard.
     underlying_syms = sorted({
         r["symbol"] for r in found.values() if r.get("secType") == "IND" and r.get("symbol")})
     rep.add(f"Probe D: derivative chains for {len(underlying_syms)} underlyings")
@@ -383,7 +316,7 @@ def discover_universe(ib: IB, rep: Report, only_symbols: list[str] | None = None
             got += len(details)
             time.sleep(0.3)
             if details:
-                break  # chain found under this secType; no need to probe the next
+                break
         rep.add(f"  {sym}: {got} derivative contracts")
 
     tradable = {cid for cid, r in found.items() if r.get("secType") != "IND"}
@@ -411,8 +344,6 @@ def section_contract_specs(found: dict[int, dict], rep: Report) -> None:
 def section_yes_no_structure(ib: IB, found: dict[int, dict], rep: Report) -> None:
     rep.heading("4. Yes/No structure and price-sum check")
     pool = {cid: r for cid, r in found.items() if r.get("secType") != "IND"} or found
-    # Group by (symbol, expiry, strike): a paired venue shows 2 conIds per
-    # group, typically distinguished by right (C=Yes / P=No on ForecastEx).
     groups: dict[tuple, list[int]] = {}
     for con_id, row in pool.items():
         key = (row.get("symbol"), row.get("lastTradeDateOrContractMonth"),
@@ -477,9 +408,6 @@ def section_order_probes(ib: IB, found: dict[int, dict], rep: Report) -> list[di
 
     min_tick = row.get("minTick") or 0.01
     probe_price = round(round(0.50 / min_tick) * min_tick, 4)
-    # Explicit tif on every order: without it the venue's order preset rewrites
-    # TIF and emits error 10349, which aborts the whatIf round-trip (observed
-    # 2026-08-16). The GTC probe answers "are resting limit orders permitted".
     orders = [("LMT DAY", LimitOrder("BUY", 1, probe_price, tif="DAY")),
               ("LMT GTC (resting)", LimitOrder("BUY", 1, probe_price, tif="GTC")),
               ("MKT DAY", MarketOrder("BUY", 1, tif="DAY"))]

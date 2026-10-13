@@ -8,7 +8,7 @@ from collectors.weather import collect_labels_cli as cli
 from collectors.weather import collect_labels_wu as wu
 from weather.storage import init_weather_db
 
-OLD_DATE = "2024-06-15"  # finalized and well past 72h at any realistic test time
+OLD_DATE = "2024-06-15"
 
 
 def _label_row(db, platform):
@@ -66,7 +66,6 @@ def test_wu_failed_fetch_keeps_good_label(tmp_path):
         label_source="wunderground_api", db_path=db,
     )
     assert _label_row(db, "global") == [(74.0, 1, "wunderground_api")]
-    # Transient API outage: the failed-fetch row must not replace stored truth.
     wu.upsert_label(
         station_icao="KLGA", valid_local_date=OLD_DATE, metric="high",
         label_value=None, resolution_url="u", finalized=True,
@@ -87,7 +86,6 @@ def test_wu_real_value_still_dedupes_sources(tmp_path):
         label_value=74.0, resolution_url="u", finalized=True,
         label_source="wunderground_api", db_path=db,
     )
-    # DELETE-then-INSERT dedup preserved for real values: one row, API source.
     assert _label_row(db, "global") == [(74.0, 1, "wunderground_api")]
 
 

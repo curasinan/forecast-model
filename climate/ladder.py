@@ -1,47 +1,4 @@
-"""Strike-ladder probabilities for GTM and comparison with recorder quotes.
-
-Research-only: turns a predictive N(mu, sigma) for one target month into
-P(YES) per listed strike, joins the latest ForecastEx delayed-quote sweep,
-and reports edge / expected value after the flat commission. Nothing here
-places orders or imports a venue SDK.
-
-Strike semantics (docs/venue_semantics.md, GTM row): YES iff the NOAA
-monthly anomaly is STRICTLY GREATER than the strike. Under a continuous
-normal the tie {X == strike} has measure zero, so
-    p_yes = P(X > k) = 1 - Phi((k - mu) / sigma)
-is exact for the model. The settled NOAA value, however, is printed to
-0.01 degC and strikes sit on a 0.1 (or 0.5) grid, so a printed tie
-(value 1.10 vs strike 1.1 -> NO) is NOT measure-zero in reality. The
-optional ``resolution`` argument shifts the threshold by half a print
-step (P(X > k + resolution/2)), which is the first-order rounding
-correction; the default keeps the pure continuous form per the task
-contract.
-
-Contract -> target-month mapping (empirical, from
-data/ibkr_universe_live.json and the recorder's contracts_cache.db,
-inspected 2026-08-23):
-
-    localSymbol          lastTradeDate  contractMonth  realExpiration
-    GTM_0726_0.6_YES     20260811       202607         (rolled off)
-    GTM_0826_-1.5_YES    20260910       202608
-    GTM_0926_-1.5_YES    20261009       202609
-    GTM_1026_0_YES       20261112       202610
-    GTM_1226_0.5_YES     20270212       202612         2027-02-12 10:00 CT
-
-The MMYY inside the localSymbol equals contractMonth (YYYYMM) and is the
-TARGET month: NOAA publishes month M in the first half of M+1 (10:00 CT),
-and for 0726/0826/0926/1026 the expiry falls 9-12 days after the end of
-the labelled month, i.e. on the publication day of that month's value.
-July-2026 settles at 1.18 degC (first seen in the ledger 2026-08-17)
-against a 0.6..1.4 ladder, consistent with July being the target.
-
-The expiry ALONE is ambiguous: GTM_1226 expires 2027-02-12, ~6 weeks
-after December ends, which is also where a hypothetical GTM_0127 would
-expire (January publishes ~Feb 12). The "previous month of the expiry"
-heuristic therefore maps 20270212 to 2027-01, contradicting the label.
-The label (localSymbol / contractMonth) is authoritative; the expiry
-heuristic is a fallback only and is marked as such in the output.
-"""
+"""Strike-ladder probabilities for GTM and comparison with recorder quotes."""
 
 from __future__ import annotations
 
@@ -59,13 +16,8 @@ from scipy.stats import norm
 
 from src.domain.fees import FeeModel, FlatCommissionFeeModel
 
-# Verified 2026-08-16 via whatIf probes (docs/venue_semantics.md): flat
-# $0.01/contract commission, YES+NO mids sum to ~1.00. Research default
-# only -- no staleness guard, so anything trade-adjacent must pass a
-# FeeModel built from runtime-verified values instead.
 DEFAULT_COMMISSION_PER_CONTRACT = 0.01
 
-# A two-sided spread wider than this is not a usable mid on a 1-cent tick.
 MAX_SANE_SPREAD = 0.10
 
 YES_RIGHT = "C"
@@ -76,19 +28,11 @@ SOURCE_LABEL = "label"
 SOURCE_EXPIRY_HEURISTIC = "expiry_heuristic"
 
 
-# --------------------------------------------------------------------------- #
 # Probability
-# --------------------------------------------------------------------------- #
 
 
 def p_yes(strike, mu: float, sigma: float, resolution: float | None = None):
-    """P(anomaly > strike) under N(mu, sigma); scalar or array over strikes.
-
-    Strict '>' per the T&C. With ``resolution`` (e.g. 0.01 for NOAA's
-    two-decimal print) the threshold becomes strike + resolution/2 to
-    approximate rounding of the settled value; default None is the pure
-    continuous form, where ties are measure-zero.
-    """
+    """P(anomaly > strike) under N(mu, sigma); scalar or array over strikes."""
     if not np.isfinite(sigma) or sigma <= 0:
         raise ValueError(f"sigma must be finite and > 0, got {sigma!r}")
     if not np.isfinite(mu):
@@ -104,17 +48,11 @@ def p_yes(strike, mu: float, sigma: float, resolution: float | None = None):
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Contract -> target month
-# --------------------------------------------------------------------------- #
 
 
 def target_month_from_local_symbol(local_symbol: str) -> str | None:
-    """'GTM_0726_0.6_YES' -> '2026-07' (MMYY label = target month).
-
-    Returns None when the string does not carry an MMYY label (e.g. the
-    bare underlying 'GTM').
-    """
+    """'GTM_0726_0.6_YES' -> '2026-07' (MMYY label = target month)."""
     parts = str(local_symbol).split("_")
     if len(parts) < 2:
         return None
@@ -139,13 +77,7 @@ def target_month_from_contract_month(contract_month: str) -> str | None:
 
 
 def target_month_from_expiry(expiry: str) -> str | None:
-    """Fallback: 'YYYYMMDD' expiry -> the calendar month before it.
-
-    Correct for the 0726/0826/0926/1026 listings (publication ~9-12 days
-    into M+1) but WRONG for GTM_1226, which expires 2027-02-12 (maps to
-    2027-01 here, label says 2026-12). Use only when no label is known;
-    callers see ``target_month_source == 'expiry_heuristic'``.
-    """
+    """Fallback: 'YYYYMMDD' expiry -> the calendar month before it."""
     s = str(expiry).strip()
     if len(s) < 6 or not s[:6].isdigit():
         return None
@@ -179,17 +111,11 @@ def target_month_for_contract(
     return None, None
 
 
-# --------------------------------------------------------------------------- #
 # Recorder data discovery
-# --------------------------------------------------------------------------- #
 
 
 def list_sweep_files(ticks_root: str | Path) -> list[Path]:
-    """All sweep parquets under quotes/date=YYYY-MM-DD/, oldest first.
-
-    The recorder names files quotes-HHMMSSZ.parquet inside a UTC date
-    partition, so (partition, filename) sorts chronologically.
-    """
+    """All sweep parquets under quotes/date=YYYY-MM-DD/, oldest first."""
     pattern = os.path.join(str(ticks_root), "quotes", "date=*", "*.parquet")
     return [Path(p) for p in sorted(glob.glob(pattern))]
 
@@ -207,16 +133,7 @@ _SWEEP_PATH_RE = re.compile(
 
 
 def sweep_ts_from_path(sweep_path: str | Path | None) -> datetime | None:
-    """UTC timestamp encoded in a recorder sweep path's partition + filename.
-
-    e.g. '.../quotes/date=2026-08-27/quotes-204638Z.parquet' ->
-    2026-08-27T20:46:38Z (staleness gate, audit finding H2). Returns None
-    for an empty/None path -- ``latest_gtm_quotes`` leaves ``sweep_path``
-    as ``""`` when its caller injects ``sweep_df`` directly (tests, or
-    ``climate.paper.run_paper``'s ``quotes_df`` bypass) -- or for a path
-    that does not match the recorder's own naming from
-    :func:`list_sweep_files`.
-    """
+    """UTC timestamp encoded in a recorder sweep path's partition + filename."""
     if not sweep_path:
         return None
     m = _SWEEP_PATH_RE.search(str(sweep_path).replace("\\", "/"))
@@ -232,14 +149,7 @@ def load_contract_labels(
     universe_json: str | Path | None = None,
     symbol: str = GTM_SYMBOL,
 ) -> pd.DataFrame:
-    """con_id -> local_symbol (and expiry) for one symbol.
-
-    Sources, merged in order: the recorder's contracts_cache.db under
-    ``ticks_root`` (read-only), then a Stage-0 universe snapshot JSON
-    (data/ibkr_universe_live.json shape) if given. Either may be absent;
-    the result is then empty and callers fall back to the expiry
-    heuristic.
-    """
+    """con_id -> local_symbol (and expiry) for one symbol."""
     frames: list[pd.DataFrame] = []
     if ticks_root is not None:
         db = Path(ticks_root) / "contracts_cache.db"
@@ -292,19 +202,7 @@ def latest_gtm_quotes(
     labels: pd.DataFrame | None = None,
     universe_json: str | Path | None = None,
 ) -> pd.DataFrame:
-    """YES legs (right=='C') of symbol GTM from the latest sweep, with NO mids.
-
-    One row per YES contract. Columns: the sweep's own (ts_utc, con_id,
-    symbol, expiry, strike, right, bid, ask, last, close, bid_size,
-    ask_size, data_type) with bid/ask sentinel-cleaned, plus yes_mid,
-    no_con_id, no_bid, no_ask, no_mid (same expiry+strike, right=='P';
-    NaN when absent), yes_no_mid_sum, spread, local_symbol,
-    target_month, target_month_source, sweep_path.
-
-    ``sweep_df`` bypasses disk (tests); ``labels`` overrides the
-    con_id -> local_symbol lookup (default: contracts_cache.db under
-    ticks_root plus ``universe_json`` if given).
-    """
+    """YES legs (right=='C') of symbol GTM from the latest sweep, with NO mids."""
     if sweep_df is None:
         path = latest_sweep_path(ticks_root)
         sweep_df = pd.read_parquet(path)
@@ -323,8 +221,6 @@ def latest_gtm_quotes(
     no = df[df["right"] == NO_RIGHT][["con_id", "expiry", "strike", "bid", "ask"]].rename(
         columns={"con_id": "no_con_id", "bid": "no_bid", "ask": "no_ask"}
     )
-    # Strikes are floats from the venue; round to kill 0.30000000000000004-style
-    # mismatches between the two legs of one market.
     yes["_k"] = yes["strike"].round(6)
     no["_k"] = no["strike"].round(6)
     no = no.drop_duplicates(["expiry", "_k"], keep="last")
@@ -354,9 +250,7 @@ def latest_gtm_quotes(
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Ladder table
-# --------------------------------------------------------------------------- #
 
 LADDER_COLUMNS = [
     "con_id",
@@ -369,8 +263,6 @@ LADDER_COLUMNS = [
     "edge",
     "ev_per_contract_after_fee",
     "suspect_quote",
-    # Extras beyond the core contract: the NO side of the same market and
-    # the inputs behind the flag, so a reader can audit a row.
     "edge_no",
     "ev_no_per_contract_after_fee",
     "bid",
@@ -395,21 +287,7 @@ def ladder_table(
     resolution: float | None = None,
     max_spread: float = MAX_SANE_SPREAD,
 ) -> pd.DataFrame:
-    """Model vs market per YES contract.
-
-    ``quotes_df`` is latest_gtm_quotes() output (needs con_id, target_month,
-    strike, bid, ask, yes_mid, no_mid). ``predictive`` maps 'YYYY-MM' ->
-    (mu, sigma) on the NOAA degC anomaly scale; rows whose target_month
-    has no entry are dropped.
-
-    edge = p_model - yes_mid (buy-YES view);
-    ev_per_contract_after_fee = edge - fee_model.execution_cost(yes_mid, 1)
-    for ONE contract paying $1.00 on YES. The NO-side twins use
-    (1 - p_model) and no_mid. suspect_quote is True when bid or ask is
-    missing (nan / IB -1 sentinel), the spread exceeds ``max_spread``, or
-    the book is crossed; edge/EV on such rows are NaN by construction
-    when a side is missing and should not be acted on otherwise.
-    """
+    """Model vs market per YES contract."""
     fee_model = fee_model or FlatCommissionFeeModel(DEFAULT_COMMISSION_PER_CONTRACT)
     q = quotes_df.copy()
     q = q[q["target_month"].isin(list(predictive.keys()))].copy()

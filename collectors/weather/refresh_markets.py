@@ -1,9 +1,4 @@
-"""Refresh station temperature markets into data/polymarket.db.
-
-Gamma /events?tag_slug=weather often times out from some networks. This
-module tries several lighter endpoints and upserts matching markets so
-discover + CLOB quotes can proceed offline afterward.
-"""
+"""Refresh station temperature markets into data/polymarket.db."""
 
 from __future__ import annotations
 
@@ -61,7 +56,6 @@ def fetch_weather_markets(timeout: float = 12.0) -> list[dict[str, Any]]:
         "lowest temperature",
         "temperature in",
     )
-    # Fail fast per request so collect cycles do not hang on dead Gamma routes.
     timeout_cfg = httpx.Timeout(timeout, connect=min(timeout, 8.0))
     with httpx.Client(timeout=timeout_cfg, follow_redirects=True) as client:
         # 1) public-search events (often lighter than full /events tag)
@@ -93,7 +87,6 @@ def fetch_weather_markets(timeout: float = 12.0) -> list[dict[str, Any]]:
                         markets[mid] = m
             log.info("After search %r: %s station temp markets", q, len(markets))
 
-        # 2) markets endpoint filtered by active + text in slug/question via pages
         for offset in (0, 100, 200, 300, 400):
             try:
                 data = fetch_json(

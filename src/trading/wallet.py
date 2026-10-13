@@ -1,11 +1,4 @@
-"""Wallet state — dry-run simulation only.
-
-The authenticated Polymarket CLOB client was retired to
-legacy/polymarket_onchain (2026-08-16); the live path was dead code
-(token ids were always empty, no live fill ever happened). This module
-keeps the dry-run balance simulation the executor and order manager use.
-Live trading is migrating to IBKR — see src/venues/.
-"""
+"""Wallet state — dry-run simulation only."""
 
 import logging
 from dataclasses import dataclass, field
@@ -28,11 +21,7 @@ class WalletBalance:
 
 
 class PolymarketWallet:
-    """Simulated wallet state for dry-run trading.
-
-    dry_run=True is the only supported mode; live mode raises because the
-    Polymarket write path is retired.
-    """
+    """Simulated wallet state for dry-run trading."""
 
     def __init__(
         self,
@@ -55,10 +44,7 @@ class PolymarketWallet:
         return self._connected or self._dry_run
 
     def connect(self) -> bool:
-        """Mark the simulated wallet connected (dry-run only).
-
-        Raises RuntimeError in live mode: that path is retired.
-        """
+        """Mark the simulated wallet connected (dry-run only)."""
         if self._dry_run:
             logger.info("Wallet running in DRY-RUN mode (no real trades)")
             self._connected = True
@@ -71,24 +57,16 @@ class PolymarketWallet:
         if self._dry_run:
             return self._simulated_balance
 
-        # In live mode, query on-chain balances
-        # For now return placeholder — full implementation needs web3
         return WalletBalance()
 
     def get_client(self):
-        """Retired: there is no live CLOB client anymore.
-
-        Returns None in dry-run mode; raises RuntimeError in live mode.
-        """
+        """Retired: there is no live CLOB client anymore."""
         if self._dry_run:
             return None
         raise RuntimeError(_RETIRED_MSG)
 
     def simulate_trade(self, side: str, price: float, size: float) -> bool:
-        """Update simulated balance for dry-run mode.
-
-        Returns True if sufficient balance.
-        """
+        """Update simulated balance for dry-run mode."""
         cost = price * size
         if side == "BUY":
             if self._simulated_balance.usdce >= cost:

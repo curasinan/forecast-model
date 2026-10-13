@@ -1,14 +1,4 @@
-"""Market selector — find the best markets to analyze.
-
-Not all prediction markets are worth our compute. We want:
-1. High entropy (uncertain outcome) — our model can add the most value
-2. Enough volume/liquidity — we can actually trade without massive slippage
-3. Tech/AI domain — where our collectors and features are strongest
-4. Not too close to expiry — enough time for our edge to play out
-
-This module scans Polymarket for tech markets and ranks them by
-opportunity score (entropy x volume), then filters by our criteria.
-"""
+"""Market selector — find the best markets to analyze."""
 
 import logging
 from dataclasses import dataclass
@@ -61,18 +51,7 @@ async def scan_markets(
     min_liquidity: float = 50,
     max_results: int = 20,
 ) -> list[MarketCandidate]:
-    """Scan Polymarket for high-opportunity tech markets.
-
-    Args:
-        min_entropy: Minimum entropy (0-1). 0.5 filters out markets
-                     more certain than ~85%/15%.
-        min_volume: Minimum 24h volume in USD.
-        min_liquidity: Minimum liquidity pool in USD.
-        max_results: Maximum markets to return.
-
-    Returns:
-        List of MarketCandidate sorted by opportunity score descending.
-    """
+    """Scan Polymarket for high-opportunity tech markets."""
     collector = PolymarketCollector()
 
     # Fetch from multiple tags
@@ -139,12 +118,7 @@ def filter_actionable(
     max_price: float = 0.90,
     min_price: float = 0.10,
 ) -> list[MarketCandidate]:
-    """Further filter to actionable markets.
-
-    Removes markets that are:
-    - Too close to expiry (not enough time for edge to play out)
-    - Too certain (price near 0 or 1 = low edge, high adverse selection)
-    """
+    """Further filter to actionable markets."""
     actionable = []
     for c in candidates:
         # Price filter

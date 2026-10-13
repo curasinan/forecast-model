@@ -24,8 +24,6 @@ from climate.noaa import LabelObservation
 from climate.reduce import ERA5_PARQUET, SEAS5_PARQUET
 from climate.storage import append_observations
 
-# ------------------------------------------------------------------ synthetic data
-
 TRUE_BETA = 0.9
 TRUE_ALPHA = {m: -259.0 + 0.8 * np.sin(2 * np.pi * (m - 1) / 12.0) for m in range(1, 13)}
 
@@ -47,9 +45,6 @@ def _noaa_from_era5(era5: pd.Series, noise_sd: float, seed=1) -> pd.Series:
     alpha = np.array([TRUE_ALPHA[m] for m in era5.index.month])
     y = alpha + TRUE_BETA * era5.to_numpy() + rng.normal(0, noise_sd, len(era5))
     return pd.Series(y, index=to_year_month_index(era5.index), name="y_C")
-
-
-# ------------------------------------------------------------------------ Bridge
 
 
 def test_bridge_recovers_exact_params_without_noise():
@@ -124,11 +119,7 @@ def test_bridge_errors():
         to_year_month_index(["2010-01-01"])  # not 'YYYY-MM'
 
 
-# ---------------------------------------------------------------- lead mapping
-
-
 def test_lead1_is_init_month_convention():
-    # Empirical finding (see climate/dataset.py docstring): lead 1 == init month.
     assert LEAD1_OFFSET_MONTHS == 0
     assert target_month("2010-01-01", 1) == "2010-01"
     assert target_month("2010-01-01", 2) == "2010-02"
@@ -150,9 +141,6 @@ def test_target_year_frac_and_month_of_year():
     )
     assert month_of_year("2010-07") == 7
     assert month_of_year(["2010-07", "2011-12"]).tolist() == [7, 12]
-
-
-# --------------------------------------------------------------------- frame
 
 
 def _synthetic_seas5(inits, leads=range(1, 7), n_members=5, seed=2) -> pd.DataFrame:
@@ -181,7 +169,6 @@ def test_aggregate_members_uses_ddof1():
 def test_build_frame_from_inputs_schema_and_nan_behaviour():
     era5 = _synthetic_era5(_months("1993-01", "2025-12"))
     noaa = _noaa_from_era5(era5, noise_sd=0.01)
-    # NOAA runs one month past ERA5, as in production; SEAS5 inits reach into the future.
     noaa.loc["2026-01"] = 1.0
     seas5 = _synthetic_seas5(["2025-10-01", "2025-12-01"])
     frame = build_frame_from_inputs(seas5, era5, noaa)
@@ -195,7 +182,6 @@ def test_build_frame_from_inputs_schema_and_nan_behaviour():
         assert pd.api.types.is_float_dtype(frame[col]), col
     assert frame["target_month"].map(lambda s: isinstance(s, str) and len(s) == 7).all()
 
-    # target month / month_of_year / year_frac are derived from init + (lead-1)
     row = frame[(frame.init_date == "2025-12-01") & (frame.lead_month == 2)].iloc[0]
     assert row.target_month == "2026-01"
     assert row.month_of_year == 1

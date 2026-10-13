@@ -1,23 +1,4 @@
-"""Daily backup of a quant-data root's operational files, with a manifest and rotation.
-
-    python -m monitoring.backup_paper_book --root /srv/quant_data --dest /srv/quant_data_backups
-
-Copies the files analysis.spark_parity lists as MANIFEST_FILES -- the paper
-book, the sync and run ledgers, the signals, the operational model, its
-diagnostics and the label ledger -- into ``<dest>/YYYYMMDD/`` under the same
-relative paths, writes ``manifest.json`` (sha256 and size of every copy,
-``null`` for a file the root does not hold) beside them, and keeps the newest
-KEEP_DAYS day directories.
-
-The paper book is copied with SQLite's online backup API, not as a file: the
-paper sync writes it, and a plain copy taken mid-transaction can be a
-database that does not open. Every other file is small and written
-atomically or append-only by its owner.
-
-The day directory is built under a ``.partial`` name and renamed when it is
-complete, so a reader never finds a half-written day. Exit 0 when the day
-directory is in place, 1 on any failure.
-"""
+"""Daily backup of a quant-data root's operational files, with a manifest and rotation."""
 
 from __future__ import annotations
 
@@ -37,8 +18,6 @@ from analysis.spark_parity import MANIFEST_FILES, PAPER_DB_REL, TICKS_DIR
 
 KEEP_DAYS = 30
 MANIFEST_NAME = "manifest.json"
-# The paper book by name, as a MANIFEST_FILES entry: not "the first entry", which would
-# move the refusal below onto another file the day somebody reorders that tuple.
 PAPER_BOOK = (TICKS_DIR, *PAPER_DB_REL)
 _DAY_DIR = re.compile(r"^\d{8}$")
 
@@ -66,11 +45,7 @@ def _copy(src: Path, dst: Path) -> None:
 
 
 def _prune(dest: Path, keep: int, exclude: str | None = None) -> list[Path]:
-    """Remove all but the ``keep`` newest day directories; return what was removed.
-
-    If exclude is set, it is never removed; exactly keep-1 others are kept.
-    A nonsense value (keep <= 0) removes nothing, never deleting history.
-    """
+    """Remove all but the ``keep`` newest day directories; return what was removed."""
     if keep <= 0:
         return []
 
@@ -130,7 +105,6 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
     parser.add_argument("--keep", type=int, default=KEEP_DAYS,
                         help=f"day directories to keep (default {KEEP_DAYS})")
     args = parser.parse_args(argv)
-    # One clock for the directory name and for the rotation, and it can be injected.
     day = today or datetime.now(timezone.utc).date()
     try:
         day_dir = run_backup(Path(args.root).expanduser(), Path(args.dest).expanduser(),

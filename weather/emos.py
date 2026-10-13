@@ -70,7 +70,6 @@ def fit_emos(
         return EMOSParams(0.0, 1.0, max(spread**2, 1.0), 0.5, station_icao, lead_day, metric)
 
     def objective(theta: np.ndarray) -> float:
-        # Enforce non-negative variance terms via softplus-like transform in theta space
         a, b, raw_c, raw_d = theta
         c = math.exp(raw_c)
         d = math.exp(raw_d)

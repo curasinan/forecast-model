@@ -1,8 +1,4 @@
-"""Live round-trip against a reachable vLLM server. Skipped unless LLM_LIVE=1.
-
-Run on the Spark (or through the tunnel) with the repo's .env providing
-LLM_MODEL:  LLM_LIVE=1 python -m pytest tests/test_llm/test_live.py -q
-"""
+"""Live round-trip against a reachable vLLM server. Skipped unless LLM_LIVE=1."""
 
 from __future__ import annotations
 

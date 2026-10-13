@@ -1,54 +1,4 @@
-"""Monte Carlo bankroll simulator — variance and ruin for a quarter-Kelly strategy.
-
-An **educational** tool, not tied to any model: you assume a true edge, and the
-simulator shows the distribution of bankroll outcomes across many runs once the
-strategy is put through the *measured* frictions from the fill simulator — a
-realistic per-bet fill probability and a per-bet adverse-selection drag. It also
-applies the real decision engine's min/max position caps (``config/risk_limits.json``).
-
-Three things it's built to make legible:
-  1. how brutal drawdowns can be even with a genuine edge,
-  2. how a zero-edge strategy bleeds under fill frictions + adverse selection
-     (the headline reality check, given the fill sim's findings), and
-  3. how much variance quarter-Kelly produces on a small bankroll over 200 bets.
-
-Model (frozen; see the plan for full rationale):
-
-* Bets are **even-money binary contracts bought at $0.50**. A stake ``S`` (dollars
-  at risk) pays ``+S`` on a win, ``-S`` on a loss, before frictions. This matches the
-  codebase's ``win_prob = 0.5 + edge`` convention (``src/math/monte_carlo.py``) where
-  ``edge = model_prob - price`` (``scripts/backtest.py``).
-* **Outcome**: ``win_prob = 0.5 + true_edge``; ``true_edge`` swept over {0.00, 0.02, 0.05}.
-* **Sizing**: even-money full-Kelly ``f* = 2*believed_edge``; stake fraction
-  ``= kelly_multiplier * f*``. Sizing uses a fixed **believed** edge (default 0.02),
-  NOT the swept true edge — the real engine never bets at <=0 edge, so the zero-edge
-  reality check only places bets if the bettor *believes* it has one. Same stake rule
-  across all three scenarios; only outcomes differ.
-* **Caps (floor mode)**: stake is floored to ``min_position_dollars`` and capped at
-  ``max_single_position_pct`` of the *current* bankroll (and at the bankroll itself).
-  The floor means a shrinking bankroll bets a *growing* fraction — a real ruin driver.
-  A ``gate`` mode (skip sub-minimum bets, the engine's literal behavior) is selectable.
-* **Fill friction**: each of ``n_bets`` *attempts* fills with probability ``fill_rate``
-  (default from the fill sim's tightest offset); a no-fill is skipped. At ~6% only a
-  handful of the 200 attempts execute — the throttle is the point.
-* **Adverse drag**: on an even-money $0.50 contract a stake ``S`` buys ``2S`` contracts,
-  so ``drag_frac = adverse_cost / 0.5``. Applied to every filled payout: win →
-  ``+S*(1-drag_frac)``, loss → ``-S*(1+drag_frac)``. Break-even edge = adverse_cost.
-* The engine's 20% drawdown circuit-breaker is deliberately NOT applied (it would cap
-  bankrolls and make ruin unmeasurable). Bankroll is floored at 0.
-
-Read-only; writes results only.
-
-Run:
-    python -m analysis.monte_carlo [--runs N] [--bets N] [--bankroll X]
-                                   [--fill-rate F] [--adverse-cost C]
-                                   [--believed-edge E] [--min-position-mode floor|gate]
-                                   [--seed S]
-
-Outputs:
-    analysis/results/monte_carlo.json   (config + per-scenario metrics)
-    analysis/results/monte_carlo.csv    (one row per edge scenario)
-"""
+"""Monte Carlo bankroll simulator — variance and ruin for a quarter-Kelly strategy."""
 
 from __future__ import annotations
 
@@ -69,9 +19,7 @@ JSON_PATH = RESULTS_DIR / "monte_carlo.json"
 CSV_PATH = RESULTS_DIR / "monte_carlo.csv"
 RISK_CONFIG_PATH = REPO_ROOT / "config" / "risk_limits.json"
 
-# --------------------------------------------------------------------------- #
 # Frozen defaults
-# --------------------------------------------------------------------------- #
 
 STARTING_BANKROLL = 500.0
 TRUE_EDGES: tuple[float, ...] = (0.00, 0.02, 0.05)   # swept, side by side
@@ -83,10 +31,8 @@ N_BETS = 200               # attempts per run (fill-gated)
 N_RUNS = 10_000
 SEED = 42
 
-# Frictions measured by the fill simulator (buy_-0.01 offset — tightest, most
-# favorable maker offset; see analysis/results/fill_simulation_by_offset.csv).
 FILL_RATE = 0.0597
-ADVERSE_COST = 0.03125     # price units (~3.1c); drag_frac = adverse_cost / entry_price
+ADVERSE_COST = 0.03125
 ENTRY_PRICE = 0.50         # even-money contract
 
 RUIN_FLOOR_PCT = 0.20      # ruin = bankroll ever <= 20% of starting
@@ -94,9 +40,7 @@ RUIN_FLOOR_PCT = 0.20      # ruin = bankroll ever <= 20% of starting
 log = logging.getLogger("analysis.monte_carlo")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -131,9 +75,7 @@ def load_risk_config(path: Path | str = RISK_CONFIG_PATH) -> dict:
     return {k: float(raw.get(k, v)) for k, v in defaults.items()}
 
 
-# --------------------------------------------------------------------------- #
 # Pure helpers (deterministic — unit-tested)
-# --------------------------------------------------------------------------- #
 
 
 def full_kelly_fraction(edge: float) -> float:
@@ -149,14 +91,7 @@ def position_size(
     max_pct: float,
     mode: str = "floor",
 ) -> float:
-    """Quarter-Kelly stake for one bet, subject to the min/max position caps.
-
-    ``floor`` mode lifts sub-minimum stakes up to ``min_position``; ``gate`` mode
-    (the real engine's literal behavior) returns 0 for sub-minimum stakes. The max
-    cap is a fraction of the *current* bankroll and can pull the stake below the
-    floor once the bankroll is tiny (below ~min/max_pct); the stake never exceeds
-    the bankroll.
-    """
+    """Quarter-Kelly stake for one bet, subject to the min/max position caps."""
     if bankroll <= 0:
         return 0.0
     desired = kelly_multiplier * full_kelly_fraction(believed_edge) * bankroll
@@ -203,16 +138,12 @@ def summarize(
         "prob_profit": float(np.mean(finals > starting)),
         "prob_ruin": float(np.mean(ruined)),
         "median_max_drawdown": float(np.median(max_dds)),
-        # "worst-case drawdown at the 5th-percentile outcome" = deep tail of the
-        # max-drawdown distribution = its 95th percentile.
         "p95_max_drawdown": float(np.percentile(max_dds, 95)),
         "mean_fills": float(np.mean(fills)),
     }
 
 
-# --------------------------------------------------------------------------- #
 # Simulation (vectorized across runs)
-# --------------------------------------------------------------------------- #
 
 
 def simulate_scenario(
@@ -267,9 +198,7 @@ def simulate_scenario(
     return {"finals": bankroll, "max_dds": max_dd, "ruined": ruined, "fills": fills}
 
 
-# --------------------------------------------------------------------------- #
 # Study
-# --------------------------------------------------------------------------- #
 
 
 def _pct(x: float) -> str:
@@ -323,7 +252,6 @@ def run_study(
                             starting)
         scenarios.append({"true_edge": true_edge, **metrics})
 
-    # --- side-by-side table ------------------------------------------------- #
     log.info("Results by true edge (starting bankroll $%.0f):", starting)
     log.info(
         "  %-8s %9s %9s %9s %9s %11s %10s %10s %9s",

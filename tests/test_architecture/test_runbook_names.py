@@ -9,11 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs" / "spark_runbook.md"
 HEADING = "## 7. The trading runtime on the Spark"
 TOP_LEVEL = ("scripts", "deploy", "monitoring", "docs", "tests", "src", "analysis", "data")
-# A repo path anywhere in the text: in prose, in a command, in a code block. It starts a token
-# (not in the middle of a word or of a file name) and runs to the first character a path does
-# not hold; a placeholder (<date>) or a glob (*) right after it means it names no single file.
 REPO_PATH = re.compile(r"(?<![\w.~-])((?:" + "|".join(TOP_LEVEL) + r")/[\w./-]+)")
-# A name with an extension, wherever it stands: a unit is judged by its extension and by its stem.
 NAME_WITH_EXTENSION = re.compile(r"(?<![\w.-])([\w-]+)\.([A-Za-z]+)\b")
 UNIT_EXTENSIONS = ("service", "timer")
 
@@ -36,7 +32,6 @@ def named_paths(section: str) -> set[str]:
 def missing_paths(section: str) -> list[str]:
     paths = named_paths(section)
     if not any((REPO_ROOT / "docs").glob("spark_runtime_spike_*.md")):
-        # the Gateway project is committed together with the spike report (Task 0)
         paths = {p for p in paths if not p.startswith("deploy/spark/ibgw/")}
     return sorted(p for p in paths if not (REPO_ROOT / p).exists())
 
@@ -51,8 +46,6 @@ def named_units(section: str) -> set[str]:
 
 
 def misnamed_units(section: str) -> list[str]:
-    """Names meant as a unit that are not one: a unit extension on a name no unit file has, or
-    any extension on the stem of a real unit (ibkr-health.timr)."""
     known = unit_files()
     stems = {name.rsplit(".", 1)[0] for name in known}
     return sorted({f"{stem}.{ext}" for stem, ext in NAME_WITH_EXTENSION.findall(section)
@@ -68,7 +61,7 @@ def test_every_repo_path_section_7_names_exists():
 
 def test_every_unit_section_7_names_is_in_the_repo():
     section = section_7()
-    assert misnamed_units(section) == []  # first: it names the typo that a missing unit also shows
+    assert misnamed_units(section) == []
     required = {"ibkr-recorder.service", "ibkr-health.timer", "ibgw-owner-rule.service"}
     assert required <= named_units(section)
 

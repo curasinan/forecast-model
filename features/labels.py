@@ -1,26 +1,4 @@
-"""Label / target-variable generation for model training.
-
-Three public functions:
-
-* ``generate_outcome_labels`` — final ground-truth YES/NO labels from
-  resolved markets. Pure backward-looking lookup against ``markets.resolution``.
-* ``generate_price_movement_labels`` — forward-looking price-change labels
-  for short-horizon targets (1h / 6h / 24h by default). **Look ahead in time.
-  TRAINING USE ONLY.**
-* ``build_training_dataset`` — the full pipeline that joins market features,
-  correlation features, and price-movement labels into one wide DataFrame
-  ready for an ML trainer.
-
-Forward-looking warning
------------------------
-``generate_price_movement_labels`` and ``build_training_dataset`` BOTH look
-forward in time relative to the supplied timestamp. They are appropriate
-exclusively for offline training-set construction. Calling them at inference
-time leaks future prices into the prediction pipeline and will silently make
-your model's apparent accuracy meaningless. A prominent runtime check is
-deliberately not added — the docstring is the contract — but every call site
-should be auditable as "training only".
-"""
+"""Label / target-variable generation for model training."""
 
 from __future__ import annotations
 
@@ -42,39 +20,19 @@ DEFAULT_DB_PATH = Path("data/polymarket.db")
 DEFAULT_CLUSTER_CONFIG_PATH = Path("config/market_clusters.json")
 DEFAULT_HORIZONS_HOURS: tuple[float, ...] = (1.0, 6.0, 24.0)
 SNAPSHOT_WINDOW_MINUTES = 30  # half-window around T and T+h
-DIRECTION_TOLERANCE = 0.005   # |Δprice| under this counts as "no move" (direction=0)
+DIRECTION_TOLERANCE = 0.005
 NULL_FRACTION_DROP = 0.5      # rows with >50% null feature columns are skipped
 IN_CLAUSE_CHUNK = 500
 
 
-# --------------------------------------------------------------------------- #
 # Function 1: outcome labels
-# --------------------------------------------------------------------------- #
 
 
 def generate_outcome_labels(
     market_ids: Iterable[str],
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> pd.DataFrame:
-    """Return ground-truth YES/NO outcomes for resolved markets.
-
-    Filters the input ``market_ids`` to those with ``status='resolved_or_removed'``
-    AND a non-null ``resolution`` field. Resolution strings are normalized
-    (case-insensitive) to a binary outcome:
-
-    * 1 → resolution looks like "yes" / "y" / "1" / "1.0" / "true"
-    * 0 → resolution looks like "no" / "n" / "0" / "0.0" / "false"
-
-    Markets whose resolution is non-binary or unparseable (e.g. "invalid",
-    free-text disputes, partial-resolution payouts) are silently dropped from
-    the output — there's nothing useful to feed a binary classifier.
-
-    Returns
-    -------
-    DataFrame with two columns:
-      * ``market_id`` (str)
-      * ``outcome``   (int: 0 or 1)
-    """
+    """Return ground-truth YES/NO outcomes for resolved markets."""
     ids = [str(m) for m in market_ids]
     if not ids:
         return pd.DataFrame(columns=["market_id", "outcome"])
@@ -102,9 +60,7 @@ def generate_outcome_labels(
     return pd.DataFrame(rows, columns=["market_id", "outcome"])
 
 
-# --------------------------------------------------------------------------- #
 # Function 2: price movement labels
-# --------------------------------------------------------------------------- #
 
 
 def generate_price_movement_labels(
@@ -113,45 +69,7 @@ def generate_price_movement_labels(
     horizons: Sequence[float] = DEFAULT_HORIZONS_HOURS,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> pd.DataFrame:
-    """Forward-looking price-movement labels for training.
-
-    *** TRAINING-ONLY — DO NOT CALL DURING LIVE PREDICTION ***
-
-    Given a timestamp ``T`` and a list of horizons in hours, this function
-    computes the change in midpoint between ``T`` and ``T + horizon`` for
-    every (market_id, horizon) pair. **Both endpoints look at the closest
-    snapshot within ±30 minutes of the target time** (so even ``price_at_t``
-    can come from a snapshot slightly later than ``T`` if that's the
-    closest available). This is intentional and consistent on both ends — it
-    means ``price_change`` reflects the actual nearest-known prices around
-    the two reference moments, regardless of collection cadence.
-
-    Because at least one endpoint looks **forward in time**, this function
-    must NEVER be called at inference time. It exists exclusively to build
-    target variables for offline training-set construction.
-
-    Parameters
-    ----------
-    market_ids : iterable of str
-    timestamp : datetime
-        Reference time T. Naive datetimes are coerced to UTC.
-    horizons : sequence of float
-        Hours to look forward, e.g. ``(1, 6, 24)``.
-    db_path : Path or str
-
-    Returns
-    -------
-    DataFrame with columns:
-      * ``market_id``        (str)
-      * ``timestamp``        (str, ISO 8601 UTC of T)
-      * ``horizon_hours``    (float)
-      * ``price_at_t``       (float | None)
-      * ``price_at_t_plus_h``(float | None)
-      * ``price_change``     (float | None)
-      * ``direction``        (int | None: -1 / 0 / +1, with |Δ|<0.005 → 0)
-
-    Long-form: one row per (market_id × horizon).
-    """
+    """Forward-looking price-movement labels for training."""
     ids = [str(m) for m in market_ids]
     horizons_list = [float(h) for h in horizons]
     if not ids or not horizons_list:
@@ -208,9 +126,7 @@ def generate_price_movement_labels(
     ])
 
 
-# --------------------------------------------------------------------------- #
 # Function 3: build training dataset
-# --------------------------------------------------------------------------- #
 
 
 def build_training_dataset(
@@ -220,33 +136,7 @@ def build_training_dataset(
     db_path: Path | str = DEFAULT_DB_PATH,
     cluster_config_path: Path | str = DEFAULT_CLUSTER_CONFIG_PATH,
 ) -> pd.DataFrame:
-    """Build a wide training-row DataFrame for the cross-product of (markets × timestamps).
-
-    *** TRAINING-ONLY — uses generate_price_movement_labels under the hood,
-    which looks forward in time. Do not call from a live-prediction path. ***
-
-    For every (market_id, T) pair this computes:
-
-    1. Market features at T (via :func:`compute_features_batch`)
-    2. Correlation features at T (via :func:`compute_correlation_features_batch`)
-    3. Price-movement labels at T for each horizon (via
-       :func:`generate_price_movement_labels`), pivoted to wide form so each
-       horizon contributes its own column suffix.
-
-    The three frames are joined on ``market_id`` per timestamp, then stacked.
-    Rows whose **feature** columns are >50% null are dropped (label columns
-    are never counted toward the null fraction — labels can legitimately be
-    missing for the most recent timestamps without invalidating the row's
-    feature signal).
-
-    Output columns (for default horizons):
-
-    * Identifiers: ``market_id``, ``timestamp``
-    * Market features: ``price_now``, ``price_1h_ago``, …, ``snapshot_count``
-    * Correlation features: ``cluster_id``, ``cluster_size``, …, ``cluster_lead_signal``
-    * Labels per horizon: ``price_at_t``,
-      ``price_at_t_plus_<h>h``, ``price_change_<h>h``, ``direction_<h>h``
-    """
+    """Build a wide training-row DataFrame for the cross-product of (markets × timestamps)."""
     ids = [str(m) for m in market_ids]
     ts_list = [_ensure_utc(t) for t in timestamps]
     horizons_list = [float(h) for h in horizons]
@@ -281,9 +171,7 @@ def build_training_dataset(
     return full
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _ensure_utc(t: datetime) -> datetime:
@@ -357,9 +245,7 @@ def _closest_within_window(
     target: datetime,
     half_window: timedelta,
 ) -> float | None:
-    """Return the midpoint of the snapshot whose ``ts`` is closest to ``target``,
-    provided it falls within ±half_window of target. Otherwise None.
-    """
+    """Midpoint of the snapshot closest to ``target`` within ±half_window, else None."""
     if g is None or g.empty:
         return None
     deltas = (g["ts"] - target).abs()
@@ -382,11 +268,7 @@ def _pivot_labels_to_wide(
     long_df: pd.DataFrame,
     horizons: Sequence[float],
 ) -> pd.DataFrame:
-    """Pivot the long-form labels frame into one column per horizon.
-
-    Output columns: market_id, price_at_t, plus three columns per horizon
-    (price_at_t_plus_<H>, price_change_<H>, direction_<H>).
-    """
+    """Pivot the long-form labels frame into one column per horizon."""
     if long_df.empty:
         cols = ["market_id", "price_at_t"]
         for h in horizons:
@@ -419,13 +301,7 @@ def _feature_columns(
     columns: Iterable[str],
     horizons: Sequence[float],
 ) -> list[str]:
-    """Return the subset of columns that count as 'features' for the
-    null-fraction drop rule.
-
-    Excluded:
-      * Identifiers (``market_id``, ``timestamp``)
-      * Label columns (``price_at_t``, and all per-horizon label suffixes)
-    """
+    """Return the subset of columns that count as 'features' for the null-fraction drop rule."""
     cols = list(columns)
     excluded: set[str] = {"market_id", "timestamp", "price_at_t"}
     for h in horizons:

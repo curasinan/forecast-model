@@ -1,8 +1,4 @@
-"""Shared label-finalization guards for weather training data.
-
-Single source of truth for the "finalized + 72h before usable_for_training"
-rule previously duplicated in collect_labels_wu / collect_labels_cli.
-"""
+"""Shared label-finalization guards for weather training data."""
 
 from __future__ import annotations
 

@@ -27,8 +27,7 @@ def test_climate_bar_is_not_the_weather_bar():
 
 
 def test_min_edge_clears_commission_plus_half_spread():
-    assert min_edge_from_spread(0.01) == pytest.approx(DEFAULT_MIN_EDGE)  # floor 0.02
-    # A 4-cent book: 0.01 commission + 0.02 half-spread = 0.03
+    assert min_edge_from_spread(0.01) == pytest.approx(DEFAULT_MIN_EDGE)
     assert min_edge_from_spread(0.04) == pytest.approx(0.03)
 
 

@@ -1,26 +1,4 @@
-"""Probe several Metaculus endpoints/parameters to find where the actual
-community-prediction time series lives.
-
-Standard /api2/questions/{id}/ returns aggregations.recency_weighted.latest=null
-even on questions with hundreds of forecasts, so the field is shape-only.
-This script tries several known patterns:
-
-  1. /api2/questions/{id}/?with_cp=true
-  2. /api2/questions/{id}/?include_aggregations=true
-  3. /api2/questions/{id}/aggregations/
-  4. /api2/questions/{id}/aggregations/?aggregation_method=recency_weighted
-  5. /api/posts/{id}/  (newer URL root)
-  6. /api/posts/{id}/?with_cp=true
-  7. /api2/aggregation-explorer/?question_ids={id}
-  8. /api2/aggregation_explorer/?question_ids={id}  (underscore vs hyphen)
-
-Run:
-    $env:METACULUS_API_TOKEN = "<token>"
-    python scripts/diagnose_metaculus_cp.py [question_id]
-
-Prints per-attempt: HTTP status, whether the response contains a non-null CP
-value anywhere recognizable, and a small preview.
-"""
+"""Probe Metaculus endpoints to find where the community-prediction time series lives."""
 
 from __future__ import annotations
 
@@ -40,9 +18,7 @@ QUESTION_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 797
 
 
 def find_non_null_cp(obj: Any, path: str = "") -> list[tuple[str, Any]]:
-    """Walk a JSON object and collect paths where the leaf is a number AND
-    the immediate ancestor key suggests it's a community-prediction value.
-    """
+    """Collect JSON paths whose numeric leaf looks like a community-prediction value."""
     hits: list[tuple[str, Any]] = []
 
     def rec(o: Any, p: str) -> None:

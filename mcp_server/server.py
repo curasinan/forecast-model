@@ -21,9 +21,6 @@ logging.basicConfig(
 mcp = FastMCP("polymarket-weather")
 
 
-# ----- tools ---------------------------------------------------------------
-
-
 @mcp.tool(name="status")
 def status_tool(ping_network: bool = False) -> dict[str, Any]:
     """DB paths and table counts. Network Gamma/CLOB ping is off by default (retired)."""
@@ -161,9 +158,6 @@ def pm_recent_edges(
         tradeable_only=tradeable_only,
         try_generate=try_generate,
     )
-
-
-# ----- resources -----------------------------------------------------------
 
 
 @mcp.resource("polymarket://status")

@@ -1,20 +1,4 @@
-"""Portfolio-level risk limits applied after position sizing.
-
-Four rules, in order:
-
-1. **Drawdown circuit breaker** — if realized P&L pushes current bankroll
-   ≥ 20% below the starting bankroll, halt all new trades.
-2. **Cluster exposure cap** — per-cluster combined (open + new) dollars
-   capped at 10% of bankroll; new signals proportionally scaled.
-3. **Total exposure cap** — combined dollars across the whole portfolio
-   capped at 35% of bankroll; new signals proportionally scaled.
-4. **Max simultaneous positions** — at most 12 concurrent positions; keep
-   the highest-edge new signals when the cap is binding.
-
-Drawdown is computed off **realized** P&L only — open paper positions are
-not marked to market in Phase 4. Phase 5's reviewers should add MtM if
-they want the breaker to fire on unrealized losses as well.
-"""
+"""Portfolio-level risk limits applied after position sizing."""
 
 from __future__ import annotations
 
@@ -48,9 +32,7 @@ DEFAULT_RISK_CONFIG: dict = {
 log = logging.getLogger("decision.risk_manager")
 
 
-# --------------------------------------------------------------------------- #
 # Schema + config
-# --------------------------------------------------------------------------- #
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -102,9 +84,7 @@ def load_risk_config(path: Path | str = DEFAULT_RISK_CONFIG_PATH) -> dict:
     return merged
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 def apply_risk_limits(
@@ -114,13 +94,7 @@ def apply_risk_limits(
     cluster_config_path: Path | str = DEFAULT_CLUSTER_CONFIG_PATH,
     risk_config_path: Path | str = DEFAULT_RISK_CONFIG_PATH,
 ) -> pd.DataFrame:
-    """Apply the four risk rules. Returns the input DataFrame plus a
-    ``rejected_reason`` column with one of ``''`` (survivor), ``'drawdown'``,
-    ``'cluster_cap'``, ``'total_cap'``, ``'max_concurrent'``.
-
-    The final ``position_dollars`` reflects any rule-2/rule-3 proportional
-    scaling. The final ``tradeable`` flag reflects the post-risk verdict.
-    """
+    """Apply the four risk rules."""
     cfg = load_risk_config(risk_config_path)
     result = sized_df.copy()
     if "rejected_reason" not in result.columns:
@@ -136,7 +110,6 @@ def apply_risk_limits(
 
     starting_bankroll = float(cfg["starting_bankroll"])
 
-    # ---- DB-backed state: open positions + realized P&L ------------------ #
     conn = sqlite3.connect(db_path)
     try:
         init_db(conn)
@@ -157,12 +130,10 @@ def apply_risk_limits(
         if starting_bankroll > 0 else 0.0
     )
 
-    # ---- Cluster map: market_id -> cluster_name -------------------------- #
     market_to_cluster = _build_market_to_cluster_map(
         cluster_config_path, market_ids=result["market_id"].astype(str).tolist(),
     )
 
-    # ---- Existing-exposure aggregations ---------------------------------- #
     existing_total = sum(float(row[2]) for row in open_rows)
     existing_by_cluster: dict[str, float] = {}
     for _, _, pd_dollars, cluster in open_rows:
@@ -178,7 +149,6 @@ def apply_risk_limits(
         len(open_rows), existing_total, realized_pnl,
     )
 
-    # ---- Rule 1: drawdown circuit breaker -------------------------------- #
     if drawdown_pct >= cfg["drawdown_halt_pct"]:
         log.critical(
             "Drawdown circuit breaker tripped (%.2f%% drawdown >= %.2f%% halt) — "
@@ -192,7 +162,6 @@ def apply_risk_limits(
     else:
         log.info("rule 1 (drawdown circuit breaker):  PASS")
 
-    # ---- Rule 2: cluster exposure cap ------------------------------------ #
     cluster_cap = float(cfg["cluster_exposure_cap_pct"]) * bankroll
     min_pos = float(cfg["min_position_dollars"])
 
@@ -221,7 +190,6 @@ def apply_risk_limits(
                 cluster_key, existing, new_sum, cluster_cap, scale,
             )
 
-    # Any rows that fell below the $5 floor after scaling become non-tradeable.
     below_floor_after_cluster = (
         result["tradeable"] & (result["position_dollars"] < min_pos)
     )
@@ -239,7 +207,6 @@ def apply_risk_limits(
         if n_cluster_scaled else "PASS",
     )
 
-    # ---- Rule 3: total exposure cap -------------------------------------- #
     total_cap = float(cfg["total_exposure_cap_pct"]) * bankroll
     new_total = float(result.loc[result["tradeable"], "position_dollars"].sum())
     if existing_total + new_total > total_cap and new_total > 0:
@@ -265,7 +232,6 @@ def apply_risk_limits(
     else:
         log.info("rule 3 (total exposure cap):         PASS")
 
-    # ---- Rule 4: max simultaneous positions ------------------------------ #
     max_positions = int(cfg["max_simultaneous_positions"])
     n_open = len(open_rows)
     n_slots = max(0, max_positions - n_open)
@@ -309,21 +275,14 @@ def apply_risk_limits(
     return result
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _build_market_to_cluster_map(
     cluster_config_path: Path | str,
     market_ids: list[str],
 ) -> dict[str, str]:
-    """Invert ``cluster_name -> [market_ids]`` into ``market_id -> cluster_name``.
-
-    Markets not in any cluster are absent from the map; the caller falls back
-    to ``_singleton_{market_id}`` as the cluster key, which guarantees each
-    such market gets its own bucket (rule-2 then runs per-bucket as required).
-    """
+    """Invert ``cluster_name -> [market_ids]`` into ``market_id -> cluster_name``."""
     try:
         clusters = load_clusters(cluster_config_path)
     except FileNotFoundError:

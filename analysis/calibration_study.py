@@ -1,24 +1,4 @@
-"""Favorite-longshot calibration study on all resolved markets.
-
-A statistical measurement, not a model: for every resolved market with ground
-truth, take its midpoint **24 hours before its final snapshot** and compare,
-per price bucket, the average price against the fraction that actually
-resolved YES. Perfect calibration means they match; the favorite-longshot
-bias (if present) shows up as a systematic gap in the extreme buckets.
-Both directions are reported honestly — the data speaks.
-
-The tradeability check then subtracts realistic maker costs (the spread at
-the reference point; fees are zero) from each bucket's gross edge to see
-whether any miscalibration survives as an exploitable edge, and how many
-markets fall into those buckets.
-
-Run:
-    python -m analysis.calibration_study
-
-Outputs:
-    analysis/results/calibration_study.json  (full study)
-    analysis/results/calibration_bins.csv    (overall per-bin table)
-"""
+"""Favorite-longshot calibration study on all resolved markets."""
 
 from __future__ import annotations
 
@@ -42,13 +22,8 @@ JSON_PATH = RESULTS_DIR / "calibration_study.json"
 CSV_PATH = RESULTS_DIR / "calibration_bins.csv"
 
 REFERENCE_HOURS_BEFORE = 24
-# If the latest snapshot at/before T_ref is itself older than this, the
-# reference would silently measure a different horizon (collection gap) —
-# drop the market instead.
 STALENESS_CAP_HOURS = 24
 
-# Fine bins at the extremes (where the favorite-longshot bias lives),
-# wider in the middle.
 BIN_EDGES: tuple[float, ...] = (
     0.00, 0.02, 0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 0.90, 0.95, 0.98, 1.00,
 )
@@ -65,9 +40,7 @@ MAKER_FEE = 0.0  # maker orders are fee-free on Polymarket
 log = logging.getLogger("analysis.calibration_study")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -88,9 +61,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Dataset assembly
-# --------------------------------------------------------------------------- #
 
 
 def extract_reference_rows(
@@ -98,11 +69,7 @@ def extract_reference_rows(
     reference_hours: int = REFERENCE_HOURS_BEFORE,
     staleness_cap_hours: float = STALENESS_CAP_HOURS,
 ) -> tuple[list[dict], dict[str, int]]:
-    """One row per resolved market with a usable 24h-before reference price.
-
-    Returns (rows, funnel_counts). Each row: market_id, price, spread,
-    outcome (0/1), political (bool), tte_hours (float | None).
-    """
+    """One row per resolved market with a usable 24h-before reference price."""
     conn = sqlite3.connect(db_path)
     try:
         cohort = conn.execute(
@@ -180,9 +147,7 @@ def extract_reference_rows(
     return rows, funnel
 
 
-# --------------------------------------------------------------------------- #
 # Binning + calibration math
-# --------------------------------------------------------------------------- #
 
 
 def assign_bin(price: float, edges: tuple[float, ...] = BIN_EDGES) -> int:
@@ -192,7 +157,7 @@ def assign_bin(price: float, edges: tuple[float, ...] = BIN_EDGES) -> int:
             return i
     if price >= edges[-1]:
         return len(edges) - 2
-    return 0  # price below first edge (shouldn't happen for valid midpoints)
+    return 0
 
 
 def bin_table(
@@ -233,12 +198,7 @@ def bin_table(
 
 
 def tradeability_table(bins: list[dict], fee: float = MAKER_FEE) -> list[dict]:
-    """Per bin: which side (if any) has an edge that survives spread + fee.
-
-    Gross edge per contract: buy-YES profits (actual − price); buy-NO profits
-    (price − actual). Cost model per user spec: the reference-point spread
-    plus fees (0 for makers).
-    """
+    """Per bin: which side (if any) has an edge that survives spread + fee."""
     out: list[dict] = []
     for b in bins:
         if not b["n"] or b["avg_price"] is None:
@@ -271,9 +231,7 @@ def tte_bucket_label(tte_hours: float | None) -> str:
     return "unknown"
 
 
-# --------------------------------------------------------------------------- #
 # Main study
-# --------------------------------------------------------------------------- #
 
 
 def run_study(
@@ -300,7 +258,6 @@ def run_study(
         n, yes_rate_final, n_political, n - n_political,
     )
 
-    # --- Overall ---------------------------------------------------------- #
     overall = bin_table(rows)
     log.info("Overall calibration (avg_price vs actual_yes_rate):")
     for b in overall:
@@ -311,7 +268,6 @@ def run_study(
                 b["gap"], b["se"], b["avg_spread"] or 0.0,
             )
 
-    # --- Category breakout ------------------------------------------------- #
     pol_rows = [r for r in rows if r["political"]]
     nonpol_rows = [r for r in rows if not r["political"]]
     by_category = {
@@ -322,7 +278,6 @@ def run_study(
              "(note: no tags column in markets — keyword filter only)",
              len(pol_rows), len(nonpol_rows))
 
-    # --- Time-to-resolution breakout ---------------------------------------- #
     by_tte: dict[str, list[dict]] = {}
     for label, _, _ in TTE_BUCKETS:
         subset = [r for r in rows if tte_bucket_label(r["tte_hours"]) == label]
@@ -332,7 +287,6 @@ def run_study(
     by_tte["unknown"] = bin_table(unknown_rows)
     log.info("TTE bucket unknown: n=%d", len(unknown_rows))
 
-    # --- Tradeability ------------------------------------------------------- #
     trade = tradeability_table(overall)
     tradeable_bins = [t for t in trade if t["tradeable"]]
     log.info("Tradeability (gross edge minus reference spread, maker fee=0):")

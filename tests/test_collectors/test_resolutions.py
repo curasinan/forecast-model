@@ -1,7 +1,4 @@
-"""Tests for the resolution-capture helpers in collectors.collect_markets.
-
-Synthetic-only — no live Gamma calls.
-"""
+"""Tests for the resolution-capture helpers in collectors.collect_markets."""
 
 from __future__ import annotations
 
@@ -19,9 +16,7 @@ from collectors.collect_markets import (
 )
 
 
-# --------------------------------------------------------------------------- #
 # _parse_outcome_prices
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -44,9 +39,7 @@ def test_parse_outcome_prices(raw, expected):
     assert _parse_outcome_prices(raw) == expected
 
 
-# --------------------------------------------------------------------------- #
 # fetch_market_resolution (canned-response session)
-# --------------------------------------------------------------------------- #
 
 
 class _FakeResponse:
@@ -102,9 +95,7 @@ def test_fetch_resolution_ambiguous_prices_returns_none():
     assert fetch_market_resolution(session, "x") is None
 
 
-# --------------------------------------------------------------------------- #
 # fetch_missing_resolutions (synthetic DB + stubbed fetcher)
-# --------------------------------------------------------------------------- #
 
 
 def _make_db(tmp_path: Path) -> sqlite3.Connection:
@@ -146,9 +137,6 @@ def test_fetch_missing_resolutions_updates_definitive_only(tmp_path):
     assert updated == 2  # m1 and m3; m2 ambiguous stays NULL
 
     got = dict(conn.execute("SELECT id, resolution FROM markets").fetchall())
-    # The resolution column is TEXT (real schema), so SQLite's type affinity
-    # stores the bound ints as '1'/'0' strings — exactly the form that
-    # features.labels._normalize_resolution already accepts.
     assert got["m1"] == "1"
     assert got["m2"] is None
     assert got["m3"] == "0"
@@ -199,9 +187,7 @@ def test_fetch_missing_resolutions_empty_db(tmp_path):
     conn.close()
 
 
-# --------------------------------------------------------------------------- #
 # fetch_market_status (canned-response session)
-# --------------------------------------------------------------------------- #
 
 
 def test_fetch_status_closed_definitive():
@@ -231,9 +217,7 @@ def test_fetch_status_gone():
     assert session.calls == 1  # no retries on 404
 
 
-# --------------------------------------------------------------------------- #
 # probe_scored_unresolved (synthetic DB + stubbed fetcher)
-# --------------------------------------------------------------------------- #
 
 
 def _make_probe_db(tmp_path: Path) -> sqlite3.Connection:
@@ -309,8 +293,6 @@ def test_probe_flips_closed_and_gone_only(tmp_path):
         "SELECT id, status, resolution, last_updated FROM markets").fetchall()}
     assert got["m_yes"] == ("resolved_or_removed", "1", "2026-07-23T00:00:00+00:00")
     assert got["m_no"] == ("resolved_or_removed", "0", "2026-07-23T00:00:00+00:00")
-    # closed-but-ambiguous: flipped with NULL resolution (retried by the
-    # existing resolution pass next run)
     assert got["m_ambig"] == ("resolved_or_removed", None, "2026-07-23T00:00:00+00:00")
     assert got["m_gone"] == ("resolved_or_removed", None, "2026-07-23T00:00:00+00:00")
     # open market untouched
@@ -363,8 +345,6 @@ def test_probe_missing_llm_scores_table(tmp_path):
 
 
 def test_probe_then_resolution_pass_retries_ambiguous(tmp_path):
-    """A closed-but-ambiguous market flipped by the probe is picked up by
-    fetch_missing_resolutions on a later run once Gamma settles."""
     conn = _make_probe_db(tmp_path)
     probe_scored_unresolved(
         conn, session=object(),

@@ -64,11 +64,7 @@ def parse_years(value: str) -> list[int]:
 
 
 def recent_init_months(today: date, count: int = 2) -> list[tuple[int, int]]:
-    """The ``count`` most recent SEAS5 init months, newest first.
-
-    C3S publishes each month's seasonal forecast around the 13th; before
-    the 15th we conservatively assume the current month is not yet up.
-    """
+    """The ``count`` most recent SEAS5 init months, newest first."""
     year, month = today.year, today.month
     if today.day < 15:
         month -= 1

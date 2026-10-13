@@ -1,11 +1,4 @@
-"""Task 3.1 (audit finding M2a): fingerprint the fitted model through the
-chain. A paper-trading measurement is only interpretable if every order
-record can be traced to the exact fitted model that produced it, so the
-short sha256 fingerprint computed here has to survive a save/load
-round-trip unchanged, move when any coefficient moves, and show up in
-both the on-disk model artifact and the signals payload
-``climate.paper.run_paper`` builds for ``scripts/run_ibkr_paper.py``.
-"""
+"""Fingerprint the fitted model through the chain (audit finding M2a)."""
 
 from __future__ import annotations
 
@@ -50,10 +43,6 @@ def test_fingerprint_is_a_short_stable_hex_digest():
 
 
 def test_from_json_accepts_a_model_file_without_a_fingerprint_field():
-    """Regress note: EmosModel.to_json never emits a `fingerprint` key (the
-    field lives in the artifacts climate/fit.py writes, not in the
-    model's own canonical serialisation) -- older/foreign model files
-    lacking the key must still load cleanly."""
     model = _model()
     text = model.to_json()
     assert "fingerprint" not in json.loads(text)
@@ -106,8 +95,5 @@ def test_write_artifacts_embeds_the_fingerprint_in_the_model_json(tmp_path):
     report_payload = json.loads(paths["report_json"].read_text(encoding="utf-8"))
     assert report_payload["fingerprint"] == fp
 
-    # The field itself must never be part of the hashed payload -- a model
-    # reloaded from the just-written (fingerprint-carrying) file has to
-    # fingerprint identically to the in-memory model it came from.
     restored = EmosModel.from_json(paths["model"])
     assert model_fingerprint(restored) == fp

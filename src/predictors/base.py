@@ -8,11 +8,7 @@ from src.models.question import Question
 
 
 class BasePredictor(ABC):
-    """Interface for all predictors.
-
-    Each predictor takes a question, its evidence, and extracted features,
-    and produces a Prediction with a probability estimate and reasoning.
-    """
+    """Interface for all predictors."""
 
     @property
     @abstractmethod

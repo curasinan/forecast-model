@@ -1,42 +1,4 @@
-"""Go-live gate inputs computed from the run/label ledgers (audit finding M2b).
-
-Covers climate/paper_progress.py::compute_paper_progress, the
---paper-days/--resolved-months refusal + computed-default wiring in
-scripts/run_gtm_paper.py, and the NaN-coverage strengthening in
-climate/paper_criteria.py::evaluate_hindcast_go_live (folds L4: a NaN
-coverage row must now fail the gate with a reason instead of silently
-passing). No network/Gateway; tmp_path only.
-
-Run-ledger fixtures mirror scripts/run_ibkr_paper.py's append site
-key-for-key (ts_utc, model_fingerprint, account, simulated, mode, intents,
-executed, rejected, orders[order_id, market_id, outcome, price, size,
-status, venue_order_id, perm_id, question_id, net_ev, holding_days],
-open_groups) -- a hand-drawn shape the real traversal never exercises is
-this team's documented past failure mode. Label-ledger fixtures go through
-climate.storage's own append_observations so they are byte-for-byte what
-scripts/collect_climate_labels.py would have written.
-
-Fix round 1 (audit finding M2b, controller ruling R13): the first cut of
-`resolved_months` read the traded month off a run's own `ts_utc` -- WRONG,
-because a paper run trades whatever contract is currently on the ladder,
-not necessarily its own calendar month (a September run can trade the
-December contract, `gtm:2026-12`). That proxy credited a resolved month
-before any real bet on it had resolved -- anti-conservative, rejected in
-review. `question_id`/`open_groups` are the fix: real evidence of which
-contract was actually traded, threaded additively through the writer.
-
-Fix round 2 (audit finding M2b, controller ruling R14 -- extends R13): two
-further anti-conservative gaps in the round-1 evidence. (1) A simulated
-rehearsal run's orders/open_groups were still counted; round 1's argument
-that this couldn't inflate the gate alone (paper_days stays 0 without a
-real run) is false once ANY real run has ever happened. (2) Every order in
-orders[] was counted regardless of `status` -- TradingExecutor attaches
-`decision.order` as soon as the risk check passes, before operator
-approval or venue placement can fail, so a declined ('pending') or
-rejected order was wrongly credited. R14: only `simulated=False` records
-contribute evidence, and within them only `status in {"placed", "filled"}`
-orders count. Both filters are delay-only.
-"""
+"""Go-live gate inputs computed from the run/label ledgers (audit finding M2b)."""
 
 from __future__ import annotations
 
@@ -55,9 +17,7 @@ from climate.paper_progress import PaperProgress, compute_paper_progress
 from climate.storage import append_observations
 
 
-# --------------------------------------------------------------------------- #
 # fixture builders
-# --------------------------------------------------------------------------- #
 
 
 def _order(
@@ -70,20 +30,12 @@ def _order(
     status: str = "filled",
     venue_order_id: str = "v1",
     perm_id: int = 1001,
-    # Deliberately NOT tied to any test's ts_utc: a sentinel month that no
-    # test's run ts_utc ever falls in, so a test that forgets to override
-    # this can never accidentally pass via the rejected ts_utc-month proxy.
     question_id: str | None = "gtm:1999-01:0.80",
     net_ev: float = 0.05,
     holding_days: float = 20.0,
     legacy: bool = False,
 ) -> dict:
-    """One order dict, key-for-key what run_ibkr_paper.py's append site
-    writes. ``question_id`` is the fix-round-1 additive field (controller
-    ruling R13) -- ``"gtm:<YYYY-MM>:<strike>"``, carried straight from
-    ``TradeDecision.question_id``. ``legacy=True`` omits it, mimicking a
-    record written before that fix.
-    """
+    """One order dict, key-for-key what run_ibkr_paper.py's append site writes."""
     order = {
         "order_id": order_id,
         "market_id": market_id,
@@ -113,16 +65,7 @@ def _run_record(
     legacy: bool = False,
     extra: dict | None = None,
 ) -> dict:
-    """One run-ledger line, key-for-key what run_ibkr_paper.py appends.
-
-    ``open_groups`` is the fix-round-1 additive field (controller ruling
-    R13) -- the sorted ``by_group`` keys ``load_open_commitments`` already
-    computes, e.g. ``["gtm:2026-12"]``; defaults to ``[]`` (no pre-existing
-    resting groups). ``legacy=True`` omits the key entirely, mimicking a
-    record written before that fix. ``extra`` merges in additional keys
-    (e.g. a future field) to prove the traversal tolerates keys it doesn't
-    know about.
-    """
+    """One run-ledger line, key-for-key what run_ibkr_paper.py appends."""
     orders = orders if orders is not None else []
     record = {
         "ts_utc": ts_utc,
@@ -150,9 +93,6 @@ def _write_runs_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _write_labels_ledger(root: Path, periods: list[str], *, series: str = "gtm") -> None:
-    """Append first-print gtm rows for each 'YYYY-MM' period, via the real
-    climate.storage writer (same code path scripts/collect_climate_labels.py
-    uses)."""
     rows = [
         LabelObservation(series, period, 1.0 + i * 0.01, "https://example/gtm")
         for i, period in enumerate(periods)
@@ -160,9 +100,7 @@ def _write_labels_ledger(root: Path, periods: list[str], *, series: str = "gtm")
     append_observations(rows, backfill=True, root=root)
 
 
-# --------------------------------------------------------------------------- #
 # compute_paper_progress -- missing / empty / malformed input
-# --------------------------------------------------------------------------- #
 
 
 def test_missing_runs_jsonl_returns_zero_none(tmp_path):
@@ -233,9 +171,7 @@ def test_malformed_lines_are_skipped_not_fatal(tmp_path):
     assert progress.paper_days == 4
 
 
-# --------------------------------------------------------------------------- #
 # paper_days: first simulated=false line, floored day-rounding, clamped
-# --------------------------------------------------------------------------- #
 
 
 def test_paper_days_ignores_leading_simulated_runs(tmp_path):
@@ -251,8 +187,6 @@ def test_paper_days_ignores_leading_simulated_runs(tmp_path):
     progress = compute_paper_progress(
         runs_jsonl=runs_jsonl, labels_root=None, now=datetime(2026, 1, 11, tzinfo=timezone.utc)
     )
-    # First REAL (simulated=false) line wins, not the earlier simulated one
-    # and not a later real one.
     assert progress.first_order_ts == "2026-01-01T00:00:00+00:00"
     assert progress.paper_days == 10
 
@@ -278,8 +212,6 @@ def test_paper_days_floors_rather_than_rounds(tmp_path, first_ts, now, expected_
 
 
 def test_paper_days_clamps_negative_to_zero(tmp_path):
-    """Clock skewed behind the first order's own timestamp must never
-    report a negative paper-days count."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -304,16 +236,10 @@ def test_paper_days_zero_and_first_order_ts_none_when_no_real_run_yet(tmp_path):
     assert progress.first_order_ts is None
 
 
-# --------------------------------------------------------------------------- #
 # resolved_months: distinct traded months with a first-print gtm label
-# --------------------------------------------------------------------------- #
 
 
 def test_resolved_months_ignores_the_runs_own_ts_utc_month(tmp_path):
-    """The exact regression the fix corrects: a September run trading the
-    December contract must credit December (once labeled), never
-    September (the run's own calendar month, which is what the rejected
-    proxy used to credit)."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -325,8 +251,6 @@ def test_resolved_months_ignores_the_runs_own_ts_utc_month(tmp_path):
             )
         ],
     )
-    # September's own label is published (it's not what was traded) but
-    # December's is not yet.
     _write_labels_ledger(tmp_path, ["2026-09"])
     progress = compute_paper_progress(
         runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -404,9 +328,6 @@ def test_resolved_months_excludes_labels_without_a_traded_month(tmp_path):
 
 
 def test_resolved_months_ignores_orders_without_a_question_id(tmp_path):
-    """An order that carries no question_id (e.g. a foreign/non-gtm record,
-    or a null value) contributes no evidence -- it is not treated as
-    matching anything, and never falls back to the run's ts_utc."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -425,9 +346,6 @@ def test_resolved_months_ignores_orders_without_a_question_id(tmp_path):
 
 
 def test_resolved_months_requires_a_non_empty_orders_list(tmp_path):
-    """A run with zero orders and no open_groups (e.g. nothing tradeable
-    and nothing already resting) does not count as having 'traded'
-    anything, even if some unrelated month later resolves."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -463,15 +381,6 @@ def test_resolved_months_dedupes_multiple_runs_in_the_same_month(tmp_path):
 
 
 def test_resolved_months_excludes_simulated_runs_orders(tmp_path):
-    """R14 (fix round 2) flips fix round 1's behavior: a simulated
-    rehearsal run's orders no longer credit resolved_months. Fix round
-    1's safety argument -- "a simulated-only month can't inflate the gate
-    because paper_days stays 0 without a real run" -- is FALSE once any
-    real run has ever happened: paper_days then reflects that real run's
-    own start date (> 0), and every rehearsal since could still add
-    months for free under the old rule. This test pins exactly that
-    scenario: a real run has already started the clock, and a LATER
-    rehearsal's month must still not be credited."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -491,13 +400,11 @@ def test_resolved_months_excludes_simulated_runs_orders(tmp_path):
         runs_jsonl=runs_jsonl, labels_root=tmp_path, now=datetime(2026, 7, 1, tzinfo=timezone.utc)
     )
     assert progress.paper_days > 0  # a real run HAS happened...
-    assert progress.resolved_months == 1  # ...yet only 2025-01 (real) is credited, not 2026-06
+    assert progress.resolved_months == 1
 
 
 def test_resolved_months_excludes_open_groups_from_a_simulated_record(tmp_path):
-    """R14: open_groups is likewise read only from simulated=False
-    records. A simulated record's open_groups must not credit, while an
-    otherwise-identical real record's does."""
+    """R14: open_groups is likewise read only from simulated=False records."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -532,12 +439,6 @@ def test_resolved_months_excludes_open_groups_from_a_simulated_record(tmp_path):
 
 @pytest.mark.parametrize("status", ["pending", "rejected", "cancelled"])
 def test_resolved_months_excludes_orders_that_were_never_actually_placed(tmp_path, status):
-    """R14: TradingExecutor attaches TradeDecision.order as soon as the
-    risk check passes -- BEFORE operator approval and before venue
-    placement can fail -- so an order the operator declined ('pending',
-    never approved) or that was rejected/cancelled still appears in
-    orders[] (the writer's own filter is only `d.order is not None`) but
-    represents no actual bet and must not credit its month."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -557,9 +458,6 @@ def test_resolved_months_excludes_orders_that_were_never_actually_placed(tmp_pat
 
 @pytest.mark.parametrize("status", ["placed", "filled"])
 def test_resolved_months_counts_orders_that_were_actually_placed(tmp_path, status):
-    """The positive side of the same R14 filter: a 'placed' order (resting
-    at the venue) or a 'filled' one (confirmed at sync time, before the
-    ledger write) both credit their month."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -578,12 +476,6 @@ def test_resolved_months_counts_orders_that_were_actually_placed(tmp_path, statu
 
 
 def test_resolved_months_credits_a_month_only_seen_via_open_groups(tmp_path):
-    """The other half of the fix: a month whose order was placed in an
-    EARLIER run and is still resting never re-appears in a LATER run's own
-    orders[] (placement idempotence, drop_already_committed) -- but it
-    must still be visible via that later run's open_groups, or the month
-    could never be credited at all once the placing run ages out of
-    relevance for this test's narrow window."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -604,8 +496,6 @@ def test_resolved_months_credits_a_month_only_seen_via_open_groups(tmp_path):
 
 
 def test_resolved_months_ignores_a_revision_row_without_a_first_print(tmp_path):
-    """latest_values()/first-print discipline: is_revision=True rows never
-    stand in for a missing first-print row (Rule 603(e))."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -616,10 +506,6 @@ def test_resolved_months_ignores_a_revision_row_without_a_first_print(tmp_path):
             )
         ],
     )
-    # Manually seed a ledger with ONLY a revision row (contrived -- the real
-    # writer never does this, but the traversal must not be fooled by it).
-    # Written via the ledger's own public path/columns constants, straight
-    # to parquet, rather than climate.storage's private write helper.
     from climate.storage import LEDGER_COLUMNS, ledger_path
 
     df = pd.DataFrame(
@@ -646,11 +532,6 @@ def test_resolved_months_ignores_a_revision_row_without_a_first_print(tmp_path):
 
 
 def test_legacy_run_record_counts_for_paper_days_but_not_resolved_months(tmp_path):
-    """A record written before fix round 1 has neither question_id on its
-    orders nor an open_groups key at all. It must still start/advance the
-    paper_days clock (that logic is unchanged) but contribute NOTHING to
-    resolved_months -- a gap in the evidence can only DELAY go-live, never
-    hasten it."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -673,8 +554,6 @@ def test_legacy_run_record_counts_for_paper_days_but_not_resolved_months(tmp_pat
 
 
 def test_extra_unknown_keys_on_a_run_record_are_tolerated(tmp_path):
-    """A run record may carry keys this function doesn't know about (e.g. a
-    future field) without breaking the traversal."""
     runs_jsonl = tmp_path / "ibkr_paper_runs.jsonl"
     _write_runs_jsonl(
         runs_jsonl,
@@ -693,11 +572,6 @@ def test_extra_unknown_keys_on_a_run_record_are_tolerated(tmp_path):
     )
     assert progress.resolved_months == 1
     assert progress.first_order_ts == "2026-01-15T00:00:00+00:00"
-
-
-# --------------------------------------------------------------------------- #
-# scripts/run_gtm_paper.py -- computed defaults + --allow-manual-gate-inputs
-# --------------------------------------------------------------------------- #
 
 
 def _minimal_payload(**overrides) -> dict:
@@ -728,9 +602,6 @@ def test_run_gtm_paper_computes_default_gate_inputs_from_the_ledgers(tmp_path, m
 
     test_now = datetime.now(timezone.utc)
     first_ts = test_now - timedelta(days=10, hours=12)  # safely floors to 10
-    # Deliberately a DIFFERENT month than first_ts's own calendar month --
-    # proves resolved_months is wired to the question_id evidence, not the
-    # rejected run-ts_utc-month proxy (fix round 1).
     traded_month = "1999-01"
     _write_runs_jsonl(
         root / "paper" / "ibkr_paper_runs.jsonl",
@@ -859,11 +730,6 @@ def test_run_gtm_paper_allows_manual_gate_inputs_with_the_flag(tmp_path, monkeyp
     assert captured["resolved_months"] == 5
 
 
-# --------------------------------------------------------------------------- #
-# L8 (Task 3.8): every successful run also appends to gtm_signals_history.jsonl
-# --------------------------------------------------------------------------- #
-
-
 def test_run_gtm_paper_appends_history_and_keeps_the_latest_file_valid(tmp_path, monkeypatch):
     import scripts.run_gtm_paper as run_gtm_paper_mod
     from climate.paper import HISTORY_REL, PAPER_REL, format_ts_utc
@@ -879,10 +745,6 @@ def test_run_gtm_paper_appends_history_and_keeps_the_latest_file_valid(tmp_path,
 
     def _fake_run_paper(frame, model_, **kwargs):
         run_n["n"] += 1
-        # Fresh sweep_ts_utc + no inits to check -- a happy path that clears
-        # the staleness gate and actually reaches write_paper_payload (most
-        # of this module's other run_gtm_paper tests stop at the refusal
-        # paths, which never write a signals file to begin with).
         return _minimal_payload(sweep_ts_utc=format_ts_utc(now), inits={}, run=run_n["n"])
 
     monkeypatch.setattr(run_gtm_paper_mod, "run_paper", _fake_run_paper)
@@ -902,19 +764,10 @@ def test_run_gtm_paper_appends_history_and_keeps_the_latest_file_valid(tmp_path,
     assert [json.loads(line)["run"] for line in history_lines] == [1, 2]
 
     latest = json.loads(root.joinpath(*PAPER_REL).read_text(encoding="utf-8"))
-    assert latest["run"] == 2  # gtm_signals.json is overwritten -- always the LATEST run
-
-
-# --------------------------------------------------------------------------- #
-# Final-review bundle B-1: provenance of the go-live gate inputs. A manual
-# override is legitimate (behind --allow-manual-gate-inputs) but must never
-# be indistinguishable, after the fact, from a ledger-derived value.
-# --------------------------------------------------------------------------- #
+    assert latest["run"] == 2
 
 
 def _run_gtm_paper_writing(tmp_path, monkeypatch, extra_args: list[str]) -> tuple[int, dict, dict]:
-    """Drive main() to a real write (fresh sweep_ts_utc, no inits to gate)
-    and return (rc, latest gtm_signals.json, last history line)."""
     import scripts.run_gtm_paper as run_gtm_paper_mod
     from climate.paper import HISTORY_REL, PAPER_REL, format_ts_utc
 
@@ -946,8 +799,6 @@ def _run_gtm_paper_writing(tmp_path, monkeypatch, extra_args: list[str]) -> tupl
 def _manual_warnings(caplog) -> list[str]:
     import logging
 
-    # Match the warning's own phrase, not just "manual": pytest's tmp_path
-    # for these tests contains "manual" too (e.g. the diagnostics warning).
     return [r.getMessage() for r in caplog.records
             if r.levelno == logging.WARNING and r.name == "run_gtm_paper"
             and "gate inputs set manually" in r.getMessage().lower()]
@@ -996,12 +847,6 @@ def test_ledger_derived_gate_inputs_are_recorded_as_ledgers(tmp_path, monkeypatc
     assert history_line["go_live"]["gate_inputs_source"] == "ledgers"
 
 
-# --------------------------------------------------------------------------- #
-# NaN coverage strengthening (L4): fails the gate with a reason instead of
-# passing silently.
-# --------------------------------------------------------------------------- #
-
-
 def test_nan_cover50_now_fails_with_a_reason_instead_of_silently_passing():
     summary = pd.DataFrame(
         {
@@ -1033,8 +878,6 @@ def test_nan_cover90_now_fails_with_a_reason_instead_of_silently_passing():
 
 
 def test_finite_in_band_coverage_still_passes_byte_identical(tmp_path):
-    """Regress note: passing behavior on finite, in-band inputs must stay
-    byte-identical -- only the NaN path is new."""
     summary = pd.DataFrame(
         {
             "lead_month": [1, 2, 3],
@@ -1050,10 +893,6 @@ def test_finite_in_band_coverage_still_passes_byte_identical(tmp_path):
 
 
 def test_min_leads_beating_trend_comment_describes_any_three_leads():
-    """The old comment said 'leads 1..3 must clear the skill floor', which
-    is not what the code does (it counts ANY N leads beating trend,
-    regardless of which lead numbers). Pin the corrected wording so a
-    future edit can't silently restore the wrong claim."""
     import inspect
 
     source = inspect.getsource(ClimateGoLiveCriteria)

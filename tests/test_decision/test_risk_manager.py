@@ -1,7 +1,4 @@
-"""Tests for ``decision.risk_manager.apply_risk_limits``.
-
-Each of the four rules is tested in isolation, plus combinations.
-"""
+"""Tests for ``decision.risk_manager.apply_risk_limits``."""
 
 from __future__ import annotations
 
@@ -77,9 +74,6 @@ def _sized_df(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame([{**base, **r} for r in rows])
 
 
-# --- Rule 1: drawdown ----------------------------------------------------- #
-
-
 def test_rule1_drawdown_trips_at_20pct(tmp_path):
     db = _make_db(tmp_path, closed_positions=[
         {"market_id": "x", "direction": "buy", "position_dollars": 100,
@@ -104,9 +98,6 @@ def test_rule1_no_drawdown_when_realized_zero(tmp_path):
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
     assert out.loc[0, "tradeable"]
-
-
-# --- Rule 2: cluster cap -------------------------------------------------- #
 
 
 def test_rule2_cluster_cap_scales_within_cluster(tmp_path):
@@ -156,16 +147,12 @@ def test_rule2_singleton_clusters_for_unclustered_markets(tmp_path):
     assert (out["position_dollars"] == 60.0).all()
 
 
-# --- Rule 3: total cap ---------------------------------------------------- #
-
-
 def test_rule3_total_cap_scales_everything(tmp_path):
     """10 × $40 new signals + $40 existing = $440 > $350 cap → scale."""
     db = _make_db(tmp_path, open_positions=[
         {"market_id": "x", "direction": "buy", "position_dollars": 40.0,
          "cluster": "_singleton_x"},
     ])
-    # Put each new market in its own singleton cluster so rule 2 doesn't bind.
     cc = _make_cluster_config(tmp_path, {})
     rc = _make_risk_config(tmp_path)
 
@@ -175,12 +162,7 @@ def test_rule3_total_cap_scales_everything(tmp_path):
     ])
     out = apply_risk_limits(sized, bankroll=1000.0, db_path=db,
                             cluster_config_path=cc, risk_config_path=rc)
-    # Headroom = 350 - 40 = 310; new_total = 400; scale = 310/400 = 0.775 → each = $31
-    # All still above $5 floor; max_simultaneous = 12, so all should still be tradeable
     assert out.loc[out["tradeable"], "position_dollars"].sum() == pytest.approx(310.0)
-
-
-# --- Rule 4: max simultaneous --------------------------------------------- #
 
 
 def test_rule4_max_positions_keeps_highest_edge(tmp_path):
@@ -219,9 +201,6 @@ def test_rule4_all_slots_full_rejects_all(tmp_path):
                             cluster_config_path=cc, risk_config_path=rc)
     assert not out.loc[0, "tradeable"]
     assert out.loc[0, "rejected_reason"] == "max_concurrent"
-
-
-# --- Combined ------------------------------------------------------------- #
 
 
 def test_drawdown_short_circuits_other_rules(tmp_path):

@@ -1,10 +1,4 @@
-"""Launch the prediction system dashboard.
-
-Usage:
-    python scripts/run_dashboard.py              # Interactive mode (menu)
-    python scripts/run_dashboard.py --once        # Run once and display
-    python scripts/run_dashboard.py --scheduler   # Auto-run every 6h
-"""
+"""Launch the prediction system dashboard."""
 
 import asyncio
 import logging

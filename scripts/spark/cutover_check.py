@@ -1,52 +1,4 @@
-"""Evaluate the cutover gate from what the runtime leaves behind.
-
-    python scripts/spark/cutover_check.py --root /srv/quant_data \\
-        --repo /home/trading/forecast-model --since 2026-10-20T16:00:00+00:00 \\
-        --parity zenbook.json spark.json
-
-Four lines, every one of which must hold (spec section 6, step 5), all judged
-on what happened at or after --since, the moment the Spark's units started:
-
-  sweep   a sweep file with at least MIN_SWEEP_ROWS rows was written: the newest
-          sweep taken since --since is the one judged, and a sweep's time is the
-          UTC time its own path carries (date=YYYY-MM-DD/quotes-HHMMSSZ.parquet),
-          the file's mtime only when the name carries none;
-  health  the health unit finished a run with exit status 0, and a test alert
-          was delivered by Telegram;
-  sync    the paper sync ran since --since, its newest run since then is ok, and
-          the book carried over from the last ok run before --since (the
-          Zenbook's) to the first ok run since --since (the Spark's first). A
-          run's counts are what that run concluded, not the state of the book:
-          a row concluded filled or cancelled is no longer examined, so the book
-          carried over when
-              examined(after) == examined(before) - filled(before) - cancelled(before)
-          and unmatched_venue_orders(after) == unmatched_venue_orders(before).
-          Only the first ok run is held to that: a later run examines one row
-          fewer for every row an earlier Spark run concluded, and that is not the
-          book breaking. filled, partially_filled, cancelled and unchanged may
-          differ between the two runs; the line prints each one that did, and the
-          derivation of the examined count it expected (passing or failing), and
-          ends with the two runs it compared, by their UTC times, and the number of
-          not-ok runs between them: a not-ok Spark run that concluded rows between the
-          two breaks the identity without the book being broken, and that is how such a
-          FAIL is told from a broken book;
-  parity  the two score payloads pass the registered parity gate; compare_json's
-          own output follows the verdict line, every line indented four spaces.
-
-The probe writes to logs/ibkr_health.log only when it finds a problem, so a
-healthy run is read from systemd (the unit's last exit status and exit time),
-not from that log. Run it on the Spark. It reads; it runs nothing against the
-venue and sends nothing. Exit 0 when all four pass, 1 otherwise.
-
-Each line is judged on its own: one that cannot be evaluated (an unreadable file,
-a torn ledger line, a missing payload) prints "FAIL <line>: could not be evaluated
-(<ExceptionClass>)" and the other three verdicts still print. Only the class name
-is printed, never the exception text, which can quote the data that broke it. The
-sync ledger's lines carry the paper account id; no line of it is ever printed. A
-ledger line that cannot be read says where it is, "(JSONDecodeError at line 17)":
-the 1-based number of the line in the file, blank lines counted.
---since must carry its UTC offset; anything else is a usage error (exit 2).
-"""
+"""Evaluate the cutover gate from what the runtime leaves behind."""
 
 from __future__ import annotations
 
@@ -75,7 +27,6 @@ PARITY_FLAGS = ["--rtol", "1e-8", "--atol", "1e-10", "--min-numeric", "1000",
                 "--ignore", "identity.machine", "--differ", "identity.machine"]
 SYNC_COUNTS = ("examined", "filled", "partially_filled", "cancelled", "unchanged",
                "unmatched_venue_orders")
-# The counts that may differ between the Zenbook's last ok run and the Spark's first.
 ACTIVITY_COUNTS = ("filled", "partially_filled", "cancelled", "unchanged")
 SINCE_USAGE = "must be an ISO-8601 time with its UTC offset, for example 2026-10-20T16:00:00+00:00"
 
@@ -87,10 +38,7 @@ def _when(text: str) -> datetime:
 
 
 def _since(text: str) -> datetime:
-    """The --since value: an ISO-8601 time that carries its UTC offset.
-
-    A bad value is rejected with a fixed message that does not repeat it.
-    """
+    """The --since value: an ISO-8601 time that carries its UTC offset."""
     try:
         stamp = datetime.fromisoformat(text)
     except ValueError:
@@ -101,12 +49,7 @@ def _since(text: str) -> datetime:
 
 
 def _sweep_time(path: Path) -> datetime:
-    """When a sweep was taken: the UTC time its own path carries, else the file's mtime.
-
-    The recorder names a sweep for the moment it wrote it. The mtime only says when this
-    copy of the file was made, which for a root the Zenbook's files were copied into is the
-    time of the copy, not of the sweep.
-    """
+    """When a sweep was taken: the UTC time its own path carries, else the file's mtime."""
     try:
         named = sweep_ts_from_path(path)
     except ValueError:  # the recorder's shape, but not a real date or time
@@ -202,20 +145,14 @@ def _counts(record: dict, which: str) -> dict[str, int] | str:
 
 
 def _carry_over(before: dict[str, int], after: dict[str, int]) -> tuple[bool, str]:
-    """Did the book carry over from the run `before` to the run `after`?
-
-    The run before concluded `filled` and `cancelled` rows, which left the set a sync
-    examines, so the run after examines exactly the rest; and the venue orders the book
-    does not know are as many as before. The other counts may differ. The verdict, passing
-    or failing, prints the derivation of the examined count it expected.
-    """
+    """Did the book carry over from the run `before` to the run `after`?"""
     expected = before["examined"] - before["filled"] - before["cancelled"]
     examined = (f"examined {before['examined']} -> {after['examined']}, expected {expected} = "
                 f"{before['examined']} - {before['filled']} filled - "
                 f"{before['cancelled']} cancelled")
     unmatched_moved = after["unmatched_venue_orders"] != before["unmatched_venue_orders"]
     if after["examined"] != expected or unmatched_moved:
-        broken = [examined]  # the half that held reads as itself: 3 -> 3 against an expected 3
+        broken = [examined]
         if unmatched_moved:
             broken.append(f"unmatched_venue_orders {before['unmatched_venue_orders']} -> "
                           f"{after['unmatched_venue_orders']}")
@@ -234,13 +171,7 @@ def _stamp(when: datetime) -> str:
 
 
 def _compared(runs: list[tuple[datetime, dict]], before: int, after: int) -> str:
-    """The two ledger runs (by position in `runs`) a carry-over verdict compares: their UTC
-    times and how many not-ok runs lie between them in the ledger.
-
-    A not-ok Spark run that concluded rows between the two breaks the identity without the
-    book being broken; this tells such a FAIL from a broken book. Two times and a count are
-    all that is printed of the ledger: a record carries the paper account id.
-    """
+    """The two ledger runs a carry-over verdict compares, and the not-ok runs between them."""
     not_ok = sum(1 for _, run in runs[before + 1:after] if not run.get("ok"))
     return (f"(before {_stamp(runs[before][0])}, after {_stamp(runs[after][0])}, "
             f"{not_ok} not-ok {'run' if not_ok == 1 else 'runs'} between)")
@@ -252,13 +183,7 @@ def _unevaluated(what: str) -> str:
 
 
 def _ledger_runs(ledger: Path) -> list[tuple[datetime, dict]] | str:
-    """Every run in the sync ledger, oldest first, each with its time; or what cannot be read.
-
-    The ledger is append-only, so file order is time order. A line that cannot be read as a
-    run (torn, not a record, or with no usable ts_utc) is named by its 1-based number in the
-    file, blank lines counted, and the exception's class: never by its content, which
-    carries the paper account id.
-    """
+    """Every run in the sync ledger, oldest first, each with its time; or what cannot be read."""
     runs = []
     for number, line in enumerate(ledger.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
@@ -278,7 +203,6 @@ def check_sync(root: Path, since: datetime) -> tuple[bool, str]:
     runs = _ledger_runs(ledger)
     if isinstance(runs, str):
         return False, runs
-    # Positions in the ledger, which is in time order: the compared runs are named by them.
     after = [number for number, (when, _) in enumerate(runs) if when >= since]
     before_ok = [number for number, (when, run) in enumerate(runs)
                  if when < since and run.get("ok")]
@@ -290,9 +214,6 @@ def check_sync(root: Path, since: datetime) -> tuple[bool, str]:
         return False, f"the newest sync run since the cutover ({_stamp(newest_when)}): ok is false"
     if not before_ok:
         return False, "no earlier ok run to compare the book with"
-    # ... and the book is judged on the FIRST ok run since: it is the one that has to carry
-    # the Zenbook's book over. Every later run examines one row fewer per row an earlier
-    # Spark run concluded, so none of them is held to the identity against the Zenbook's run.
     before = before_ok[-1]
     first_ok = next(number for number in after if runs[number][1].get("ok"))  # the newest is ok
     counts = []
@@ -312,18 +233,12 @@ def check_parity(payloads: list[str] | None) -> tuple[bool, str]:
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         code = compare_json.main([*payloads, *PARITY_FLAGS])
-    # Every line compare_json printed goes under the verdict, indented: the leaf count and
-    # the machines compared when it passes, every mismatch and reason when it does not.
     shown = "".join(f"\n    {line}" for line in captured.getvalue().splitlines())
     return code == 0, f"compare_json exit {code}{shown}"
 
 
 def _verdict(evaluate) -> tuple[bool, str]:
-    """One line's verdict. A check that cannot be evaluated is that line's FAIL, not a crash.
-
-    Only the exception's class name is printed: its text can quote the data that broke it
-    (a torn ledger line carries the paper account id).
-    """
+    """One line's verdict. A check that cannot be evaluated is that line's FAIL, not a crash."""
     try:
         return evaluate()
     except Exception as exc:  # noqa: BLE001 -- any failure to judge a line IS that line's FAIL

@@ -1,19 +1,4 @@
-"""Sentiment feature extractor using VADER (Valence Aware Dictionary and sEntiment Reasoner).
-
-VADER is specifically designed for social media and news text. It's fast,
-requires no GPU, and produces reasonable sentiment scores for headlines
-and short snippets. Claude handles nuanced analysis in the LLM predictor.
-
-Sentiment scores:
-    -1.0 = very negative
-     0.0 = neutral
-    +1.0 = very positive
-
-For prediction markets, sentiment direction and momentum matter:
-- Positive sentiment about a product launch = higher probability of release
-- Negative sentiment about delays/problems = lower probability
-- Sentiment acceleration (trend) = something is changing
-"""
+"""Sentiment feature extractor using VADER (Valence Aware Dictionary and sEntiment Reasoner)."""
 
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
@@ -28,11 +13,7 @@ class SentimentExtractor(BaseFeatureExtractor):
         self._analyzer = SentimentIntensityAnalyzer()
 
     def _score_text(self, text: str) -> float:
-        """Get compound sentiment score for a text string.
-
-        The compound score is a normalized sum of all word scores,
-        ranging from -1 (most negative) to +1 (most positive).
-        """
+        """Get compound sentiment score for a text string."""
         if not text.strip():
             return 0.0
         scores = self._analyzer.polarity_scores(text)
@@ -69,8 +50,6 @@ class SentimentExtractor(BaseFeatureExtractor):
         negative = [s for s in scores if s < -0.05]
         neutral = [s for s in scores if -0.05 <= s <= 0.05]
 
-        # Sentiment momentum: compare recent vs older sentiment
-        # If recent evidence is more positive than older, momentum is positive
         recent_items = bundle.recent(days=7)
         older_items = [i for i in bundle.items if i not in recent_items]
 

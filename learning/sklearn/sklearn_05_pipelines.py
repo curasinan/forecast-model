@@ -1,10 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 5: Pipelines and Complete Workflow
-
-Chain preprocessing + model into one clean object.
-"""
+"""Scikit-Learn: Zero to Hero, Part 5: Pipelines and Complete Workflow."""
 
 import numpy as np
 import pandas as pd
@@ -22,9 +16,7 @@ print("Part 5: Pipelines and Complete Workflow")
 print("=" * 70)
 
 
-# ============================================================================
 # WHY PIPELINES?
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("WHY PIPELINES?")
@@ -70,9 +62,7 @@ Benefits:
 print(why_pipelines)
 
 
-# ============================================================================
 # BASIC PIPELINE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("BASIC PIPELINE")
@@ -111,9 +101,7 @@ predictions = pipeline.predict(sample)
 print(f"\nPredictions for 3 samples: {predictions}")
 
 
-# ============================================================================
 # PIPELINE WITH GRID SEARCH
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("PIPELINE WITH GRID SEARCH")
@@ -150,9 +138,7 @@ print(f"Best CV score:   {grid_search.best_score_:.4f}")
 print(f"Test score:      {grid_search.score(X_test, y_test):.4f}")
 
 
-# ============================================================================
 # HANDLING MIXED DATA TYPES
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("HANDLING MIXED DATA TYPES")
@@ -221,9 +207,7 @@ print(f"\nOriginal shape: {X.shape}")
 print(f"Transformed shape: {X_transformed.shape}")
 
 
-# ============================================================================
 # FEATURE ENCODING EXPLAINED
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("FEATURE ENCODING EXPLAINED")
@@ -271,9 +255,7 @@ print(f"Categories: {ohe.categories_[0]}")
 print(one_hot)
 
 
-# ============================================================================
 # HANDLING MISSING VALUES
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("HANDLING MISSING VALUES")
@@ -311,9 +293,7 @@ print(f"\nAfter mean imputation:")
 print(imputed)
 
 
-# ============================================================================
 # COMPLETE REAL-WORLD EXAMPLE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("COMPLETE REAL-WORLD EXAMPLE")
@@ -395,9 +375,7 @@ print(f"Test accuracy:    {grid_search.score(X_test, y_test):.4f}")
 best_pipeline = grid_search.best_estimator_
 
 
-# ============================================================================
 # SAVING AND LOADING MODELS
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SAVING AND LOADING MODELS")
@@ -418,9 +396,7 @@ test_score = loaded_model.score(X_test, y_test)
 print(f"✓ Loaded model test accuracy: {test_score:.4f}")
 
 
-# ============================================================================
 # SUMMARY: THE ULTIMATE TEMPLATE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SUMMARY: THE ULTIMATE TEMPLATE")

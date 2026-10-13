@@ -1,9 +1,4 @@
-"""LocalLLMClient failure side: every way a server can go wrong must surface as an LLMError.
-
-Transport errors, HTTP statuses, bodies that are not JSON objects and, the part the brief's
-tests never touched, HTTP-200 payloads of the wrong shape. Each test names the regression
-it catches. MockTransport only.
-"""
+"""LocalLLMClient failure side: every way a server can go wrong must surface as an LLMError."""
 
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ import pytest
 from src.llm.client import LLMConfigError, LLMError, LLMHTTPError, LLMOutputError, LocalLLMClient
 from tests.test_llm.test_client import _client, _completion
 
-KEY = "sk-live-9f3a"  # distinctive on purpose: no error message may ever contain it
+KEY = "sk-live-9f3a"
 MESSAGES = [{"role": "user", "content": "hi"}]
 SCHEMA = {"type": "object"}
 
@@ -39,9 +34,6 @@ def _assert_names_the_request_only(error: LLMError, request: str, fragment: str)
     assert fragment in text
     assert "llm.test" not in text
     assert KEY not in text
-
-
-# ---- transport, status and body-level failures ---------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -111,9 +103,6 @@ def test_null_content_with_a_schema_is_an_output_error():
     assert info.value.raw == ""
 
 
-# ---- HTTP-200 payloads of the wrong shape ----------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "payload",
     [
@@ -148,8 +137,6 @@ def test_null_content_with_a_schema_is_an_output_error():
     ],
 )
 def test_malformed_models_listing_is_an_llm_error(payload):
-    """Kills: a wrong-shaped listing escaping as TypeError/AttributeError, an entry without a
-    string id being skipped or stringified, a payload without 'data' reading as an empty list."""
     client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.models()
@@ -157,8 +144,6 @@ def test_malformed_models_listing_is_an_llm_error(payload):
 
 
 def test_models_payload_without_data_is_not_an_empty_listing():
-    """A server answering /models with {} is broken, not serving nothing: assert_model_served
-    must not report it as "not served, the server lists []"."""
     client = _client(lambda request: httpx.Response(200, json={}), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.assert_model_served()
@@ -196,9 +181,6 @@ MALFORMED_COMPLETIONS = [
         )
         for usage in ([1, 2], [], "abc", 5, 0)
     ),
-    # The reasoning text lives under ``reasoning`` (the Spark) or ``reasoning_content``
-    # (OpenAI-style servers); whichever is chosen must be a string or null, never dropped
-    # silently as None.
     *(
         _case(
             f"{key}-{json.dumps(value)}",
@@ -215,8 +197,6 @@ MALFORMED_COMPLETIONS = [
         None,
         "'reasoning'",
     ),
-    # finish_reason is surfaced on every reply, so it is validated with or without a schema:
-    # a string or null only, never dropped silently as None.
     *(
         _case(
             f"finish_reason-{json.dumps(value)}-{kind}",
@@ -232,9 +212,6 @@ MALFORMED_COMPLETIONS = [
 
 @pytest.mark.parametrize("payload, schema, fragment", MALFORMED_COMPLETIONS)
 def test_malformed_completion_is_an_llm_error(payload, schema, fragment):
-    """Kills: a wrong-shaped completion escaping as TypeError/AttributeError, a list or int
-    ``content`` slipping into LLMReply.content (with or without a schema), a non-object usage,
-    a non-string reasoning silently becoming None."""
     client = _client(lambda request: httpx.Response(200, json=payload), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.chat(MESSAGES, json_schema=schema)
@@ -251,9 +228,6 @@ def test_absent_or_empty_usage_is_an_empty_dict(extra):
     assert client.chat(MESSAGES).usage == {}
 
 
-# NaN, Infinity and 1e400 cannot be built with httpx's strict ``json=`` encoder (it refuses
-# out-of-range floats), so these usage objects are written as raw JSON text; Python's json
-# parses all three. The bad value goes either into a count or into reasoning_tokens.
 BAD_USAGE_VALUES = ["NaN", "Infinity", "1e400", '"12"', "true"]
 USAGE_PLACES = {
     "count": '{"prompt_tokens": %s}',
@@ -266,8 +240,6 @@ USAGE_PLACES = {
 )
 @pytest.mark.parametrize("place", sorted(USAGE_PLACES))
 def test_usage_values_that_are_not_finite_numbers_are_an_llm_error(place, literal):
-    """Kills: int() choking on NaN or Infinity (ValueError/OverflowError escaping chat()), a
-    string count skipped silently, a bool counted as 1; for the counts and reasoning_tokens."""
     usage = USAGE_PLACES[place] % literal
     body = ('{"choices": [{"message": {"content": "x"}}], "usage": ' + usage + "}").encode()
     client = _client(lambda request: httpx.Response(200, content=body), api_key=KEY)
@@ -277,10 +249,6 @@ def test_usage_values_that_are_not_finite_numbers_are_an_llm_error(place, litera
 
 
 def test_usage_counts_are_ints_and_detail_blocks_are_skipped():
-    """What the finite-number check must keep accepting: int and whole-float counts (always
-    returned as int), an int too large for a float (math.isfinite overflows on it, so it
-    must only be applied to floats), and null or object-valued detail blocks (the brief's
-    own fixture has completion_tokens_details as an object)."""
     usage = {
         "prompt_tokens": 7,
         "completion_tokens": 5.0,
@@ -301,17 +269,10 @@ def test_usage_counts_are_ints_and_detail_blocks_are_skipped():
     assert {type(count) for count in reply_usage.values()} == {int}  # 5.0 == 5, so check types
 
 
-# ---- a pathologically nested body or content: RecursionError is not an LLMError by itself -------
-
-# Parses to nothing, but the decoder recurses once per bracket. Far deeper than any platform's
-# limit (about 17k levels on Python 3.14.2 / Windows), so the RecursionError branch is reached
-# everywhere, not only where the stack happens to be small.
 NESTED = "[" * 1_000_000
 
 
 def test_a_pathologically_nested_200_body_is_an_llm_error():
-    """Kills: RecursionError escaping ``response.json()`` (it is not a ValueError), so a hostile
-    or broken server could crash the caller instead of failing as an LLMError."""
     client = _client(lambda request: httpx.Response(200, content=NESTED.encode()), api_key=KEY)
     with pytest.raises(LLMError) as info:
         client.models()
@@ -330,11 +291,7 @@ def test_pathologically_nested_schema_content_is_an_output_error_carrying_the_ra
 
 
 def test_a_malformed_completion_too_deep_to_print_is_still_an_llm_error(monkeypatch):
-    """Kills: RecursionError escaping the excerpt of the "malformed completion" message.
-    ``json.loads`` accepts nesting that ``json.dumps`` refuses (on Python 3.14.2 / Windows the
-    decoder takes about 17k levels and the encoder fewer), so printing a body the decoder took
-    can itself raise. The body is built in memory, far deeper than any platform's encoder limit,
-    because the depth the decoder takes is platform-bound."""
+    """Kills: RecursionError escaping the excerpt of the "malformed completion" message."""
     deep: list = []
     for _ in range(200_000):
         deep = [deep]
@@ -343,9 +300,6 @@ def test_a_malformed_completion_too_deep_to_print_is_still_an_llm_error(monkeypa
     with pytest.raises(LLMError) as info:
         _client(lambda request: httpx.Response(500)).chat(MESSAGES)
     assert "malformed completion" in str(info.value)
-
-
-# ---- finish_reason: why generation ended -----------------------------------------------------
 
 
 @pytest.mark.parametrize("reason", ["stop", "length", "content_filter", "tool_calls", "abort"])
@@ -388,8 +342,6 @@ def test_complete_json_is_parsed_whatever_the_finish_reason_says():
     ids=["truncated-json", "budget-spent-in-reasoning"],
 )
 def test_unparsable_content_cut_off_at_length_says_so(content):
-    """The first thing a caller must tell apart: the reply was cut off (raise max_tokens) or the
-    model wrote invalid JSON. Kills: a bare "content is not valid JSON" for both."""
     client = _client(
         lambda request: httpx.Response(200, json=_completion(content, finish_reason="length")),
         api_key=KEY,
@@ -417,8 +369,6 @@ def test_another_unusual_finish_reason_is_named_without_claiming_a_cut_off():
 
 @pytest.mark.parametrize("reason", ["stop", None], ids=["stop", "unknown"])
 def test_invalid_json_after_a_normal_or_unknown_ending_does_not_blame_the_ending(reason):
-    """The model finished and still wrote invalid JSON (or the server said nothing): the message
-    must not send the caller after the token budget."""
     client = _client(
         lambda request: httpx.Response(200, json=_completion("not json", finish_reason=reason)),
         api_key=KEY,

@@ -1,9 +1,4 @@
-"""Categorize current snapshot candidates by question text patterns.
-
-Pulls every market that would currently survive get_snapshot_candidates(),
-classifies each by keyword (first match wins), and prints counts + average
-volume/liquidity per category.
-"""
+"""Categorize current snapshot candidates by question text patterns."""
 
 from __future__ import annotations
 

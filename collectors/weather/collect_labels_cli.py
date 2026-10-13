@@ -1,10 +1,4 @@
-"""Collect NWS CLI daily climate labels for Polymarket US weather markets.
-
-Two paths:
-  - live: scrape the latest CLI text product (``collect_station``)
-  - history: IEM's CLI JSON archive, one request per station-year
-    (``backfill_station_years``) — settlement-quality truth for training
-"""
+"""Collect NWS CLI daily climate labels for Polymarket US weather markets."""
 
 from __future__ import annotations
 
@@ -39,12 +33,10 @@ CLI_PRODUCTS = {
 MAX_RE = re.compile(r"MAXIMUM\s+(-?\d{1,3})", re.I)
 MIN_RE = re.compile(r"MINIMUM\s+(-?\d{1,3})", re.I)
 
-# IEM CLI JSON archive: ?station=KLGA&year=2024 returns every day of the year.
 IEM_CLI_JSON = "https://mesonet.agron.iastate.edu/json/cli.py"
 IEM_TEXT_BASE = "https://mesonet.agron.iastate.edu"
 USER_AGENT = "polymarket-trader/0.1 (+collectors.weather.collect_labels_cli)"
 CLI_HISTORY_SOURCE = "iem_cli"
-# CLI reports whole degrees F; sanity floor/ceiling shared with the WU path.
 CLI_MIN_F, CLI_MAX_F = -80.0, 130.0
 
 
@@ -191,10 +183,7 @@ def fetch_cli_year(station_icao: str, year: int, timeout: float = 60.0) -> list[
 def parse_cli_records(
     results: list[dict[str, Any]], station_icao: str
 ) -> list[dict[str, Any]]:
-    """Flatten CLI records to (valid_local_date, metric, value, url) rows.
-
-    Guards against IEM echoing a different station than requested.
-    """
+    """Flatten CLI records to (valid_local_date, metric, value, url) rows."""
     want = station_icao.upper()
     rows: list[dict[str, Any]] = []
     for rec in results:
@@ -240,7 +229,7 @@ def upsert_cli_history_labels(
             float(r["label_value"]),
             label_source,
             fetched,
-            1,  # a published CLI report means the day is closed out
+            1,
             1 if usable_for_training(r["valid_local_date"], True) else 0,
             r["resolution_url"],
         )

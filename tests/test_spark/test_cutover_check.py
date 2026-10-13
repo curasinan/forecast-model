@@ -27,7 +27,6 @@ AFTER_EARLY = "2026-10-20T16:05:00+00:00"
 AFTER_MID = "2026-10-20T16:10:00+00:00"
 SWEEP_AT = "2026-10-20T16:15:00+00:00"
 AFTER = "2026-10-20T16:20:00+00:00"
-# Clearly synthetic. A real ledger line carries the paper account id, and no run may print it.
 ACCOUNT = "DU0000000"
 COUNTS = {"examined": 3, "filled": 0, "partially_filled": 0, "cancelled": 0, "unchanged": 3,
           "unmatched_venue_orders": 0}
@@ -49,9 +48,6 @@ def _epoch(ts: str) -> float:
 
 
 def _compared(before: str, after: str, between: int = 0) -> str:
-    """What the sync line ends with: the two runs it compared, by their UTC times, and the
-    number of not-ok runs between them in the ledger."""
-
     def utc(ts: str) -> str:
         return f"{datetime.fromisoformat(ts).astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
 
@@ -60,10 +56,7 @@ def _compared(before: str, after: str, between: int = 0) -> str:
 
 
 def _systemd(status: int, exited: str | None, raw: str | None = None, calls: list | None = None):
-    """A stand-in for subprocess.run that answers `systemctl show ibkr-health.service ...`.
-
-    `raw` replaces the exit-time text outright; `calls` collects (argv, kwargs) per call.
-    """
+    """A stand-in for subprocess.run that answers `systemctl show ibkr-health.service ...`."""
 
     def run(cmd, **kwargs):
         if calls is not None:
@@ -80,10 +73,7 @@ def _systemd(status: int, exited: str | None, raw: str | None = None, calls: lis
 
 
 def _write_sweep(root: Path, stamp: str, rows: int = 2400, mtime: str | None = None) -> Path:
-    """A sweep file named for `stamp` the way the recorder names it (UTC date and time).
-
-    Its mtime is `mtime`, by default the same moment: a file written when its name says.
-    """
+    """A sweep file named for `stamp` the way the recorder names it (UTC date and time)."""
     when = datetime.fromisoformat(stamp)
     path = (root / "ibkr_ticks" / "quotes" / f"date={when:%Y-%m-%d}"
             / f"quotes-{when:%H%M%S}Z.parquet")
@@ -122,7 +112,6 @@ def site(tmp_path):
     ledger.write_text(_sync(BEFORE) + "\n" + _sync(AFTER) + "\n", encoding="utf-8")
     repo = tmp_path / "repo"
     (repo / "logs").mkdir(parents=True)
-    # A healthy run writes nothing here; the DOWN line is from before the cutover.
     health = repo / "logs" / "ibkr_health.log"
     health.write_text(
         f"{BEFORE} DOWN ibkr recorder DOWN: unexpected disconnect\n"
@@ -170,17 +159,11 @@ def test_a_good_cutover_passes_every_line(site, capsys):
     assert [line.split()[0] for line in lines[:4]] == ["PASS"] * 4
     assert [line.split()[1] for line in lines[:4]] == ["sweep:", "health:", "sync:", "parity:"]
     assert lines[-1] == "CUTOVER GATE: PASS"
-    # compare_json's own output follows the parity line, every line indented four spaces:
-    # the leaf count, the two machines it compared, and its verdict.
     shown = lines[4:-1]
     assert shown and all(line.startswith("    ") for line in shown), out
     assert shown[0].startswith("    numeric leaves compared: 1200;")
-    # The first --parity payload is the Zenbook's (left), the second the Spark's (right).
     assert "    machines: left py3.14.2 vs right aarch64/py3.14.2" in shown
     assert shown[-1] == "    PARITY OK"
-
-
-# ---------------------------------------------------------------------------------- sweep
 
 
 def test_a_sweep_named_for_a_time_before_the_cutover_does_not_count(site, capsys):
@@ -193,7 +176,6 @@ def test_a_sweep_named_for_a_time_before_the_cutover_does_not_count(site, capsys
 
 
 def test_a_sweep_is_dated_by_its_own_name_not_by_when_it_was_copied(site, capsys):
-    # A root the Zenbook's files were copied into: the copies are all freshly modified.
     site["sweep"].unlink()
     _write_sweep(site["root"], BEFORE, mtime=AFTER)
     rc, out = _run(site, capsys)
@@ -253,14 +235,11 @@ def test_a_sweep_newer_in_a_later_date_partition_is_the_newest(site, capsys):
 
 def test_an_unreadable_newest_sweep_fails_its_line_and_hides_nothing(site, capsys):
     torn = site["sweep"].with_name("quotes-171500Z.parquet")
-    torn.write_bytes(b"")  # a zero-byte sweep: the newest by name and by mtime
+    torn.write_bytes(b"")
     os.utime(torn, (_epoch(AFTER), _epoch(AFTER)))
     rc, out = _run(site, capsys)
     assert rc == 1
     _only_failed(out, "sweep", "could not be evaluated (ArrowInvalid)")
-
-
-# --------------------------------------------------------------------------------- health
 
 
 def test_a_probe_that_found_a_problem_fails_the_gate_and_says_which(site, capsys):
@@ -272,7 +251,6 @@ def test_a_probe_that_found_a_problem_fails_the_gate_and_says_which(site, capsys
 
 
 def test_a_problem_from_before_the_cutover_is_not_quoted_as_the_reason(site, capsys):
-    # The fixture's log holds a DOWN line from before the cutover and no problem since.
     rc, out = _run(site, capsys, systemd=_systemd(1, AFTER))
     assert rc == 1
     assert "FAIL health: the probe's last exit status is 1" in out
@@ -370,9 +348,6 @@ def test_a_log_line_whose_time_cannot_be_read_does_not_count(site, capsys):
     assert "FAIL health: no delivered test alert since the cutover" in out
 
 
-# ----------------------------------------------------------------------------------- sync
-
-
 def test_the_sync_must_have_run_since_the_cutover(site, capsys):
     _ledger(site, _sync(BEFORE))
     rc, out = _run(site, capsys)
@@ -387,7 +362,6 @@ def test_the_newest_sync_since_the_cutover_must_be_ok(site, capsys):
     assert ("FAIL sync: the newest sync run since the cutover (2026-10-20T16:20:00Z): "
             "ok is false") in out.splitlines()
 
-    # Only the newest run counts: a failed first attempt that a rerun made good does not.
     _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY, ok=False), _sync(AFTER))
     rc, out = _run(site, capsys)
     assert rc == 0, out
@@ -395,9 +369,6 @@ def test_the_newest_sync_since_the_cutover_must_be_ok(site, capsys):
 
 def test_a_newest_run_that_is_not_ok_fails_even_when_the_first_run_carried_the_book_over(
         site, capsys):
-    # The identity is judged on the first ok run since the cutover, and that one is fine here;
-    # "the newest run is ok" is its own condition of the line, with its own message naming
-    # the run (by the UTC time of its record, never by the record).
     _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY), _sync(AFTER, ok=False))
     rc, out = _run(site, capsys)
     assert rc == 1
@@ -407,7 +378,6 @@ def test_a_newest_run_that_is_not_ok_fails_even_when_the_first_run_carried_the_b
 
 def test_the_run_named_as_not_ok_is_named_in_utc_whatever_offset_its_record_carries(
         site, capsys):
-    # 18:20+02:00 is 16:20Z, after the cutover; the name printed is the UTC time.
     _ledger(site, _sync(BEFORE), _sync(AFTER_EARLY), _sync("2026-10-20T18:20:00+02:00", ok=False))
     rc, out = _run(site, capsys)
     assert rc == 1
@@ -438,10 +408,6 @@ def test_without_an_ok_run_before_the_cutover_there_is_no_book_to_compare(site, 
 def test_an_untouched_book_carries_over(site, capsys):
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    # The derivation of the identity is printed with the verdict, and then the two runs it
-    # compared (the Zenbook's last ok run and the Spark's first, by UTC time) with the number
-    # of not-ok runs between them: no count differs between the two runs, so there is no
-    # "counts that differ" clause.
     assert ("PASS sync: book carried over "
             "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled) "
             "(before 2026-10-19T14:30:00Z, after 2026-10-20T16:20:00Z, 0 not-ok runs between)"
@@ -449,8 +415,6 @@ def test_an_untouched_book_carries_over(site, capsys):
 
 
 def test_a_fill_in_the_zenbooks_last_run_does_not_fail_the_sync(site, capsys):
-    # The counts are per-run transitions, not book state: a row the Zenbook's last run
-    # concluded filled is not examined again, with no venue activity at all in between.
     _ledger(site,
             _sync(BEFORE, examined=3, filled=1, unchanged=2),
             _sync(AFTER, examined=2, filled=0, unchanged=2))
@@ -482,7 +446,6 @@ def test_rows_the_zenbooks_last_run_concluded_are_not_examined_again(
 
 
 def test_venue_activity_between_the_two_syncs_is_reported_not_failed(site, capsys):
-    # The brief's former failing case: one of the three rows was cancelled at the venue.
     _ledger(site, _sync(BEFORE), _sync(AFTER, unchanged=2, cancelled=1))
     rc, out = _run(site, capsys)
     assert rc == 0, out
@@ -529,8 +492,6 @@ def test_a_change_in_the_venue_orders_the_book_does_not_know_fails(site, capsys)
     _ledger(site, _sync(BEFORE), _sync(AFTER, unmatched_venue_orders=1))
     rc, out = _run(site, capsys)
     assert rc == 1
-    # The derivation goes with the verdict whichever half of the identity broke; the half
-    # that held reads as itself (3 -> 3 against an expected 3).
     _only_failed(out, "sync", "the book did not carry over: "
                               "examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled; "
                               "unmatched_venue_orders 0 -> 1" + _compared(BEFORE, AFTER))
@@ -558,18 +519,12 @@ def test_the_sync_is_judged_on_the_first_ok_run_after_and_the_last_ok_run_before
             _sync(AFTER, examined=7, unchanged=7))        # the newest run since: not judged
     rc, out = _run(site, capsys)
     assert rc == 0, out
-    # Compared: BEFORE and AFTER_MID. Between them lie two failed runs, one on each side of the
-    # cutover; the failed runs before the reference and after the first ok run are not between.
     assert ("PASS sync: book carried over "
             "(examined 3 -> 3, expected 3 = 3 - 0 filled - 0 cancelled)"
             + _compared(BEFORE, AFTER_MID, 2)) in out.splitlines()
 
 
 def test_the_book_is_judged_against_the_first_ok_run_not_the_newest(site, capsys):
-    # Ruling 20. The Spark's first sync concluded a venue fill, so its second sync examines
-    # one row fewer than its first: judged against the Zenbook's last run, the newest run
-    # breaks the identity (a false FAIL on every later run of the gate). The first run is
-    # the one that has to carry the Zenbook's book over.
     _ledger(site,
             _sync(BEFORE),
             _sync(AFTER_EARLY, examined=3, filled=1, unchanged=2),
@@ -584,8 +539,6 @@ def test_the_book_is_judged_against_the_first_ok_run_not_the_newest(site, capsys
 
 def test_a_newest_run_that_looks_right_does_not_rescue_a_first_run_that_broke_the_book(
         site, capsys):
-    # The other direction: a row appeared at the cutover (the first Spark run examined 4),
-    # and a later run that examines 3 again must not hide it.
     _ledger(site,
             _sync(BEFORE),
             _sync(AFTER_EARLY, examined=4, unchanged=4),
@@ -599,10 +552,6 @@ def test_a_newest_run_that_looks_right_does_not_rescue_a_first_run_that_broke_th
 
 def test_a_failed_run_that_concluded_rows_between_the_two_is_counted_in_the_failure(
         site, capsys):
-    # The Spark's first run failed after it had concluded a fill, and its next run, the first ok
-    # one, examines one row fewer than the Zenbook's last: the identity breaks without the book
-    # breaking. The line says which two runs it compared and that one failed run lies between
-    # them, which is what tells this FAIL from a broken book (the gate is then run again).
     _ledger(site,
             _sync(BEFORE),
             _sync(AFTER_EARLY, ok=False, examined=3, filled=1, unchanged=2,
@@ -618,8 +567,6 @@ def test_a_failed_run_that_concluded_rows_between_the_two_is_counted_in_the_fail
 
 
 def test_the_failed_runs_between_are_counted_across_the_cutover_and_only_between(site, capsys):
-    # Three failed runs: one before the reference (not between), one between the reference and
-    # the cutover and one between the cutover and the first ok run (both counted).
     _ledger(site,
             _sync(LONG_BEFORE, ok=False),
             _sync(MID_BEFORE),
@@ -649,10 +596,7 @@ def test_the_two_runs_are_named_in_utc_whatever_their_records_carry(site, capsys
 
 
 def _ledger_with_a_broken_record(site, which: str, **changes) -> None:
-    """The good BEFORE/AFTER ledger with one of the two lines changed.
-
-    A change to None removes the field, so a missing count and a wrong one share a test.
-    """
+    """The good BEFORE/AFTER ledger with one of the two lines changed."""
     record = json.loads(_sync(BEFORE if which == "before" else AFTER))
     record = {key: value for key, value in {**record, **changes}.items() if value is not None}
     lines = [json.dumps(record), _sync(AFTER)] if which == "before" else [
@@ -693,8 +637,6 @@ def test_a_partial_last_ledger_line_fails_the_sync_line_and_hides_nothing(site, 
 
 
 def test_a_torn_ledger_line_is_named_by_its_line_number_and_never_quoted(site, capsys):
-    # The 1-based number of the line in the file, blank lines counted: line 4 here, the one
-    # `sed -n 4p` prints. The lines after it are whole, and the torn one carries the account id.
     _ledger(site, "", _sync(BEFORE), "", _torn(_sync(AFTER_EARLY)), _sync(AFTER))
     rc, out = _run(site, capsys)
     assert rc == 1
@@ -729,9 +671,6 @@ def test_any_ledger_line_that_cannot_be_read_as_a_run_is_named_by_its_number(
     rc, out = _run(site, capsys)
     assert rc == 1
     _only_failed(out, "sync", f"could not be evaluated ({error} at line 2)")
-
-
-# --------------------------------------------------------------------------------- parity
 
 
 def test_a_parity_mismatch_fails_the_gate_and_shows_every_reason(site, capsys):
@@ -802,9 +741,6 @@ def test_without_the_parity_payloads_the_gate_cannot_pass(site, capsys):
     assert "FAIL parity" in out and "not checked" in out
 
 
-# ------------------------------------------------------------- a line that cannot be judged
-
-
 @pytest.mark.parametrize("name", ["sweep", "health", "sync", "parity"])
 def test_every_line_goes_through_the_guard_and_names_only_the_exception_class(
         site, capsys, monkeypatch, name):
@@ -816,9 +752,6 @@ def test_every_line_goes_through_the_guard_and_names_only_the_exception_class(
     assert rc == 1
     _only_failed(out, name, "could not be evaluated (RuntimeError)")
     assert "must not be printed" not in out
-
-
-# ------------------------------------------------------------------------ --since, and the program
 
 
 @pytest.mark.parametrize("since", ["2031-07-04 09:08:07", "2031-07-04T09:08:07", "2031-07-04",
@@ -852,8 +785,6 @@ def test_a_since_is_read_with_its_own_utc_offset(site, capsys, since, passes):
 def test_what_happened_at_the_very_second_of_the_cutover_counts(site, capsys):
     site["sweep"].unlink()
     _write_sweep(site["root"], SINCE)
-    # The run at the very second is the one "after": it is judged against the run before it,
-    # not against itself (which would not hold: it examined 2 rows after concluding 1 fill).
     _ledger(site,
             _sync(BEFORE, examined=3, filled=1, unchanged=2),
             _sync(SINCE, examined=2, filled=1, unchanged=1))

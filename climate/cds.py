@@ -1,38 +1,4 @@
-"""Thin, cache-aware wrappers over cdsapi for Copernicus CDS retrievals.
-
-Datasets covered:
-  * ``seasonal-monthly-single-levels`` -- SEAS5 seasonal forecast monthly
-    statistics (per-ensemble-member monthly means: the EMOS input).
-  * ``reanalysis-era5-single-levels-monthly-means`` -- ERA5 monthly-mean
-    reference series.
-
-SEAS5 ``system`` choice (determined EMPIRICALLY, not guessed)
--------------------------------------------------------------
-Probed the public CDS catalogue constraints for
-``seasonal-monthly-single-levels`` on 2026-08-18 (endpoint
-``/api/catalogue/v1/collections/seasonal-monthly-single-levels`` ->
-constraints JSON on the CDS object store). For ``originating_centre:
-ecmwf`` the available systems and their most recent init months are:
-
-  * system ``4``  -> ends 2017-10 (SEAS4, retired)
-  * system ``5``  -> ends 2022-10 (original SEAS5 stream)
-  * system ``51`` -> 1981-01 .. 2026-08 (current month), all 12 init
-    months per year, leadtime_month 1-6, includes ``2m_temperature`` +
-    ``monthly_mean``.
-
-System ``51`` (SEAS5.1, operational since Nov 2022, with the full
-re-published 1981+ hindcast/archive) is therefore the only system with
-current init dates and it also covers the whole hindcast range, so both
-live pilots and hindcast backfills use ``SEAS5_SYSTEM = "51"``.
-
-Credentials: ``cdsapi.Client()`` reads ``~/.cdsapirc`` itself. This
-module never reads, prints, or logs that file.
-
-Data root: kept OUTSIDE the OneDrive-synced repo (cloud sync corrupts
-actively-written SQLite/parquet files -- see ``weather/paths.py`` for the
-original rationale). Default ``%LOCALAPPDATA%/climate_data``, override
-via the ``CLIMATE_DATA_ROOT`` environment variable.
-"""
+"""Thin, cache-aware wrappers over cdsapi for Copernicus CDS retrievals."""
 
 from __future__ import annotations
 
@@ -48,26 +14,16 @@ log = logging.getLogger("climate.cds")
 
 SEAS5_DATASET = "seasonal-monthly-single-levels"
 ERA5_MONTHLY_DATASET = "reanalysis-era5-single-levels-monthly-means"
-SEAS5_SYSTEM = "51"  # see module docstring: empirical, from CDS catalogue constraints
+SEAS5_SYSTEM = "51"
 DEFAULT_GRID = "1.0/1.0"
 
 
 class CdsSoftTimeout(TimeoutError):
-    """Soft timeout: the CDS request is still queued/running server-side.
-
-    The request was NOT cancelled -- CDS keeps processing it, and because
-    :func:`fetch` is idempotent a later rerun resumes cheaply (CDS caches
-    completed results server-side for a while).
-    """
+    """Soft timeout: the CDS request is still queued/running server-side."""
 
 
 def climate_data_root(override: str | Path | None = None) -> Path:
-    """Return the local (non-OneDrive) climate data directory.
-
-    Thin wrapper over ``climate.paths.data_root`` (single source of truth for
-    the root; it also creates labels/ and raw/) that additionally guarantees
-    the download subdirectories this module writes.
-    """
+    """Return the local (non-OneDrive) climate data directory."""
     from climate.paths import data_root
 
     root = data_root(override)
@@ -87,11 +43,7 @@ def build_seas5_request(
     leadtime_months: Iterable[int | str],
     grid: str = DEFAULT_GRID,
 ) -> dict:
-    """Request dict for SEAS5 per-member monthly-mean 2m temperature.
-
-    ``product_type='monthly_mean'`` is the per-ensemble-member monthly
-    mean (one field per member) -- the EMOS input. NOT ``ensemble_mean``.
-    """
+    """Request dict for SEAS5 per-member monthly-mean 2m temperature."""
     return {
         "originating_centre": "ecmwf",
         "system": SEAS5_SYSTEM,
@@ -109,12 +61,7 @@ def build_era5_monthly_request(
     years: Iterable[int | str],
     grid: str = DEFAULT_GRID,
 ) -> dict:
-    """Request dict for ERA5 monthly-averaged-reanalysis 2m temperature.
-
-    ``time='00:00'`` is required by the dataset form for
-    ``monthly_averaged_reanalysis`` (the field is a monthly mean; the
-    hour is a formality of the API).
-    """
+    """Request dict for ERA5 monthly-averaged-reanalysis 2m temperature."""
     return {
         "product_type": "monthly_averaged_reanalysis",
         "variable": "2m_temperature",
@@ -130,8 +77,6 @@ def _make_client():
     """Lazy cdsapi client factory (kept separate so tests can monkeypatch)."""
     import cdsapi  # imported lazily: tests never need it
 
-    # quiet=False so CDS queue status lines reach the log; cdsapi reads
-    # ~/.cdsapirc itself -- never read or print that file here.
     return cdsapi.Client(quiet=False, progress=False)
 
 
@@ -141,18 +86,7 @@ def fetch(
     out_path: str | Path,
     soft_timeout: float | None = None,
 ) -> Path:
-    """Download ``dataset``/``request`` to ``out_path`` (idempotent).
-
-    * Skips entirely (no cdsapi import, no network) if ``out_path``
-      already exists and is non-empty.
-    * Downloads to a ``.part`` sibling and renames on success, so a
-      partial download never poisons the cache.
-    * ``soft_timeout`` (seconds, default None = wait forever): CDS
-      queueing means a request can take minutes-to-hours. On expiry a
-      :class:`CdsSoftTimeout` is raised; the server-side request keeps
-      running and a later rerun resumes.
-    * cdsapi exceptions are logged loudly and re-raised unchanged.
-    """
+    """Download ``dataset``/``request`` to ``out_path`` (idempotent)."""
     out_path = Path(out_path)
     if out_path.exists() and out_path.stat().st_size > 0:
         log.info("cache hit, skipping fetch: %s (%d bytes)", out_path, out_path.stat().st_size)

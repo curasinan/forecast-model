@@ -1,9 +1,4 @@
-"""Backfill Open-Meteo Previous Runs forecasts into forecast_history_daily.
-
-Research-only backfill (requires OPEN_METEO_ALLOW_NONCOMMERCIAL=true, an API
-key, or a self-hosted base URL). Raw payloads are cached under
-<data_root>/raw/previous_runs/ so re-runs are free and idempotent.
-"""
+"""Backfill Open-Meteo Previous Runs forecasts into forecast_history_daily."""
 
 from __future__ import annotations
 
@@ -62,11 +57,7 @@ def chunk_dates(start: str, end: str, chunk_days: int = 90) -> list[tuple[str, s
 
 
 def fetch_window(chunk_start: str, chunk_end: str) -> tuple[str, str]:
-    """Expand a requested chunk by 1 UTC day on each side.
-
-    A UTC-day window truncates boundary local days for every timezone
-    (max offset 14h < 24h); the overlap makes their aggregation complete.
-    """
+    """Expand a requested chunk by 1 UTC day on each side."""
     a = (date.fromisoformat(chunk_start) - timedelta(days=1)).isoformat()
     b = (date.fromisoformat(chunk_end) + timedelta(days=1)).isoformat()
     return a, b
@@ -80,8 +71,6 @@ def raw_cache_path(
     fetch_end: str,
     temperature_unit: str,
 ) -> Path:
-    # Unit is part of the key: a station's unit_default changing must not
-    # relabel cached old-unit payloads as the new unit.
     return (
         root
         / "raw"
@@ -214,8 +203,6 @@ def collect_station_history(
                 timezone_name=station.timezone,
                 temperature_unit=temperature_unit,
             )
-            # Boundary local days outside the requested range are partial by
-            # construction — never store them (they'd be healed elsewhere).
             df = df[(df["valid_local_date"] >= start) & (df["valid_local_date"] <= end)]
             n = store_history_rows(path, df)
             total += n

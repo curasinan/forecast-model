@@ -1,18 +1,3 @@
-# RETIRED 2026-08-23 — Polymarket collectors are no longer scheduled.
-#
-# This script used to register collect_markets / collect_snapshots /
-# weather_collect_cycle under \Polymarket\. Those jobs hit Gamma/CLOB.
-# The trading venue is IBKR ForecastEx (climate lane).
-#
-# Running this script now UNREGISTERS the old Polymarket tasks (if present)
-# and prints where to find the IBKR jobs. It does not create new PM tasks.
-#
-#   cd C:\Users\asus\OneDrive\Desktop\new_work
-#   .\scripts\scheduling\register_tasks_windows.ps1
-#
-# IBKR recorder:  .\scripts\scheduling\register_ibkr_tasks.ps1  (elevated)
-# Explicit PM uninstall: .\scripts\scheduling\unregister_polymarket_tasks.ps1
-
 param(
     [string]$TaskPath = "\Polymarket\"
 )

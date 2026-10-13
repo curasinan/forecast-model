@@ -1,13 +1,4 @@
-"""Manifest the operational files under a quant-data root (sha256, size, mtime).
-
-    python scripts/spark/live_manifest.py --root ~/quant_data --out ~/quant_data_snapshot/parity/manifest_before.json
-
-Taken before and after anything that reads the LIVE root (a push, a refit)
-and compared with a plain `diff`: identical files mean the paper book, the
-ledgers and the operational model were not touched. Read-only. The recorder
-heartbeat's mtime is printed for information but not written, because it
-legitimately changes every sweep.
-"""
+"""Manifest the operational files under a quant-data root (sha256, size, mtime)."""
 
 from __future__ import annotations
 

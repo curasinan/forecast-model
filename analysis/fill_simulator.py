@@ -1,49 +1,4 @@
-"""Maker-fill simulator — did resting limit orders actually fill, and at what cost?
-
-A **measurement tool, not a trading system**. It replays synthetic resting limit
-orders against our recorded order-book snapshots and answers one question per price
-offset: when we post a limit order at a price and time, does the market subsequently
-trade through that price, and what is the adverse-selection cost of the fills we get?
-The verdict it produces tells us whether Phase-4's 0.005 half-spread buffer
-(``decision/edge_calculator.py``) was optimistic, realistic, or conservative.
-
-Method (frozen; see the plan for the full rationale):
-
-* An order is ``(market_id, side, limit_price P, post_time, 6h window)``.
-  ``side_sign = +1`` for BUY, ``-1`` for SELL. ``P = mid_0 - side_sign * delta``
-  (a buy rests *below* mid, a sell *above*), where ``mid_0`` is the midpoint at
-  ``post_time`` and ``delta`` the offset (0.01 or 0.02).
-* **Fill** (conservative, from the book): a BUY fills at the first snapshot strictly
-  after ``post_time`` within the window where ``best_ask <= P``; a SELL where
-  ``best_bid >= P``. The fill is booked at **P** (the limit) — a resting order filled
-  by incoming flow trades at your posted price under price-time priority, never at the
-  better touch.
-* **Adverse selection**, single consistent decomposition anchored at ``mid_0``
-  (exactly observed, immune to fill-instant sampling lag)::
-
-      capture      = delta                              # the offset posted
-      drift        = side_sign * (mid_end - mid_0)      # negative = moved against you
-      adverse_cost = -drift                             # positive = adverse, in cents
-      net_oneleg   = capture + drift = side_sign*(mid_end - P)   # entry-only mark
-
-  ``net_roundtrip = net_oneleg - 0.5*spread_end`` adds an exit half-spread (a real
-  unwind is not free). The *test* for systematic adverse selection compares drift
-  among FILLED orders to the unconditional drift of all orders at that offset.
-* **Data-quality gating** (our snapshots are 15-min-median but 13% of gaps exceed
-  60 min): ``mid_end`` is the two-sided midpoint nearest ``post_time+6h`` within
-  ±30 min (else the order has no mark-out and is excluded from cost stats); a window
-  is ``dense`` iff every gap inside it is ≤60 min. Fill rate is reported over all
-  orders (a lower bound — gaps can hide through-trades) and over the dense subset.
-
-Read-only against the DB except for writing results.
-
-Run:
-    python -m analysis.fill_simulator [--limit N] [--min-snapshots N]
-
-Outputs:
-    analysis/results/fill_simulation.json          (config, funnel, per-offset blocks)
-    analysis/results/fill_simulation_by_offset.csv (one row per offset)
-"""
+"""Maker-fill simulator — did resting limit orders actually fill, and at what cost?"""
 
 from __future__ import annotations
 
@@ -67,9 +22,7 @@ RESULTS_DIR = REPO_ROOT / "analysis" / "results"
 JSON_PATH = RESULTS_DIR / "fill_simulation.json"
 CSV_PATH = RESULTS_DIR / "fill_simulation_by_offset.csv"
 
-# --------------------------------------------------------------------------- #
 # Frozen parameters
-# --------------------------------------------------------------------------- #
 
 HOLDING_WINDOW_HOURS = 6
 POST_SPACING_HOURS = 12
@@ -78,15 +31,13 @@ MID_RANGE: tuple[float, float] = (0.05, 0.95)  # excludes pinned books; no clamp
 MARKOUT_TOLERANCE_MIN = 30
 MAX_INTRA_WINDOW_GAP_MIN = 60
 PHASE4_BUFFER = 0.005
-REALISTIC_BAND = 0.0005     # |adverse_cost - buffer| within this reads as "realistic"
+REALISTIC_BAND = 0.0005
 MIN_SNAPSHOTS = 200
 
 log = logging.getLogger("analysis.fill_simulator")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -107,14 +58,6 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
-# Pure core (DB-free — tested on synthetic sequences)
-#
-# A "snapshot" is a dict: {"ts": tz-aware datetime, "best_bid", "best_ask",
-# "midpoint", "spread"} (any book field may be None). Lists are time-sorted asc.
-# --------------------------------------------------------------------------- #
-
-
 def _nearest_midpoint(
     snapshots: list[dict],
     ts_list: list[datetime],
@@ -126,7 +69,6 @@ def _nearest_midpoint(
     best_gap: float | None = None
     mid: float | None = None
     spr: float | None = None
-    # forward from lo, then backward from lo-1; stop each side once outside tol.
     i = lo
     while i < len(ts_list):
         gap = (ts_list[i] - target).total_seconds()
@@ -156,11 +98,7 @@ def simulate_order(
     markout_tolerance_min: int = MARKOUT_TOLERANCE_MIN,
     max_gap_min: int = MAX_INTRA_WINDOW_GAP_MIN,
 ) -> dict:
-    """Simulate one resting limit order posted at ``snapshots[post_idx]``.
-
-    Returns a flat dict with fill outcome, mark-out drift, and net figures. All
-    prices are booked conservatively; see the module docstring for the sign math.
-    """
+    """Simulate one resting limit order posted at ``snapshots[post_idx]``."""
     if ts_list is None:
         ts_list = [s["ts"] for s in snapshots]
 
@@ -170,7 +108,6 @@ def simulate_order(
     limit_price = mid_0 - side_sign * delta
     window_end = post_ts + timedelta(hours=window_hours)
 
-    # ---- forward scan: fill detection + window density ------------------- #
     filled = False
     time_to_fill_min: float | None = None
     fill_price: float | None = None
@@ -206,7 +143,6 @@ def simulate_order(
         max_gap = max((b - a).total_seconds() / 60.0 for a, b in zip(times, times[1:]))
         dense = max_gap <= max_gap_min
 
-    # ---- mark-out at window end ------------------------------------------ #
     mid_end, spread_end = _nearest_midpoint(
         snapshots, ts_list, window_end, markout_tolerance_min * 60.0
     )
@@ -295,9 +231,7 @@ def aggregate_offset(orders: list[dict]) -> dict:
     }
 
 
-# --------------------------------------------------------------------------- #
 # DB layer + order generation
-# --------------------------------------------------------------------------- #
 
 
 def load_market_snapshots(conn: sqlite3.Connection, market_id: str) -> list[dict]:
@@ -325,11 +259,7 @@ def load_market_snapshots(conn: sqlite3.Connection, market_id: str) -> list[dict
 
 
 def generate_orders_for_market(snaps: list[dict]) -> tuple[list[dict], dict]:
-    """Post an order-set every 12h at two-sided, unpinned snapshots with forward data.
-
-    Returns (orders, stats) where stats counts post-times kept and dropped so the
-    funnel can make survivorship visible rather than silent.
-    """
+    """Post an order-set every 12h at two-sided, unpinned snapshots with forward data."""
     ts_list = [s["ts"] for s in snaps]
     orders: list[dict] = []
     lo, hi = MID_RANGE
@@ -369,9 +299,7 @@ def generate_orders_for_market(snaps: list[dict]) -> tuple[list[dict], dict]:
     return orders, stats
 
 
-# --------------------------------------------------------------------------- #
 # Study
-# --------------------------------------------------------------------------- #
 
 
 def _fmt(value: float | None, spec: str = "+.4f") -> str:
@@ -431,7 +359,6 @@ def run_simulation(
     if not all_orders:
         raise RuntimeError("no orders generated — cohort had no usable post-times")
 
-    # ---- per-offset aggregation ------------------------------------------ #
     by_offset: list[dict] = []
     log.info("Per-offset results (fill rate | time-to-fill | adverse cost vs buffer %.3f):",
              PHASE4_BUFFER)
@@ -458,7 +385,6 @@ def run_simulation(
                 _fmt(row["adverse_selection"]), row["buffer_verdict"],
             )
 
-    # ---- headline verdict ------------------------------------------------- #
     costed = [r for r in by_offset if r["avg_adverse_cost"] is not None]
     worst = max(costed, key=lambda r: r["avg_adverse_cost"]) if costed else None
     any_favorable = any(

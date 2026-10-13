@@ -72,9 +72,7 @@ def test_run_paper_flags_tradeable_and_writes(tmp_path):
     assert path.exists() and "gtm_signals" in path.name
 
 
-# --------------------------------------------------------------------------- #
-# L8 (Task 3.8): run-by-run history alongside the overwritten latest file
-# --------------------------------------------------------------------------- #
+# L8: run-by-run history alongside the overwritten latest file
 
 
 def test_append_paper_history_writes_one_json_line_per_call(tmp_path):
@@ -89,10 +87,6 @@ def test_append_paper_history_writes_one_json_line_per_call(tmp_path):
 
 
 def test_append_paper_history_writes_each_line_in_one_write_call(tmp_path, monkeypatch):
-    """Final-review bundle B-4: the line and its newline used to go out in
-    TWO write() calls, so a crash between them left a line with no newline
-    that the NEXT run's line would be glued onto (two records corrupted).
-    One write() of the full "json + newline" string closes that window."""
     import builtins
 
     import climate.paper as paper_mod
@@ -126,8 +120,6 @@ def test_append_paper_history_writes_each_line_in_one_write_call(tmp_path, monke
 
 
 def test_append_paper_history_creates_the_paper_dir(tmp_path):
-    # No prior write_paper_payload call in this test -- the history append
-    # must create paper/ itself rather than assume it already exists.
     path = append_paper_history({"ts_utc": "2026-01-01T00:00:00Z"}, root=tmp_path)
     assert path.exists()
     assert path.parent.name == "paper"

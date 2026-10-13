@@ -1,15 +1,4 @@
-"""scripts/check_ibkr_recorder.py run as a program: what a crash exits with.
-
-CPython exits 1 on any uncaught exception, an import failure included, and the health unit
-(deploy/spark/systemd/ibkr-health.service) reads exit 1 as "found a problem and alerted": a
-probe broken by a deploy would be pinged and recorded healthy. The script turns every
-uncaught exception into exit 3, which the unit does not accept, so the probe's own failure
-leaves no ping and the external check goes late. The other tests of the probe call main()
-and never see the exit code of a crash; these run the real file in a subprocess.
-
-Every run is harmless even if the break under test did not take: scratch paths for every
-file the probe reads or writes, ALERT_METHOD=log_only, no Telegram or heartbeat variable.
-"""
+"""scripts/check_ibkr_recorder.py run as a program: what a crash exits with."""
 
 from __future__ import annotations
 
@@ -23,7 +12,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBE = REPO_ROOT / "scripts" / "check_ibkr_recorder.py"
 
-# Runs the probe as __main__ (so its hook installs) after breaking the clock main() reads.
 CRASH_IN_MAIN = """
 import datetime, runpy, sys
 
@@ -68,7 +56,6 @@ def _run(tmp_path: Path, command: list[str], **extra_env: str) -> subprocess.Com
 def test_an_import_failure_exits_3_and_leaves_a_traceback(tmp_path):
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    # monitoring.heartbeat imports requests at the top, and PYTHONPATH comes before site-packages.
     (shadow / "requests.py").write_text('raise ImportError("requests broken by the test")\n',
                                         encoding="utf-8")
     done = _run(tmp_path, [sys.executable, "-u", str(PROBE), *_scratch(tmp_path)],
@@ -76,7 +63,7 @@ def test_an_import_failure_exits_3_and_leaves_a_traceback(tmp_path):
     assert done.returncode == 3, (done.stdout, done.stderr)
     assert "Traceback (most recent call last)" in done.stderr
     assert "ImportError: requests broken by the test" in done.stderr
-    assert done.stdout == ""  # the failure was in the imports: nothing of the probe ran
+    assert done.stdout == ""
 
 
 def test_an_uncaught_exception_in_main_exits_3_and_leaves_a_traceback(tmp_path):
@@ -90,7 +77,7 @@ def test_an_uncaught_exception_in_main_exits_3_and_leaves_a_traceback(tmp_path):
 
 
 @pytest.mark.parametrize(("extra", "code"), [
-    (["--test-alert"], 0),           # delivered: ALERT_METHOD=log_only is the configured path
+    (["--test-alert"], 0),
     ([], 1),                         # no heartbeat file: a problem found, and alerted
     (["--no-such-option"], 2),       # argparse's own exit, a SystemExit and not a crash
 ])

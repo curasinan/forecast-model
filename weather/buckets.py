@@ -9,11 +9,7 @@ from scipy.stats import norm
 
 
 def truncate_whole_degree(value: float) -> int:
-    """Polymarket weather: resolve to whole degrees (truncation toward -inf for positives).
-
-    Markets describe measuring to whole degrees (e.g. 21°F). We use floor for
-    non-negative readings which matches common ASOS whole-degree reporting.
-    """
+    """Polymarket weather: resolve to whole degrees (truncation toward -inf for positives)."""
     return math.floor(value)
 
 
@@ -29,7 +25,6 @@ class Bucket:
             return False
         if self.hi is not None and t >= self.hi:
             return False
-        # When hi is exclusive continuous edge at whole+1, truncated t in [lo, hi-1]
         if self.hi is not None and self.lo is not None:
             return self.lo <= t < self.hi
         if self.lo is not None and self.hi is None:

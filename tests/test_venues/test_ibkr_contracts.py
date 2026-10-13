@@ -1,8 +1,4 @@
-"""ContractResolver cache behavior against a fabricated universe snapshot.
-
-No gateway, no real data/ file: the snapshot JSON is built in tmp_path and
-the API is a fake object with a reqContractDetails method.
-"""
+"""ContractResolver cache behavior against a fabricated universe snapshot."""
 
 from __future__ import annotations
 

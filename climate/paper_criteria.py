@@ -1,27 +1,4 @@
-"""Go-live and edge gates re-scoped for GTM (~12 independent resolutions/year).
-
-Weather's pre-registered bar (`weather/paper_criteria.py`) asked for 200
-resolved buckets in 90 paper days. That cadence is a daily city-temperature
-ladder. GTM settles once a month; 200 independent samples would take ~17
-years. This module replaces that bar with two gates:
-
-1. **Hindcast skill** (sample-rich, available now): expanding-window CRPS
-   of the GTM EMOS vs monthly trend climatology, plus interval coverage.
-   This is the model-quality gate.
-2. **Live paper** (slow): calendar time + resolved *target months*, not
-   buckets. Default 365 paper days and 12 resolved months.
-
-Edge is re-derived from the verified ForecastEx friction, not copied from
-the Polymarket weather defaults (min_edge 0.05, band 0.02-0.98):
-
-    min_edge = commission_per_contract + half_spread
-             = 0.01 + max(observed_spread, min_tick) / 2
-
-With a 1-tick book that is 0.015; we round the *floor* up to 0.02 so a
-trade must clear the commission plus a full tick of half-spread slack.
-Deep ITM/OTM quotes (price < 0.05 or > 0.95) are excluded: a 1-cent tick
-is a huge relative move there, and the audit flagged strike-ladder extremes.
-"""
+"""Go-live and edge gates re-scoped for GTM (~12 independent resolutions/year)."""
 
 from __future__ import annotations
 
@@ -40,7 +17,6 @@ from src.math.kelly import half_kelly
 # Verified 2026-08-16 (docs/venue_semantics.md). Research default only.
 DEFAULT_COMMISSION = 0.01
 DEFAULT_MIN_TICK = 0.01
-# Floor: commission + 1 tick. Observed half-spread is added on top when known.
 DEFAULT_MIN_EDGE = DEFAULT_COMMISSION + DEFAULT_MIN_TICK  # 0.02
 DEFAULT_MIN_PRICE = 0.05
 DEFAULT_MAX_PRICE = 0.95
@@ -80,12 +56,7 @@ def evaluate_hindcast_go_live(
     resolved_months: int = 0,
     require_live_paper: bool = False,
 ) -> GoLiveVerdict:
-    """Score the per-lead expanding-window summary against the climate bar.
-
-    ``require_live_paper`` is False until a paper book is actually running:
-    hindcast skill can pass on its own. Flip it True to enforce the slow
-    live-month gate as well (Step 6 paper loop).
-    """
+    """Score the per-lead expanding-window summary against the climate bar."""
     criteria = criteria or ClimateGoLiveCriteria()
     reasons: list[str] = []
     metrics: dict[str, Any] = {
@@ -118,9 +89,6 @@ def evaluate_hindcast_go_live(
         else:
             beating += 1
         if not np.isfinite(c50):
-            # M2b/L4: a NaN coverage row used to sail through silently
-            # (neither branch of the old isfinite-guarded check fired for
-            # it) -- strengthen to an explicit refusal reason instead.
             reasons.append(f"lead {lead}: cover50 is NaN (coverage could not be computed)")
         elif not (criteria.min_cover50 <= c50 <= criteria.max_cover50):
             reasons.append(
@@ -209,12 +177,7 @@ def evaluate_climate_edge(
     fee_model: FeeModel | None = None,
     suspect_quote: bool = False,
 ) -> ClimateEdgeSignal:
-    """Buy-YES view: edge = p_model - mid, EV after the flat commission.
-
-    Uses mid (not ask) because ForecastEx delayed quotes are 20-min snapshots
-    and the recorder does not guarantee the ask is actionable. Suspect or
-    missing books are never tradeable.
-    """
+    """Buy-YES view: edge = p_model - mid, EV after the flat commission."""
     gate = gate or ClimateEdgeGate()
     fee_model = fee_model or FlatCommissionFeeModel(gate.commission_per_contract)
     fee = float(fee_model.execution_cost(yes_mid if np.isfinite(yes_mid) else 0.0, 1))
@@ -284,16 +247,7 @@ def apply_edge_gate(
 
 @dataclass(frozen=True)
 class StalenessGates:
-    """Operator-approved refusal thresholds for pricing inputs (audit H2).
-
-    The weekly failure mode this guards against: a logged-out IBKR Gateway
-    leaves days-old sweep parquets and signal files sitting on disk, and
-    without an age check the paper chain happily prices -- and would
-    place GTC orders -- off them. ``require_fresh_init`` additionally
-    catches a SEAS5 fetch that was simply never re-run this month: the
-    freshest AVAILABLE init can be perfectly parseable and still be a
-    month stale.
-    """
+    """Operator-approved refusal thresholds for pricing inputs (audit H2)."""
 
     max_sweep_age_min: float = 40.0
     max_signal_age_min: float = 90.0
@@ -301,12 +255,7 @@ class StalenessGates:
 
 
 def expected_latest_init(today: date) -> str:
-    """'YYYY-MM' of the SEAS5 init an operator should expect to be freshest.
-
-    SEAS5 arrives ~the 5th-6th of each month (manual fetch); on/after the
-    7th this month's init is expected to exist, before that the previous
-    month's is still the freshest one that could possibly have landed.
-    """
+    """'YYYY-MM' of the SEAS5 init an operator should expect to be freshest."""
     year, month = today.year, today.month
     if today.day < 7:
         month -= 1
@@ -319,20 +268,7 @@ _TARGET_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def required_init_for_target(target: str, expected: str) -> str:
-    """The SEAS5 init a priced ``target`` month must have been priced off.
-
-    ``min(expected, target)`` (final-review finding C-1): SEAS5
-    ``leadtime_month=1`` IS the init month (``climate/dataset.py``), so a
-    target month T only ever has inits <= T. For a target at or after the
-    expected latest init month the requirement is unchanged (the expected
-    init itself); for a current/past target -- e.g. target 2026-08 checked
-    on 2026-09-10 -- the freshest init that can physically exist is T
-    itself, so demanding ``expected`` there would be unsatisfiable. This
-    stays maximally strict: nothing staler than the freshest possible init
-    passes, and neither does an init later than its own target (impossible,
-    so a data bug). A target that is not a clean ``'YYYY-MM'`` string gets
-    no relaxation at all (fail closed: ``expected`` is required).
-    """
+    """The SEAS5 init a priced ``target`` month must have been priced off."""
     if _TARGET_MONTH_RE.match(str(target)):
         return min(expected, str(target))
     return expected
@@ -346,24 +282,7 @@ def check_staleness(
     now: datetime,
     gates: StalenessGates | None = None,
 ) -> list[str]:
-    """Human-readable refusal reasons for stale pricing inputs; empty == fresh.
-
-    Each of ``sweep_ts``, ``signal_ts``, ``inits_by_target`` may be None,
-    which skips ONLY that component's check -- reserved for data that is
-    absent BY DESIGN (e.g. a caller that has no signal-file timestamp to
-    offer at all). A caller that HAS the data must never pass None for it:
-    that would silently defeat the gate it is supposed to pass through.
-    Both paper entrypoints (``scripts/run_gtm_paper.py``,
-    ``scripts/run_ibkr_paper.py``) always have every input they call this
-    with, so they never take that skip path in practice.
-
-    ``inits_by_target`` must cover the targets actually PRICED -- the
-    ladder's target months (``climate.paper.run_paper`` builds it that way
-    via ``inits_for_priced_targets``), not every target in the training
-    frame: resolved history can never carry this month's init. Each target
-    T must carry exactly :func:`required_init_for_target` --
-    ``min(expected_latest_init(today), T)``.
-    """
+    """Human-readable refusal reasons for stale pricing inputs; empty == fresh."""
     gates = gates or StalenessGates()
     reasons: list[str] = []
     if sweep_ts is not None:

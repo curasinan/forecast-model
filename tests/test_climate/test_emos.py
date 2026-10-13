@@ -139,7 +139,6 @@ def test_monthly_climatology_does_not_see_test_year_outlier():
     clim = MonthlyClimatology().fit(frame.loc[train])
     mu, sd = clim.predict(frame.loc[test])
     assert np.all(sd > 0)
-    # Inject a 100 C spike only in the test slice; climatology was already fit.
     spiked = frame.loc[test].copy()
     spiked["y_C"] = 100.0
     mu2, _ = clim.predict(spiked)
@@ -155,7 +154,6 @@ def test_trend_climatology_captures_warming():
     mu_t, _ = tclim.predict(frame.loc[test])
     mu_c, _ = clim.predict(frame.loc[test])
     y = frame.loc[test, "y_C"].to_numpy()
-    # Trend clim should be closer to a warming test set than a frozen monthly mean.
     assert float(np.mean((mu_t - y) ** 2)) < float(np.mean((mu_c - y) ** 2))
 
 

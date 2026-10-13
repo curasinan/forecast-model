@@ -1,13 +1,4 @@
-"""Polymarket order-book snapshot collector.
-
-For every market returned by ``get_snapshot_candidates()`` this script pulls
-the current order book and last price from the Polymarket CLOB API, computes
-a handful of summary metrics, and writes one row per market to the
-``snapshots`` table in ``data/polymarket.db``.
-
-Run from the repo root:
-    python -m collectors.collect_snapshots [--limit N] [--delay-ms N]
-"""
+"""Polymarket order-book snapshot collector."""
 
 from __future__ import annotations
 
@@ -25,8 +16,6 @@ from collectors._lock import LockHeld, PidLock
 from collectors.collect_markets import DB_PATH, get_snapshot_candidates
 from src.venues.polymarket import readonly_clob_client
 
-# --- Configuration ----------------------------------------------------------
-
 CLOB_HOST = "https://clob.polymarket.com"
 POLYGON_CHAIN_ID = 137
 
@@ -38,8 +27,6 @@ DEFAULT_DELAY_MS = 100
 RATE_LIMIT_BACKOFF_SECONDS = 60
 MAX_RATE_LIMIT_RETRIES = 3
 
-# Stale-book detection: if the book says ~binary (bid≈0, ask≈1) but the
-# price endpoint reports an interior mid, treat the book as stale.
 STALE_BID_THRESHOLD = 0.02
 STALE_ASK_THRESHOLD = 0.98
 STALE_LAST_PRICE_MIN = 0.10
@@ -49,9 +36,6 @@ STALE_LAST_PRICE_MAX = 0.90
 CRITICAL_FAILURE_RATIO = 0.5
 
 log = logging.getLogger("collect_snapshots")
-
-
-# --- Logging ----------------------------------------------------------------
 
 
 def setup_logging() -> None:
@@ -72,9 +56,6 @@ def setup_logging() -> None:
     console_handler = logging.StreamHandler(stream=sys.stdout)
     console_handler.setFormatter(formatter)
     log.addHandler(console_handler)
-
-
-# --- Database ---------------------------------------------------------------
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -115,9 +96,6 @@ def _load_volume_24h_map(db_path: Path | str) -> dict[str, float | None]:
     return {str(mid): v for mid, v in rows}
 
 
-# --- Order-book math --------------------------------------------------------
-
-
 def _to_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -128,12 +106,7 @@ def _to_float(value: Any) -> float | None:
 
 
 def extract_book_metrics(book: Any) -> dict[str, float | None]:
-    """Summarize an OrderBookSummary into best/depth/mid/spread metrics.
-
-    Polymarket does not guarantee bid/ask levels are sorted in the response,
-    so we compute ``best_bid = max(bid.price)`` and ``best_ask = min(ask.price)``
-    explicitly.
-    """
+    """Summarize an OrderBookSummary into best/depth/mid/spread metrics."""
     best_bid: float | None = None
     bid_depth: float | None = None
     bids = book.bids or []
@@ -197,9 +170,6 @@ def is_stale_book(
     )
 
 
-# --- CLOB API helpers -------------------------------------------------------
-
-
 def _is_rate_limit_error(exc: BaseException) -> bool:
     if getattr(exc, "status_code", None) == 429:
         return True
@@ -212,10 +182,7 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
 
 
 def _is_missing_orderbook_error(exc: BaseException) -> bool:
-    """True if the CLOB returned 'no orderbook exists for this token' (404).
-
-    Not a real error — expected for delisted/resolved/neg-risk markets.
-    """
+    """True if the CLOB returned 'no orderbook exists for this token' (404)."""
     if getattr(exc, "status_code", None) == 404:
         return True
     msg = str(exc).lower()
@@ -260,18 +227,12 @@ def _first_token_id(clob_token_ids: str | None) -> str | None:
     return str(tokens[0])
 
 
-# --- Main collection loop ---------------------------------------------------
-
-
 def collect_snapshots(
     db_path: Path | str = DB_PATH,
     delay_ms: int = DEFAULT_DELAY_MS,
     limit: int | None = None,
 ) -> dict[str, int | float]:
-    """Snapshot every candidate market's order book into the snapshots table.
-
-    Returns a summary dict with counts of stored / stale / errored markets.
-    """
+    """Snapshot every candidate market's order book into the snapshots table."""
     client = readonly_clob_client(CLOB_HOST, chain_id=POLYGON_CHAIN_ID)
 
     candidates = get_snapshot_candidates(db_path)
@@ -313,9 +274,6 @@ def collect_snapshots(
                 time.sleep(delay_s)
         except Exception as exc:  # noqa: BLE001
             if _is_missing_orderbook_error(exc):
-                # Expected for delisted / resolved / neg-risk markets —
-                # flag the row so future runs skip it until collect_markets
-                # re-sees the market and clears the flag.
                 log.info("Market %s: no orderbook on CLOB; flagging as missing", market_id)
                 missing_orderbook_ids.append(market_id)
                 missing_book_count += 1
@@ -432,9 +390,6 @@ def collect_snapshots(
         )
 
     return summary
-
-
-# --- CLI entry point --------------------------------------------------------
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

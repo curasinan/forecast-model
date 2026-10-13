@@ -1,15 +1,4 @@
-"""Orchestrate the Phase 4 pipeline: features → model.predict →
-edge_calculator → position_sizer → risk_manager. Returns the final approved
-trade signals.
-
-This module is **read-only** with respect to ``paper_positions`` — it
-computes signals but does NOT write them anywhere. Phase 5's execution
-layer will pick up the returned DataFrame and (optionally) insert the
-filled rows.
-
-CLI:
-    python -m decision.signal_generator [--bankroll FLOAT] [--db PATH] [--model PATH]
-"""
+"""Orchestrate the Phase 4 pipeline and return the final approved trade signals."""
 
 from __future__ import annotations
 
@@ -48,9 +37,7 @@ LOG_PATH = REPO_ROOT / "logs" / "signal_generator.log"
 log = logging.getLogger("decision.signal_generator")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -72,9 +59,7 @@ def setup_logging() -> None:
     root.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 def generate_signals(
@@ -86,22 +71,13 @@ def generate_signals(
     metrics_path: Path | str = DEFAULT_METRICS_PATH,
     timestamp: datetime | None = None,
 ) -> pd.DataFrame:
-    """Compute the current set of approved trade signals.
-
-    Returns a DataFrame whose ``tradeable=True`` rows are the approved
-    signals. Non-approved rows are returned too so the caller can inspect
-    why they were rejected (via ``rejected_reason``).
-
-    If ``bankroll`` is None, derive it from the risk config + DB-stored
-    realized P&L. ``timestamp`` defaults to ``datetime.now(timezone.utc)``.
-    """
+    """Compute the current set of approved trade signals."""
     risk_cfg = load_risk_config(risk_config_path)
     effective_bankroll = bankroll if bankroll is not None else _current_bankroll(
         db_path, float(risk_cfg["starting_bankroll"]),
     )
     log.info("generate_signals: bankroll=$%.2f", effective_bankroll)
 
-    # ---- 1. Load model artifact + candidate cohort ----------------------- #
     artifact = joblib.load(model_artifact_path)
     model = artifact["model"]
     feature_cols: list[str] = artifact["feature_cols"]
@@ -111,8 +87,6 @@ def generate_signals(
         artifact.get("optimal_n_estimators"), feature_cols,
     )
 
-    # Re-import locally so model.train isn't a hard dep at module-import time
-    # (keeps decision/ pickle-loadable in restricted environments).
     from model.train import load_political_market_ids
     market_ids = load_political_market_ids(db_path)
     log.info("political cohort: %d market_ids", len(market_ids))
@@ -120,11 +94,6 @@ def generate_signals(
         log.warning("no candidate markets — returning empty signal set")
         return _empty_signals_df()
 
-    # ---- 2. Freshness guard --------------------------------------------- #
-    # Refuse to trade on stale order books (the host sleeps overnight, leaving
-    # multi-hour snapshot gaps). Drop markets whose newest snapshot is older
-    # than max_snapshot_age_minutes, and CRITICAL-warn if the WHOLE pipeline
-    # looks down (newest snapshot anywhere is stale).
     T = timestamp if timestamp is not None else datetime.now(timezone.utc)
     max_age = float(risk_cfg["max_snapshot_age_minutes"])
     fresh_ids, n_excluded, global_stale = _filter_fresh_markets(
@@ -142,14 +111,12 @@ def generate_signals(
         return _empty_signals_df()
     market_ids = fresh_ids
 
-    # ---- 3. Compute features at T_now ------------------------------------ #
     market_feats = compute_features_batch(market_ids, T, db_path)
     corr_feats = compute_correlation_features_batch(
         market_ids, T, db_path, cluster_config_path,
     )
     merged = market_feats.merge(corr_feats, on="market_id", how="left")
 
-    # Encode cluster_id with the saved mapping (only if it's actually a feature).
     if "cluster_id" in feature_cols:
         SENTINEL = "__none__"
         cluster_vals = merged["cluster_id"].fillna(SENTINEL).astype(str)
@@ -177,7 +144,6 @@ def generate_signals(
         float(np.min(y_pred)), float(np.max(y_pred)),
     )
 
-    # ---- 3. Pipeline: edges → sizing → risk ------------------------------ #
     edges = compute_edges(predictions_df, db_path=db_path)
     sized = size_positions(edges, effective_bankroll, db_path=db_path, metrics_path=metrics_path)
     final = apply_risk_limits(
@@ -197,9 +163,7 @@ def generate_signals(
     return final
 
 
-# --------------------------------------------------------------------------- #
 # Internals + CLI
-# --------------------------------------------------------------------------- #
 
 
 def _empty_signals_df() -> pd.DataFrame:
@@ -216,12 +180,7 @@ def _filter_fresh_markets(
     max_age_minutes: float,
     T: datetime,
 ) -> tuple[list[str], int, bool]:
-    """Drop markets whose newest snapshot is older than ``max_age_minutes``.
-
-    Returns ``(fresh_ids, n_excluded, global_stale)`` where ``global_stale`` is
-    True when the single most-recent snapshot across the entire DB is itself
-    older than the threshold (i.e. the whole collection pipeline looks down).
-    """
+    """Drop markets whose newest snapshot is older than ``max_age_minutes``."""
     cutoff = T - timedelta(minutes=max_age_minutes)
     conn = sqlite3.connect(db_path)
     try:
@@ -230,7 +189,6 @@ def _filter_fresh_markets(
         newest_overall = parse_iso8601(row[0]) if row and row[0] else None
         global_stale = newest_overall is None or newest_overall < cutoff
 
-        # Per-market latest timestamp, chunked to respect SQLite's variable limit.
         latest_by_id: dict[str, datetime | None] = {}
         for chunk in _chunked(market_ids, 500):
             placeholders = ",".join("?" * len(chunk))

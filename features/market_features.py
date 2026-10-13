@@ -1,22 +1,4 @@
-"""Time-series features for Polymarket markets.
-
-For any (market_id, timestamp) pair this module computes the feature vector
-described in ``compute_features`` against the snapshot history stored in
-``data/polymarket.db``. All lookups are **strictly causal** — at evaluation
-time ``T`` the function only looks at snapshots with ``timestamp <= T``,
-never the temporally closest snapshot in either direction. That's the
-property a backtest needs to avoid future-leakage.
-
-Public API:
-
-* ``compute_features(market_id, timestamp, db_path)`` -> ``dict``
-* ``compute_features_batch(market_ids, timestamp, db_path)`` -> ``pd.DataFrame``
-
-The single-market entry point is a thin wrapper over the batch implementation.
-Missing data (no snapshots in window, missing end_date, zero depth on both
-sides) propagates as ``None`` / ``NaN`` rather than raising, so callers can
-process the full candidate pool without per-market try/except.
-"""
+"""Time-series features for Polymarket markets."""
 
 from __future__ import annotations
 
@@ -39,13 +21,8 @@ LOOKBACKS_HOURS: dict[str, int] = {
     "72h": 72,
 }
 
-# Round-number price levels used by ``distance_from_round``. Spec is explicit:
-# 0.10, 0.20, ..., 0.90 -- 0.0 and 1.0 are NOT considered "round" here, so a
-# market trading at 0.99 has distance 0.09 (nearest is 0.90), not 0.01.
 ROUND_LEVELS: tuple[float, ...] = tuple(round(0.1 * k, 2) for k in range(1, 10))
 
-# Soft cap below the SQLite default ``SQLITE_MAX_VARIABLE_NUMBER`` of 999 on
-# older builds. Larger batches are chunked.
 IN_CLAUSE_CHUNK = 500
 
 FEATURE_KEYS: tuple[str, ...] = (
@@ -71,9 +48,7 @@ FEATURE_KEYS: tuple[str, ...] = (
 )
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 def compute_features(
@@ -81,24 +56,9 @@ def compute_features(
     timestamp: datetime,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
-    """Compute the feature dict for a single market at ``timestamp``.
-
-    Thin wrapper over :func:`compute_features_batch`. Returns a regular
-    Python dict (not a pandas Series) so callers don't need pandas to consume
-    the output.
-
-    Notes
-    -----
-    * ``timestamp`` may be tz-naive; it is silently coerced to UTC.
-    * ``time_to_resolution`` may be negative if ``timestamp`` is past the
-      market's ``end_date`` -- by design.
-    * ``volume_24h`` is the latest *known* value at-or-before ``timestamp``;
-      if snapshot collection lapsed it can be hours stale.
-    """
+    """Compute the feature dict for a single market at ``timestamp``."""
     df = compute_features_batch([market_id], timestamp, db_path)
     if df.empty:
-        # Defensive: batch should always emit one row per input id, but if it
-        # somehow returns empty just synthesize an all-null row.
         return {k: (market_id if k == "market_id" else None) for k in FEATURE_KEYS}
     return _row_to_pydict(df.iloc[0])
 
@@ -108,21 +68,12 @@ def compute_features_batch(
     timestamp: datetime,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> pd.DataFrame:
-    """Compute features for many markets at a single timestamp.
-
-    Returns a DataFrame with one row per ``market_id`` (in input order) and
-    one column per feature listed in :data:`FEATURE_KEYS`. Markets that have
-    no snapshot history before ``timestamp`` produce a row of ``NaN`` for
-    every numeric feature -- never a crash.
-    """
+    """Compute features for many markets at a single timestamp."""
     ids = [str(m) for m in market_ids]
     if not ids:
         return pd.DataFrame(columns=list(FEATURE_KEYS))
 
     T = _ensure_utc(timestamp)
-    # Pull a buffered window so the deepest lookback (72h) can find the
-    # latest snapshot <= T-72h even when the machine had sleep gaps and
-    # the nearest qualifying snapshot is several hours earlier.
     max_lookback_h = max(LOOKBACKS_HOURS.values())
     window_start = T - timedelta(hours=max_lookback_h + 96)
 
@@ -146,9 +97,7 @@ def compute_features_batch(
     return pd.DataFrame(rows, columns=list(FEATURE_KEYS))
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _ensure_utc(t: datetime) -> datetime:
@@ -266,7 +215,6 @@ def _build_feature_row(
     if snaps is None or len(snaps) == 0:
         return row
 
-    # Working copy ensures we don't pay for repeated boolean-mask materialization.
     g = snaps.sort_values("ts")
     le_T = g[g["ts"] <= T]
     if not le_T.empty:
@@ -332,11 +280,7 @@ def _maybe_float(v: Any) -> float | None:
 
 
 def _row_to_pydict(series: pd.Series) -> dict[str, Any]:
-    """Convert a feature DataFrame row back to a clean Python dict.
-
-    Replaces NaN with None so callers don't have to import numpy just to
-    test for missing values.
-    """
+    """Convert a feature DataFrame row back to a clean Python dict."""
     out: dict[str, Any] = {}
     for k, v in series.items():
         if k == "market_id" or k == "snapshot_count":

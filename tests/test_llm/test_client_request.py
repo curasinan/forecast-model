@@ -1,10 +1,4 @@
-"""LocalLLMClient request side: the exact wire format, the bearer key, the production wiring.
-
-test_client.py checks the happy path; these tests pin what it leaves open, each one
-against the single regression it exists to catch (named in its docstring). MockTransport
-only: the proxy-environment test builds a real client with no transport but never sends
-a request.
-"""
+"""LocalLLMClient request side: the exact wire format, the bearer key, the production wiring."""
 
 from __future__ import annotations
 
@@ -43,7 +37,6 @@ def test_chat_request_is_exactly_what_the_server_should_see():
     (request,) = seen
     assert request.method == "POST"
     assert request.headers["content-type"] == "application/json"
-    # Whole-dict equality: also proves no temperature and no response_format when not given.
     assert json.loads(request.content) == {
         "model": "qwen-test",
         "messages": MESSAGES,
@@ -133,15 +126,7 @@ def test_close_closes_the_http_client():
 
 
 def test_client_without_a_transport_ignores_the_proxy_environment(monkeypatch):
-    """Kills: dropping trust_env=False.
-
-    Every other test passes a MockTransport, and httpx switches env proxies off by itself
-    then (``allow_env_proxies = trust_env and transport is None``), so only this
-    construction path, the one production and the smoke script use, can see the bug: with a
-    proxy variable set, the prompts and the bearer for the loopback tunnel would go to the
-    proxy. Builds the client and reads httpx's routing table; no request is sent. The
-    underscore attributes are httpx internals, used because it has no public routing API.
-    """
+    """Kills: dropping trust_env=False."""
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         monkeypatch.setenv(name, "http://proxy.invalid:3128")
     for name in ("NO_PROXY", "no_proxy"):
@@ -167,13 +152,6 @@ def test_client_without_a_transport_ignores_the_proxy_environment(monkeypatch):
     ids=["bad-port", "bad-port-with-credentials-in-the-url"],
 )
 def test_unparseable_base_url_is_a_config_error_not_an_httpx_exception(base_url, secret):
-    """Kills: httpx.InvalidURL escaping the constructor, which every caller that catches only
-    LLMError (the smoke check, the pipeline) would let through as a traceback.
-
-    No transport: this is the construction path production uses, and the one that parses the
-    URL. The message names the problem httpx found (here ``Invalid port: 'abc'``) and never
-    the base URL, which may hold credentials, nor the api key.
-    """
     settings = _settings(base_url=base_url, api_key="k-123")
     with pytest.raises(LLMConfigError) as info:
         LocalLLMClient(settings)

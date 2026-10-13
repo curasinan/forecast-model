@@ -1,14 +1,4 @@
-"""Slow re-probe focused only on the endpoints that hit Cloudflare rate-limit
-last time. Sleeps between requests so we don't trip the limit again.
-
-Uses a more recent / active question by default (id=11620 — change with CLI arg)
-because old archived questions like 797 may genuinely have null aggregations
-even on the right endpoint.
-
-Run:
-    $env:METACULUS_API_TOKEN = "<token>"
-    python scripts/diagnose_metaculus_cp2.py [question_id]
-"""
+"""Slow re-probe focused only on the endpoints that hit Cloudflare rate-limit last time."""
 
 from __future__ import annotations
 
@@ -30,8 +20,7 @@ DELAY_SECONDS = 15  # generous spacing to clear Cloudflare rate-limit
 
 
 def deep_find_floats_under(obj: Any, target_keys: tuple[str, ...]) -> list[tuple[str, Any]]:
-    """Find any path where a key matching target_keys holds a non-null,
-    non-empty value."""
+    """Find any path where a key matching target_keys holds a non-null, non-empty value."""
     hits: list[tuple[str, Any]] = []
 
     def rec(o: Any, p: str) -> None:
@@ -90,7 +79,6 @@ def probe(label: str, url: str, params: dict[str, Any] | None,
         return True
     print("    no non-null CP-like fields found")
 
-    # Show top-level shape so we can see what kind of envelope this endpoint uses
     if isinstance(data, dict):
         print(f"    top-level keys: {sorted(data.keys())}")
     return False

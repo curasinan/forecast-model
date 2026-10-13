@@ -7,8 +7,7 @@
 # The scheduled task \Spark\Spark Pull runs it at logon and every six hours
 # (scripts/scheduling/run_spark_pull.ps1) and pings an external check when it succeeds.
 #
-# Two copies, both one way, Spark -> Zenbook (design:
-# docs/plans/2026-10-05-spark-runtime-move-design.md section 6):
+# Two copies, both one way, Spark -> Zenbook:
 #   1. spark:/srv/quant_data          -> ~/quant_data          (the mirror)
 #   2. spark:/srv/quant_data_backups  -> ~/quant_data_backups  (the daily copies with their
 #      manifests; scripts/spark/restore_check.py verifies one of these)
@@ -58,7 +57,6 @@ if [ "$INCLUDE_RAW" -eq 0 ]; then
 fi
 RSH="$SSH -o BatchMode=yes -o ConnectTimeout=20"
 PULL=(rsync -rlt --stats "${EXCLUDES[@]}" -e "$RSH" "$SRC/" "$DEST/")
-# A day directory is built under a .partial name and renamed when complete; skip the former.
 PULL_BACKUPS=(rsync -rlt --stats --exclude "*.partial/" -e "$RSH" "$BACKUPS_SRC/" "$BACKUPS_DEST/")
 
 if [ "$DRY_RUN" -eq 1 ]; then

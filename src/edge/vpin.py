@@ -1,25 +1,4 @@
-"""VPIN — Volume-Synchronized Probability of Informed Trading.
-
-    VPIN = |V_buy - V_sell| / (V_buy + V_sell)
-
-When buy and sell volume are balanced, flow is noise (uninformed traders).
-When they diverge sharply, someone with private information is trading
-aggressively in one direction.
-
-VPIN ranges from 0 to 1:
-    0.0 = perfectly balanced flow (all noise)
-    0.5 = moderately imbalanced (some informed trading)
-    1.0 = completely one-sided (fully informed flow)
-
-When VPIN is high:
-    - Widen the trust window on market price
-    - Market price may NOT reflect true probability
-    - Reduce Kelly sizing (informed traders may know something we don't)
-    - Our model's edge estimate becomes less reliable
-
-For Phase 1, we estimate VPIN from available Polymarket data.
-Phase 3+ would use real-time orderbook data via WebSocket.
-"""
+"""VPIN — Volume-Synchronized Probability of Informed Trading."""
 
 import logging
 
@@ -36,35 +15,17 @@ def estimate_vpin_from_price_movement(
     volume_24h: float,
     price_change_24h: float = 0.0,
 ) -> float:
-    """Estimate VPIN from available market data.
-
-    Without real-time orderbook data, we approximate VPIN using:
-    - Large price movements with high volume = likely informed trading
-    - Stable prices with high volume = balanced flow (low VPIN)
-    - Large price movements with low volume = noise or illiquid market
-
-    Args:
-        current_price: Current YES token price (0-1)
-        volume_24h: 24-hour trading volume in USD
-        price_change_24h: Absolute price change over 24h (e.g., 0.05 = 5 cent move)
-
-    Returns:
-        Estimated VPIN (0-1).
-    """
+    """Estimate VPIN from available market data."""
     if volume_24h < 100:
         # Very low volume — can't estimate VPIN meaningfully
         return 0.0
 
-    # Price movement relative to the price level
-    # A $0.05 move at $0.50 is 10%, but at $0.95 it's more significant
     price_sensitivity = min(current_price, 1 - current_price)  # Distance from edge
     if price_sensitivity < 0.01:
         price_sensitivity = 0.01
 
     relative_move = abs(price_change_24h) / price_sensitivity
 
-    # Volume-adjusted movement: big moves with big volume = informed trading
-    # Normalize volume (log scale to handle wide ranges)
     import math
     vol_factor = math.log1p(volume_24h) / math.log1p(100_000)  # Normalize to ~100k
     vol_factor = min(vol_factor, 2.0)
@@ -76,11 +37,7 @@ def estimate_vpin_from_price_movement(
 
 
 def assess_vpin(vpin: float) -> dict:
-    """Interpret a VPIN value.
-
-    Returns:
-        Dict with level, description, and recommended actions.
-    """
+    """Interpret a VPIN value."""
     if vpin < VPIN_LOW:
         return {
             "level": "low",

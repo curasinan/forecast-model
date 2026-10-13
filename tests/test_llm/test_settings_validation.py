@@ -1,10 +1,4 @@
-"""LocalLLMSettings guards: foreign .env keys, numeric bounds, the api key as a secret.
-
-test_settings.py pins the defaults and the env wiring; these tests pin what it leaves open,
-each against the single regression it exists to catch (named in its docstring). Every
-construction passes _env_file=None or a throwaway dotenv in tmp_path: the real .env is
-never read.
-"""
+"""LocalLLMSettings guards: foreign .env keys, numeric bounds, the api key as a secret."""
 
 from __future__ import annotations
 
@@ -17,12 +11,7 @@ SECRET = "sekrit-value-123"
 
 
 def test_dotenv_keys_for_other_services_are_ignored(tmp_path):
-    """Kills: extra="forbid".
-
-    The shared .env also holds IBKR_* and other services' keys. The env source never
-    collects names that are not fields, only the dotenv source does, so a test that stays
-    on os.environ cannot tell "ignore" from "forbid"; this one goes through a file.
-    """
+    """Kills: extra="forbid"."""
     env_file = tmp_path / "llm.env"
     env_file.write_text(
         "LLM_MODEL=qwen-test\nLLM_TEMPERATURE=\nLLM_SOMETHING_ELSE=y\nIBKR_HOST=x\n",
@@ -30,7 +19,7 @@ def test_dotenv_keys_for_other_services_are_ignored(tmp_path):
     )
     settings = LocalLLMSettings(_env_file=env_file)
     assert settings.model == "qwen-test"
-    assert settings.temperature is None  # the documented "empty means unset" line, via the file
+    assert settings.temperature is None
 
 
 @pytest.mark.parametrize(
@@ -53,8 +42,6 @@ def test_dotenv_keys_for_other_services_are_ignored(tmp_path):
     ],
 )
 def test_numeric_settings_reject_values_the_server_cannot_use(monkeypatch, name, bad):
-    """Kills: a bound dropped, an infinite timeout let through (socket.settimeout(inf) raises
-    OverflowError at request time). Fails at construction, not as a 400 or a hang mid-run."""
     monkeypatch.setenv("LLM_MODEL", "qwen-test")
     monkeypatch.setenv(f"LLM_{name.upper()}", bad)
     with pytest.raises(ValidationError) as info:
@@ -75,8 +62,7 @@ def test_numeric_settings_accept_the_boundary_values(monkeypatch):
 
 
 def test_api_key_is_not_echoed_when_validation_fails(monkeypatch):
-    """Kills: dropping hide_input_in_errors. For a missing field pydantic echoes the whole
-    input dict, api_key included. LLM_MODEL is deliberately absent."""
+    """Kills: dropping hide_input_in_errors."""
     monkeypatch.setenv("LLM_API_KEY", SECRET)
     with pytest.raises(ValidationError) as info:
         LocalLLMSettings(_env_file=None)

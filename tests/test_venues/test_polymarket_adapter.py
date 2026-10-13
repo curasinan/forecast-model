@@ -61,9 +61,6 @@ def _order_request() -> OrderRequest:
     )
 
 
-# -- read-only enforcement ---------------------------------------------------
-
-
 def test_place_order_raises_even_after_connect():
     adapter = PolymarketAdapter(collector=FakeCollector())
     adapter.connect()
@@ -83,9 +80,6 @@ def test_adapter_is_always_read_only():
     assert adapter.name == "polymarket"
 
 
-# -- economics ----------------------------------------------------------------
-
-
 def test_fee_model_is_zero_fee():
     adapter = PolymarketAdapter(collector=FakeCollector())
     fees = adapter.fee_model()
@@ -99,9 +93,6 @@ def test_carry_model_is_null():
     carry = adapter.carry_model()
     assert isinstance(carry, NullCarry)
     assert carry.daily_accrual_rate() == 0.0
-
-
-# -- market data mapping ------------------------------------------------------
 
 
 def test_get_quotes_maps_market_data(monkeypatch):
@@ -176,17 +167,11 @@ def test_get_order_book_directs_to_clob_factory():
         adapter.get_order_book(MarketId.polymarket("0xdeadbeef"))
 
 
-# -- account (research-only: empty by construction) ---------------------------
-
-
 def test_account_methods_return_empty():
     adapter = PolymarketAdapter(collector=FakeCollector())
     assert adapter.get_positions() == []
     assert adapter.get_balances() == []
     assert adapter.get_open_orders() == []
-
-
-# -- lifecycle ----------------------------------------------------------------
 
 
 def test_is_healthy_true_on_200(monkeypatch):
@@ -207,12 +192,7 @@ def test_is_healthy_false_on_error(monkeypatch):
     assert adapter.is_healthy() is False
 
 
-# -- readonly_clob_client factory ---------------------------------------------
-
-
 def test_readonly_clob_client_raises_import_error_when_absent(monkeypatch):
-    # Simulate an environment without py_clob_client: a None entry in
-    # sys.modules makes any import of the package raise ImportError.
     import sys
 
     monkeypatch.setitem(sys.modules, "py_clob_client", None)

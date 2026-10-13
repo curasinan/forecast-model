@@ -1,9 +1,4 @@
-"""Venue-neutral market, quote, order, and position models (pydantic v2).
-
-These are the only shapes that cross the venue boundary. Venue-specific
-detail that has no neutral meaning goes in `venue_meta`, never in new
-top-level fields.
-"""
+"""Venue-neutral market, quote, order, and position models (pydantic v2)."""
 
 from __future__ import annotations
 
@@ -21,26 +16,16 @@ OrderType = Literal["LMT", "MKT"]
 
 
 class Market(BaseModel):
-    """One binary event market.
-
-    At IBKR the YES and NO legs are separate contracts (verified
-    2026-08-16): `market_id` identifies the YES leg and `no_id` the NO leg.
-    At Polymarket both prices derive from one condition; `no_id` is None.
-    """
+    """One binary event market."""
 
     market_id: MarketId
     symbol: str = ""
     title: str = ""
     no_id: MarketId | None = None
     expiry: datetime | None = None
-    # Known-in-advance settlement/announcement time (a ForecastEx structural
-    # advantage: resolution timing is scheduled, not estimated). Feature
-    # pipelines should prefer this over `expiry` when present.
     scheduled_resolution_time: datetime | None = None
     strike: float | None = None
     tick_size: float | None = None
-    # Smallest tradable quantity step (IBKR ForecastEx: 1 whole contract,
-    # verified 2026-08-18; Polymarket tokens: None = fractional).
     size_increment: float | None = None
     multiplier: float = 1.0
     currency: str = "USD"

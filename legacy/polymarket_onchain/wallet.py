@@ -1,23 +1,4 @@
-"""RETIRED (2026-08-16) — Polymarket CLOB wallet, kept for research.
-
-Verbatim copy of src/trading/wallet.py at retirement. The live path was
-never wired to a successful trade: token ids were always empty, so live
-order placement was dead code. Only the dry-run simulation ever ran (that
-part survives in src/trading/wallet.py). Live trading is migrating to
-IBKR — see src/venues/ and docs/venue_semantics.md.
-
-Handles:
-- ClobClient initialization with private key
-- API credential derivation/creation
-- Balance checking (USDCe + outcome tokens)
-- Dry-run mode (no wallet needed)
-
-Requirements for live trading:
-- py-clob-client installed (`pip install py-clob-client`)
-- Private key for a Polygon wallet
-- USDCe balance on Polygon
-- Small MATIC balance for gas
-"""
+"""RETIRED (2026-08-16) — Polymarket CLOB wallet, kept for research."""
 
 import logging
 from dataclasses import dataclass, field
@@ -40,12 +21,7 @@ class WalletBalance:
 
 
 class PolymarketWallet:
-    """Manages Polymarket CLOB API connection and wallet state.
-
-    Supports two modes:
-    - dry_run=True: No wallet needed, simulates all operations
-    - dry_run=False: Requires private key and funded wallet
-    """
+    """Manages Polymarket CLOB API connection and wallet state."""
 
     def __init__(
         self,
@@ -69,10 +45,7 @@ class PolymarketWallet:
         return self._connected or self._dry_run
 
     def connect(self) -> bool:
-        """Initialize the CLOB client and derive API credentials.
-
-        Returns True if connection successful, False otherwise.
-        """
+        """Initialize the CLOB client and derive API credentials."""
         if self._dry_run:
             logger.info("Wallet running in DRY-RUN mode (no real trades)")
             self._connected = True
@@ -116,22 +89,14 @@ class PolymarketWallet:
         if self._dry_run:
             return self._simulated_balance
 
-        # In live mode, query on-chain balances
-        # For now return placeholder — full implementation needs web3
         return WalletBalance()
 
     def get_client(self):
-        """Get the underlying ClobClient for direct API calls.
-
-        Returns None in dry-run mode.
-        """
+        """Get the underlying ClobClient for direct API calls."""
         return self._client
 
     def simulate_trade(self, side: str, price: float, size: float) -> bool:
-        """Update simulated balance for dry-run mode.
-
-        Returns True if sufficient balance.
-        """
+        """Update simulated balance for dry-run mode."""
         cost = price * size
         if side == "BUY":
             if self._simulated_balance.usdce >= cost:

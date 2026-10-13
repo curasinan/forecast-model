@@ -1,10 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 4: Cross-Validation and Hyperparameter Tuning
-
-How to properly validate your model and find the best settings.
-"""
+"""Scikit-Learn: Zero to Hero, Part 4: Cross-Validation and Hyperparameter Tuning."""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,9 +14,7 @@ print("Part 4: Cross-Validation and Hyperparameter Tuning")
 print("=" * 70)
 
 
-# ============================================================================
 # THE PROBLEM WITH SIMPLE TRAIN/TEST SPLIT
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("THE PROBLEM WITH SIMPLE TRAIN/TEST SPLIT")
@@ -47,9 +39,7 @@ SOLUTION: Cross-Validation
 print(problem)
 
 
-# ============================================================================
 # CROSS-VALIDATION EXPLAINED
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("CROSS-VALIDATION EXPLAINED")
@@ -86,9 +76,7 @@ Benefits:
 print(cv_explanation)
 
 
-# ============================================================================
 # CROSS-VALIDATION IN SCIKIT-LEARN
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("CROSS-VALIDATION IN SCIKIT-LEARN")
@@ -130,9 +118,7 @@ print(f"Test Recall:    {results['test_recall'].mean():.4f} ± {results['test_re
 print(f"Test F1:        {results['test_f1'].mean():.4f} ± {results['test_f1'].std():.4f}")
 
 
-# ============================================================================
 # DIFFERENT CV STRATEGIES
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("DIFFERENT CV STRATEGIES")
@@ -177,9 +163,7 @@ for fold, (train_idx, test_idx) in enumerate(skf.split(X_scaled, y)):
 print(f"\nMean: {np.mean(fold_scores):.4f}")
 
 
-# ============================================================================
 # HYPERPARAMETER TUNING
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("HYPERPARAMETER TUNING")
@@ -214,9 +198,7 @@ Proper workflow:
 print(hyperparam_explanation)
 
 
-# ============================================================================
 # GRID SEARCH CV
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("GRID SEARCH CV")
@@ -266,9 +248,7 @@ print(f"Test set score:  {test_score:.4f}")
 best_model = grid_search.best_estimator_
 
 
-# ============================================================================
 # RANDOMIZED SEARCH CV
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("RANDOMIZED SEARCH CV")
@@ -311,9 +291,7 @@ print(f"Best CV score:   {random_search.best_score_:.4f}")
 print(f"Test set score:  {random_search.score(X_test, y_test):.4f}")
 
 
-# ============================================================================
 # VIEWING SEARCH RESULTS
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("VIEWING SEARCH RESULTS")
@@ -328,9 +306,7 @@ cols = ['params', 'mean_test_score', 'std_test_score', 'rank_test_score']
 print(results_df[cols].sort_values('rank_test_score').head(10).to_string())
 
 
-# ============================================================================
 # THE COMPLETE WORKFLOW
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("THE COMPLETE WORKFLOW")
@@ -368,9 +344,7 @@ workflow = """
 print(workflow)
 
 
-# ============================================================================
 # COMMON HYPERPARAMETERS BY ALGORITHM
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("COMMON HYPERPARAMETERS BY ALGORITHM")

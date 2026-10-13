@@ -1,9 +1,4 @@
-"""scripts/backfill_ibkr_hourly.py run end to end against a temporary data root.
-
-The Gateway is the only thing replaced: ``GatewaySession`` hands out a fake
-``ib`` that answers ``reqHistoricalData``. The contract cache, the planner,
-the backfiller, the parquet files and the run ledger are the real ones.
-"""
+"""scripts/backfill_ibkr_hourly.py run end to end against a temporary data root."""
 
 from __future__ import annotations
 
@@ -124,7 +119,6 @@ def _stored(root, day: str) -> list[tuple[int, str]]:
 
 
 def test_the_default_window_is_the_longest_one_a_single_request_can_fill(ticks_root, capsys):
-    # Nothing is recorded in the empty root, so every day of the window is missing.
     rc = cli.main(["--dry-run", *BASE_ARGS])
     out = capsys.readouterr().out
 
@@ -201,7 +195,6 @@ def test_the_dry_run_states_the_request_and_the_sweep_days_it_will_fill(ticks_ro
 
 def test_a_span_widened_by_refetch_over_the_ceiling_names_the_cause(ticks_root, capsys):
     stored = [f"2026-08-{day:02d}" for day in range(1, 32)] + [f"2026-09-{day:02d}" for day in range(1, 9)]
-    # every hourly file is a stub: the plan must refuse before it reads any of them
     _stored_days(ticks_root, stored)
     rc = cli.main(["--dry-run", *BASE_ARGS, "--start", "2026-08-01", "--end", "2026-09-09",
                    "--refetch", "2026-08-01"])
@@ -232,8 +225,6 @@ def test_an_unreadable_stored_file_stops_a_real_run_before_it_connects(ticks_roo
 
 
 def test_a_run_reads_the_stored_bars_only_once_it_holds_the_lock(ticks_root, gateway, monkeypatch):
-    # Read before the lock, another run could finish in between and its bars
-    # would be written a second time.
     lock_file = ticks_root / "quotes_hourly" / "backfill.lock"
     seen: list[bool] = []
     real_read = cli.read_stored_window
@@ -384,7 +375,6 @@ def test_a_refetch_run_adds_nothing_that_is_already_stored(ticks_root, gateway, 
     assert cli.main([*BASE_ARGS, *day]) == 0
     capsys.readouterr()
 
-    # without --refetch the stored day is done and the venue is not asked again
     calls_before = len(gateway.calls)
     assert cli.main([*BASE_ARGS, *day]) == 0
     assert "nothing to do" in capsys.readouterr().out and len(gateway.calls) == calls_before

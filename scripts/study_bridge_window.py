@@ -1,43 +1,4 @@
-"""Bridge robustness study (audit H4): hindcast skill with the bridge fit inside each window.
-
-The production hindcast (``climate.fit.fit_gtm`` via ``build_training_frame``)
-fits the ERA5 -> NOAA :class:`climate.bridge.Bridge` ONCE on the full
-ERA5/NOAA overlap, then runs the expanding-window EMOS evaluation on the
-resulting ``fc_mean_C`` / ``fc_sd_C``. The EMOS and both baselines are
-refit per test year on strictly earlier targets, but the bridge feeding
-them has already seen every test year's (and later years') NOAA labels.
-That is a leak of future information into past test years ("leaky").
-
-This study measures how much that leak flatters the reported skill. For
-each test year Y it
-
-  1. fits a Bridge on ERA5/NOAA months strictly before Y
-     (``Bridge.fit(start=None, end=f"{Y-1}-12")``),
-  2. rebuilds the whole training frame with that window bridge
-     (``build_frame_from_inputs(..., bridge=window_bridge)``) so both the
-     train rows (target year < Y) and the test rows (target year == Y) of
-     that window carry window-bridge ``fc_mean_C`` / ``fc_sd_C``,
-  3. scores that single year with the unchanged expanding-window machinery
-     (``expanding_window_scores(frame, Y, Y, ...)``),
-
-then aggregates the per-year rows with ``summarise_scores`` ("honest") and
-runs ``evaluate_hindcast_go_live`` on the honest summary with the default,
-unchanged criteria. The leaky side is the production computation verbatim:
-``expanding_window_scores`` over the same years on the full-bridge frame.
-
-Only ``fc_mean_C`` / ``fc_sd_C`` differ between the two sides: labels,
-rows, test years and both climatology baselines are identical, so the
-per-lead comparison is paired and the delta is attributable to the bridge.
-
-Additive only: nothing in ``climate/`` changes. Read-only on the data root
-(the root is resolved WITHOUT ``climate.paths.data_root``'s mkdir side
-effect); the only writes are the two ``--out`` files.
-
-Usage::
-
-    python scripts/study_bridge_window.py --out docs/gtm_bridge_robustness.md \\
-        --json-out docs/gtm_bridge_robustness.json
-"""
+"""Bridge robustness study (audit H4): hindcast skill with the bridge fit inside each window."""
 
 from __future__ import annotations
 
@@ -77,7 +38,6 @@ log = logging.getLogger("study_bridge_window")
 
 #: Variant name -> EMOS trend flag.
 VARIANTS = {"notrend": False, "trend": True}
-#: docs/gtm_model_report.md: "Chosen: the trend variant ... It is the operational gtm_emos.json".
 DOCUMENTED_OPERATIONAL_TREND = True
 
 COMPARISON_COLUMNS = [
@@ -101,9 +61,7 @@ COMPARISON_COLUMNS = [
 ]
 
 
-# --------------------------------------------------------------------------- #
 # the study
-# --------------------------------------------------------------------------- #
 
 
 def window_bridge(era5_K: pd.Series, noaa_C: pd.Series, test_year: int) -> Bridge:
@@ -129,7 +87,6 @@ class BridgeWindowStudy:
     comparison: pd.DataFrame
     leaky_verdict: GoLiveVerdict
     honest_verdict: GoLiveVerdict
-    #: test_year -> n_test_rows / mean and mean-abs (window - full) fc_mean_C on scored rows
     window_shifts: dict[int, dict[str, float]] = field(default_factory=dict)
     runtime_s: float = float("nan")
 
@@ -138,14 +95,7 @@ class BridgeWindowStudy:
         return "trend" if self.trend else "notrend"
 
     def bridge_table(self) -> pd.DataFrame:
-        """One row per window bridge, with its drift vs the full-history bridge.
-
-        The leak's size is reported as the shift of ``fc_mean_C`` (window
-        minus full bridge, degC) on the rows actually scored for that test
-        year -- NOT as an alpha difference: alpha and beta trade off
-        against the ~287 K ERA5 level, so alpha deltas alone look huge
-        while the prediction barely moves.
-        """
+        """One row per window bridge, with its drift vs the full-history bridge."""
         full = self.full_bridge
         rows = []
         for year in sorted(self.window_bridges):
@@ -238,7 +188,6 @@ def run_study(
     t0 = time.perf_counter()
     leads_list = [int(x) for x in leads]
 
-    # Leaky side == production: bridge=None fits on the full ERA5/NOAA overlap.
     leaky_frame = build_frame_from_inputs(seas5, era5_K, noaa_C)
     full_bridge: Bridge = leaky_frame.attrs["bridge"]
     if first_test_year is None or last_test_year is None:
@@ -331,14 +280,11 @@ def run_study(
     )
 
 
-# --------------------------------------------------------------------------- #
 # inputs (read-only)
-# --------------------------------------------------------------------------- #
 
 
 def resolve_root(override: str | Path | None = None) -> Path:
-    """Same priority as ``climate.paths.data_root`` (arg, $CLIMATE_DATA_ROOT, default),
-    but never creates anything: a missing root is an error, not a new directory."""
+    """Same priority as ``climate.paths.data_root``, but never creates anything."""
     if override is not None and str(override).strip():
         root = Path(override).expanduser().resolve()
     elif os.environ.get(ENV_VAR, "").strip():
@@ -404,9 +350,7 @@ def display_path(path: Path) -> str:
         return path.as_posix()
 
 
-# --------------------------------------------------------------------------- #
 # rendering
-# --------------------------------------------------------------------------- #
 
 
 def _fmt(v: Any, digits: int = 3, signed: bool = False) -> str:
@@ -574,9 +518,7 @@ def render_markdown(meta: dict[str, Any], studies: dict[str, BridgeWindowStudy])
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
 
 
 def _parse_leads(text: str) -> list[int]:

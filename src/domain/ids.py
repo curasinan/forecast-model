@@ -1,9 +1,4 @@
-"""Opaque market identity.
-
-Polymarket identified markets by conditionId / ERC-1155 tokenId / slug;
-IBKR identifies by integer conId. Neither may leak across module
-boundaries: everything above the venue layer carries a MarketId.
-"""
+"""Opaque market identity."""
 
 from __future__ import annotations
 
@@ -14,13 +9,7 @@ POLYMARKET = "polymarket"
 
 
 class MarketId(BaseModel):
-    """Opaque, hashable (venue, native_id) pair.
-
-    ``native_id`` is the venue's identifier as a string:
-      - ibkr: the contract's conId (of one tradable leg — YES and NO are
-        separate conIds at IBKR, verified 2026-08-16)
-      - polymarket: the conditionId
-    """
+    """Opaque, hashable (venue, native_id) pair."""
 
     model_config = ConfigDict(frozen=True)
 

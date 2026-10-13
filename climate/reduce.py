@@ -1,19 +1,4 @@
-"""Reduce CDS netCDF files to tidy global-mean parquet series.
-
-Global mean = cosine-latitude-weighted mean of 2m temperature over the
-whole lat/lon grid (Kelvin, column ``t2m_global_K``).
-
-Outputs (append + dedupe on key columns, parquet via pyarrow):
-  * ``<root>/forecasts/seas5_global_mean.parquet``
-      rows (init_date, lead_month, member, t2m_global_K)
-  * ``<root>/reference/era5_global_mean.parquet``
-      rows (month, t2m_global_K)
-
-Coordinate names in CDS netCDF exports vary by dataset vintage
-(``latitude``/``lat``, ``valid_time``/``time``/``date``,
-``forecastMonth``/``leadtime_month``, ``number``/``member``), so
-detection is by candidate lists rather than hardcoded names.
-"""
+"""Reduce CDS netCDF files to tidy global-mean parquet series."""
 
 from __future__ import annotations
 
@@ -49,11 +34,7 @@ def _pick(names, candidates, what: str, path: Path) -> str:
 
 
 def global_mean_series(nc_path: str | Path) -> xr.DataArray:
-    """Cosine-latitude-weighted global mean of 2m temperature.
-
-    Returns a DataArray reduced over lat/lon; all remaining dims
-    (member, lead, init time, valid time, ...) are preserved.
-    """
+    """Cosine-latitude-weighted global mean of 2m temperature."""
     nc_path = Path(nc_path)
     with xr.open_dataset(nc_path) as ds:
         var_name = _pick(ds.data_vars, _VAR_CANDIDATES, "2m temperature variable", nc_path)
@@ -108,12 +89,7 @@ def era5_frame(nc_path: str | Path) -> pd.DataFrame:
 
 
 def append_parquet(df: pd.DataFrame, path: str | Path, key_cols: list[str]) -> tuple[int, int]:
-    """Append ``df`` to parquet at ``path``, deduping on ``key_cols``.
-
-    Existing rows win on key collision (keep='first' after concat with
-    existing first), so a re-reduce never silently changes stored values.
-    Returns (rows_added, rows_total).
-    """
+    """Append ``df`` to parquet at ``path``, deduping on ``key_cols``."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():

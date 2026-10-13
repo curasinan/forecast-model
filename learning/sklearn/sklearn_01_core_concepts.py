@@ -1,22 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 1: Core Concepts and The Universal API Pattern
-
-Since you understand the math behind ML algorithms, scikit-learn
-will feel like a productivity tool, not magic.
-
-What scikit-learn IS:
-- Classical ML algorithms (regression, classification, clustering)
-- Preprocessing tools (scaling, encoding)
-- Model evaluation tools (metrics, cross-validation)
-- Feature selection and dimensionality reduction
-
-What scikit-learn is NOT:
-- Deep learning (use PyTorch or TensorFlow for that)
-- GPU-accelerated training
-- Neural networks with many layers
-"""
+"""Scikit-Learn: Zero to Hero, Part 1: Core Concepts and The Universal API Pattern."""
 
 import numpy as np
 import pandas as pd
@@ -29,9 +11,7 @@ print("Part 1: Core Concepts and The Universal API Pattern")
 print("=" * 70)
 
 
-# ============================================================================
 # THE GOLDEN RULE: Scikit-Learn's Consistent API
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("THE GOLDEN RULE: CONSISTENT API")
@@ -75,9 +55,7 @@ Once you learn this pattern, you know how to use ANY scikit-learn model.
 print(api_pattern)
 
 
-# ============================================================================
 # EXAMPLE 1: Linear Regression (You Built This From Scratch!)
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("EXAMPLE 1: LINEAR REGRESSION")
@@ -131,9 +109,7 @@ print(f"\nR² Score: {score:.4f}")
 print("(1.0 = perfect fit, 0.0 = predicts mean only)")
 
 
-# ============================================================================
 # EXAMPLE 2: Logistic Regression (Classification)
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("EXAMPLE 2: LOGISTIC REGRESSION")
@@ -185,9 +161,7 @@ print(f"  θ (coef_):      {model.coef_}")
 print(f"  θ₀ (intercept_): {model.intercept_}")
 
 
-# ============================================================================
 # THE CRITICAL CONCEPT: Train/Test Split
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("THE CRITICAL CONCEPT: TRAIN/TEST SPLIT")
@@ -251,9 +225,7 @@ If both are similar and high: GOOD FIT
 """)
 
 
-# ============================================================================
 # FEATURE SCALING (Preprocessing)
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("FEATURE SCALING (PREPROCESSING)")
@@ -309,9 +281,7 @@ Or use fit_transform for training data:
 """)
 
 
-# ============================================================================
 # COMPLETE WORKFLOW EXAMPLE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("COMPLETE WORKFLOW EXAMPLE")
@@ -359,9 +329,7 @@ print(f"  Predicted class: {data.target_names[prediction[0]]}")
 print(f"  Confidence: {probability[0][prediction[0]]*100:.1f}%")
 
 
-# ============================================================================
 # SUMMARY: THE PATTERN
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SUMMARY: THE UNIVERSAL PATTERN")

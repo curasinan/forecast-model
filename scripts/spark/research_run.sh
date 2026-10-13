@@ -7,9 +7,8 @@
 #   bash scripts/spark/research_run.sh --memory 60G -- .venv/bin/python train.py
 #   bash scripts/spark/research_run.sh --dry-run -- COMMAND [ARG...]   # print the command, run nothing
 #
-# Kill order under memory pressure (design: docs/plans/2026-10-05-spark-runtime-move-design.md
-# section 5): research jobs +500, the LLM (qwenflash) -500, the Gateway and the trading
-# runtime -900. The kernel kills the highest score first.
+# Kill order under memory pressure: research jobs +500, the LLM (qwenflash) -500, the Gateway
+# and the trading runtime -900. The kernel kills the highest score first.
 #   * MemoryMax (default 15G, what the LLM stack leaves while vLLM is loaded) is a hard
 #     ceiling for the job and everything it starts, and MemorySwapMax=0 keeps it from
 #     spilling into swap instead. A job that hits the ceiling is killed inside its own scope.

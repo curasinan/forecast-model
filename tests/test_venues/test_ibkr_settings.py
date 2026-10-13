@@ -1,9 +1,4 @@
-"""IBKRSettings loud-failure behavior and settings-driven adapter rules.
-
-Adapter tests live here too (only fakes -- no gateway, no ib_async): the
-behaviors under test (mode mismatch, fee/carry gating, read-only writes)
-are all driven by settings values.
-"""
+"""IBKRSettings loud-failure behavior and settings-driven adapter rules."""
 
 from __future__ import annotations
 
@@ -88,11 +83,6 @@ class TestSettings:
         assert s.coupon_verified_on is None
 
     def test_data_root_default_is_outside_repo(self, monkeypatch):
-        """The default is ``<home>/quant_data/ibkr_ticks``: derived from the home
-        directory alone, so it is neither in the (OneDrive-synced) checkout nor
-        under %LOCALAPPDATA%. The home is pinned to a fixed fake path, so the
-        assertion is exact wherever the suite runs and whatever pytest's temp
-        directories look like."""
         fake_home = Path(REPO_ROOT.anchor) / "fake-home"
         monkeypatch.setattr(Path, "home", lambda: fake_home)
         root = make_settings().resolved_data_root
@@ -116,8 +106,6 @@ class TestAdapterReadOnly:
             IBKRAdapter(make_settings(data_root=str(tmp_path)), role=role, read_only=False)
 
     def test_even_live_trading_cannot_transmit_on_a_live_account(self, tmp_path):
-        """Transmission is gated on the VERIFIED account mode: a writable
-        adapter that is not connected to a paper account refuses in code."""
         adapter = IBKRAdapter(
             make_settings(trading_mode="live", data_root=str(tmp_path)),
             role="live_trading",

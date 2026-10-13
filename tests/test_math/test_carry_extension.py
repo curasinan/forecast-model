@@ -1,11 +1,4 @@
-"""Fee/carry/holding-period extensions to EV and Kelly (migration spec Stage 4.3).
-
-Guards two things:
-1. Defaults (no fee model, no carry model) remain bit-identical to the
-   pre-change formulas, written out literally below.
-2. Frictions move the numbers the right way: fees reduce EV and Kelly,
-   carry increases both monotonically in holding_days.
-"""
+"""Fee/carry/holding-period extensions to EV and Kelly (migration spec Stage 4.3)."""
 
 from datetime import date
 
@@ -34,9 +27,6 @@ class FixedDailyCarry(CarryModel):
 
     def daily_accrual_rate(self) -> float:
         return self._rate
-
-
-# --- pre-change formulas, written out literally -----------------------------
 
 
 def _legacy_ev(p: float, price: float) -> float:
@@ -107,8 +97,6 @@ class TestDefaultsEquivalence:
                 assert kelly_for_no(p, price) == _legacy_kelly(1.0 - p, 1.0 - price)
 
     def test_zero_frictions_reduce_to_legacy_formula(self):
-        # With r=0 and fee=0 the generalized Kelly reduces exactly to
-        # (b*p - q)/b with b = (1/price) - 1.
         carry = FixedDailyCarry(0.005)
         for p in [0.3, 0.55, 0.7]:
             for price in [0.2, 0.4, 0.6]:

@@ -1,13 +1,4 @@
-"""Evaluation tracker — persistent prediction and edge history.
-
-Stores snapshots of predictions over time so we can:
-1. Track how our estimates evolve as new evidence arrives
-2. Compare predictor accuracy after market resolution
-3. Build calibration curves (do our 70% predictions happen 70% of the time?)
-4. Evaluate edge signal quality (did our detected edges actually pay off?)
-
-This is the foundation for Phase 4's full evaluation pipeline.
-"""
+"""Evaluation tracker — persistent prediction and edge history."""
 
 import json
 import logging
@@ -162,11 +153,7 @@ class EvaluationTracker:
         ]
 
     def get_resolved_predictions(self) -> list[tuple[PredictionSnapshot, int]]:
-        """Get predictions for questions that have resolved.
-
-        Returns list of (snapshot, outcome) tuples where outcome is 0 or 1.
-        Only returns the LATEST snapshot for each (question, predictor) pair.
-        """
+        """Get predictions for questions that have resolved."""
         query = """
             SELECT ps.*, r.outcome
             FROM prediction_snapshots ps
@@ -203,13 +190,7 @@ class EvaluationTracker:
     def compute_calibration(
         self, predictor_name: str | None = None, n_buckets: int = 5
     ) -> list[CalibrationBucket]:
-        """Compute calibration buckets for resolved predictions.
-
-        Groups predictions by probability range and compares predicted
-        probability against actual outcome rate.
-
-        Perfect calibration: predicted 70% -> actually happens 70% of the time.
-        """
+        """Compute calibration buckets for resolved predictions."""
         resolved = self.get_resolved_predictions()
 
         if predictor_name:

@@ -1,9 +1,4 @@
-"""Research agent — orchestrates the full prediction pipeline.
-
-Wraps the entire collect -> features -> predict -> edge -> store flow
-into a reusable class. Used by the scheduler for automated re-evaluation
-and by the dashboard for on-demand analysis.
-"""
+"""Research agent — orchestrates the full prediction pipeline."""
 
 import logging
 from dataclasses import dataclass, field
@@ -78,18 +73,7 @@ class Researcher:
         self._tracker = tracker
 
     async def analyze(self, question: Question) -> ResearchResult:
-        """Run the complete pipeline for one question.
-
-        Steps:
-        1. Collect evidence from all sources
-        2. Fetch live market data
-        3. Extract features
-        4. Assess VPIN
-        5. Run all predictors + ensemble
-        6. Detect edge
-        7. Run Monte Carlo
-        8. Store everything
-        """
+        """Run the complete pipeline for one question."""
         # Step 1: Collect evidence
         registry = CollectorRegistry()
         registry.register(RSSFeedCollector())

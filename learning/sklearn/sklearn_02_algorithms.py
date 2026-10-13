@@ -1,11 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 2: All Major Algorithms
-
-Now that you know the pattern (fit/predict/score), let's see
-ALL the algorithms available and when to use each.
-"""
+"""Scikit-Learn: Zero to Hero, Part 2: All Major Algorithms."""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,9 +12,7 @@ print("Part 2: All Major Algorithms")
 print("=" * 70)
 
 
-# ============================================================================
 # ALGORITHM MAP: When to Use What
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("ALGORITHM MAP: WHEN TO USE WHAT")
@@ -58,9 +49,7 @@ algorithm_map = """
 print(algorithm_map)
 
 
-# ============================================================================
 # SECTION A: REGRESSION ALGORITHMS
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SECTION A: REGRESSION ALGORITHMS")
@@ -159,9 +148,7 @@ model.fit(X_train_scaled, y_train)
 print(f"R² Score: {model.score(X_test_scaled, y_test):.4f}")
 
 
-# ============================================================================
 # SECTION B: CLASSIFICATION ALGORITHMS
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SECTION B: CLASSIFICATION ALGORITHMS")
@@ -275,9 +262,7 @@ model.fit(X_train_scaled, y_train)
 print(f"Accuracy: {model.score(X_test_scaled, y_test):.4f}")
 
 
-# ============================================================================
 # SECTION C: CLUSTERING ALGORITHMS (Unsupervised)
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SECTION C: CLUSTERING ALGORITHMS")
@@ -327,9 +312,7 @@ labels = model.fit_predict(X_cluster)
 print(f"Cluster labels: {np.unique(labels)}")
 
 
-# ============================================================================
 # SECTION D: DIMENSIONALITY REDUCTION
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SECTION D: DIMENSIONALITY REDUCTION")
@@ -367,9 +350,7 @@ X_tsne = tsne.fit_transform(X_high_dim)
 print(f"t-SNE output shape: {X_tsne.shape}")
 
 
-# ============================================================================
 # ALGORITHM COMPARISON SUMMARY
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("ALGORITHM COMPARISON SUMMARY")

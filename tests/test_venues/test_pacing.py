@@ -54,9 +54,6 @@ def key(
     )
 
 
-# -- rule 1: identical request within 15s -----------------------------------
-
-
 def test_first_request_is_immediate():
     pacer, ft = make_pacer()
     pacer.acquire(key())
@@ -94,9 +91,6 @@ def test_different_fingerprints_do_not_block():
     assert ft.sleeps == []
 
 
-# -- rule 2: 6 per (contract, exchange, tick_type) per 2s --------------------
-
-
 def test_burst_limit_six_immediate_seventh_blocks():
     pacer, ft = make_pacer()
     for i in range(BURST_LIMIT):
@@ -126,9 +120,6 @@ def test_burst_buckets_are_independent():
     pacer.acquire(key(fp="other-tick", contract="A", tick="BID_ASK"))
     pacer.acquire(key(fp="other-exchange", contract="A", exchange="SMART"))
     assert ft.sleeps == []
-
-
-# -- rule 3: 60 per rolling 10 minutes, BID_ASK counts double ----------------
 
 
 def test_budget_sixty_immediate_sixty_first_blocks():
@@ -168,15 +159,10 @@ def test_budget_frees_as_window_slides():
     assert ft.sleeps == []
 
 
-# -- combined rules ----------------------------------------------------------
-
-
 def test_combined_rules_sleep_the_maximum_wait():
     pacer, ft = make_pacer()
     for i in range(BURST_LIMIT):
         pacer.acquire(key(fp=f"fp{i}"))
-    # Same bucket (burst wait 2s) AND same fingerprint as the first request
-    # (identical wait 15s): one sleep of the binding 15s clears both.
     pacer.acquire(key(fp="fp0"))
     assert ft.sleeps == [pytest.approx(15.0)]
 
@@ -188,9 +174,6 @@ def test_block_logs_warning_with_rule_and_wait(caplog):
         pacer.acquire(key(fp="same"))
     messages = [r.getMessage() for r in caplog.records]
     assert any("identical-request" in m and "15.000" in m for m in messages)
-
-
-# -- thread safety -----------------------------------------------------------
 
 
 def test_thread_safety_smoke_unique_keys():

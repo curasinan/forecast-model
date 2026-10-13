@@ -1,34 +1,4 @@
-"""Cluster / correlation features for prediction markets.
-
-Political prediction markets cluster around themes — a single geopolitical
-development moves several markets in lockstep. When one market leads
-(prices in news first), the rest of the cluster typically follows with a lag.
-This module turns that intuition into features.
-
-Public API
-----------
-* ``load_clusters(config_path)`` -> ``dict[str, list[str]]``
-* ``compute_correlation_features(market_id, timestamp, db_path, config_path)`` -> ``dict``
-* ``compute_correlation_features_batch(market_ids, timestamp, db_path, config_path)`` -> ``pd.DataFrame``
-
-Cluster configuration is hand-curated in ``config/market_clusters.json``;
-update that file when new related markets appear. Markets not in any cluster
-get ``cluster_id=None`` and all cluster-derived features as ``None``/``NaN``.
-
-Aggregation semantics
----------------------
-``cluster_avg_price``, ``cluster_avg_momentum_1h``, ``cluster_price_dispersion``,
-and ``cluster_lead_signal`` are all **peer-only** — they aggregate over cluster
-members other than the current market. This keeps ``own_vs_cluster_momentum``
-a clean own-minus-peer-mean and avoids self-leakage when these features feed an
-ML model. A consequence: a cluster containing only the current market (size 1)
-has no peers and therefore yields ``None`` for every aggregate, including
-dispersion. Clusters of size 2 (one peer) get ``dispersion=0`` trivially.
-
-Missing momentum / price values for individual peers are excluded from the
-average rather than zero-imputed, so a few stale peers don't drag the cluster
-mean toward 0.
-"""
+"""Cluster / correlation features for prediction markets."""
 
 from __future__ import annotations
 
@@ -58,20 +28,13 @@ CORRELATION_FEATURE_KEYS: tuple[str, ...] = (
 )
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 def load_clusters(
     config_path: Path | str = DEFAULT_CONFIG_PATH,
 ) -> dict[str, list[str]]:
-    """Load cluster definitions from JSON.
-
-    File format is a flat dict: ``cluster_name -> [market_id_str, ...]``.
-    All market_ids are coerced to strings on load so callers don't have to
-    care whether the JSON happens to have integers or strings.
-    """
+    """Load cluster definitions from JSON."""
     p = Path(config_path)
     with open(p, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -111,13 +74,7 @@ def compute_correlation_features_batch(
     db_path: Path | str = DEFAULT_DB_PATH,
     config_path: Path | str = DEFAULT_CONFIG_PATH,
 ) -> pd.DataFrame:
-    """Compute cluster features for a list of markets at a single timestamp.
-
-    Strategy: collect the union of (input ids ∪ all peers of input ids),
-    call :func:`compute_features_batch` once on that union, then derive
-    cluster aggregates per target market by slicing into the result. This is
-    O(unique market features fetched) rather than O(N × cluster_size).
-    """
+    """Compute cluster features for a list of markets at a single timestamp."""
     ids = [str(m) for m in market_ids]
     if not ids:
         return pd.DataFrame(columns=list(CORRELATION_FEATURE_KEYS))
@@ -149,20 +106,13 @@ def compute_correlation_features_batch(
     return pd.DataFrame(rows, columns=list(CORRELATION_FEATURE_KEYS))
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _build_market_to_cluster(
     clusters: dict[str, list[str]],
 ) -> dict[str, str]:
-    """Build a market_id -> cluster_name reverse lookup.
-
-    If a market_id appears in more than one cluster, the last-defined wins.
-    The config is hand-curated; duplicates are an editing mistake we don't
-    silently fix here.
-    """
+    """Build a market_id -> cluster_name reverse lookup."""
     rev: dict[str, str] = {}
     for cname, members in clusters.items():
         for mid in members:
@@ -189,9 +139,6 @@ def _build_correlation_row(
 
     peer_ids = [m for m in members if m != market_id]
     if not peer_ids:
-        # Single-member cluster — no peers, so every peer-only aggregate is
-        # null. ``cluster_id`` and ``cluster_size`` remain populated so the
-        # caller can still tell the market is in a cluster, just alone.
         return base
 
     peer_prices = _collect_floats(features, peer_ids, "price_now")
@@ -233,12 +180,7 @@ def _collect_floats(
 
 
 def _safe_lookup(features: pd.DataFrame, market_id: str, column: str) -> float | None:
-    """Pull ``features.loc[market_id, column]`` as a plain float or None.
-
-    Returns None if the market_id isn't in the index (shouldn't normally
-    happen — compute_features_batch always emits one row per requested id —
-    but defensive against future changes) or if the value is NaN.
-    """
+    """Pull ``features.loc[market_id, column]`` as a plain float or None."""
     try:
         v = features.at[market_id, column]
     except KeyError:

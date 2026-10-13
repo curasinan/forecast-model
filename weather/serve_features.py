@@ -1,9 +1,4 @@
-"""Serve-path features matching historical EMOS ``xmodel_prevruns_v1``.
-
-Builds cross-model mean / population variance of deterministic Previous Runs
-daily extremes — the same feature definition used by ``weather.training``.
-Persisted EMOS params are only loaded when ``metadata.feature_set`` matches.
-"""
+"""Serve-path features matching historical EMOS ``xmodel_prevruns_v1``."""
 
 from __future__ import annotations
 
@@ -55,24 +50,10 @@ def lead_day_for_market(
     now: datetime | None = None,
     decision_hour_local: int = 12,
 ) -> int:
-    """Lead day at the current (or frozen) decision instant.
-
-    Matches training: decision is local ``decision_hour`` on day
-    ``valid_date - lead_day``. Uses today's local calendar date when
-    ``now`` is before decision_hour, else tomorrow as the decision day
-    if we are past decision_hour... Actually simpler: decision_date =
-    local date of ``now`` if now.hour >= decision_hour else local date
-    of now still (you can decide earlier same day for lead_day based on
-    date difference only).
-
-    lead_day = (valid_local_date - local_calendar_date(now)).days
-    Clamped to >= 0.
-    """
+    """Lead day at the current (or frozen) decision instant."""
     now = now or datetime.now(timezone.utc)
     local = now.astimezone(ZoneInfo(timezone_name))
     decision_date = local.date()
-    # If before decision_hour, still use today's date as decision day
-    # (availability filter will use decision_hour on that day).
     v = date.fromisoformat(valid_local_date)
     return max(0, (v - decision_date).days)
 
@@ -118,7 +99,7 @@ def _rows_from_history_db(
     now: datetime | None = None,
 ) -> dict[str, float]:
     """Return model_name -> daily extreme for one (station, date, lead)."""
-    del now  # availability uses decision_time on valid_date - lead, not wall clock
+    del now
     expected_unit = "celsius" if station.unit_default.upper() == "C" else "fahrenheit"
     value_col = "temp_max" if metric == "high" else "temp_min"
     placeholders = ",".join("?" for _ in models)
@@ -225,11 +206,7 @@ def build_xmodel_features(
     fetch_if_missing: bool = True,
     now: datetime | None = None,
 ) -> XModelFeatures | None:
-    """Build xmodel_prevruns_v1 features for one market decision.
-
-    Tries ``forecast_history_daily`` first; optionally fetches Previous Runs
-    live and retries. Returns None if the full ensemble is unavailable.
-    """
+    """Build xmodel_prevruns_v1 features for one market decision."""
     if metric not in ("high", "low"):
         raise ValueError(f"metric must be high|low, got {metric!r}")
     registry = registry or load_station_registry()

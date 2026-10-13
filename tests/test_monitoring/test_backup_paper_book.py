@@ -32,7 +32,6 @@ def root(tmp_path) -> Path:
     root = tmp_path / "quant_data"
     book = root.joinpath(*BOOK)
     book.parent.mkdir(parents=True)
-    # closing(): a connection that is only left behind keeps the file locked on Windows
     with closing(sqlite3.connect(book)) as conn:
         conn.execute("CREATE TABLE trade_log (order_id TEXT PRIMARY KEY, status TEXT NOT NULL)")
         conn.executemany("INSERT INTO trade_log VALUES (?, ?)",
@@ -59,7 +58,6 @@ def test_the_copy_and_its_manifest_agree(root, tmp_path):
     assert manifest["/".join(MODEL)] == {"sha256": _sha256(model_copy),
                                          "size": model_copy.stat().st_size}
     assert manifest["/".join(BOOK)]["sha256"] == _sha256(day_dir.joinpath(*BOOK))
-    # an operational file this root does not hold is recorded as absent, not skipped
     assert manifest["climate_data/labels/labels_ledger.parquet"] is None
 
 
@@ -229,8 +227,6 @@ def _book_last() -> tuple:
 
 def test_a_reordered_manifest_still_refuses_a_root_without_the_paper_book(
         tmp_path, monkeypatch, capsys):
-    # With the book last, MANIFEST_FILES[0] is the sync ledger, which this root does hold: a
-    # refusal that looked at the first entry would let a backup of a root with no book through.
     reordered = _book_last()
     monkeypatch.setattr(backup_paper_book, "MANIFEST_FILES", reordered)
     root = tmp_path / "quant_data"
@@ -249,8 +245,6 @@ def test_a_reordered_manifest_still_refuses_a_root_without_the_paper_book(
 
 def test_a_reordered_manifest_does_not_refuse_a_root_that_holds_the_paper_book(
         root, tmp_path, monkeypatch):
-    # The fixture's root holds the book and a model but no sync ledger, which a reorder
-    # would put first: the refusal is about the book, not about whatever file is first.
     reordered = _book_last()
     assert not root.joinpath(*reordered[0]).exists()
     monkeypatch.setattr(backup_paper_book, "MANIFEST_FILES", reordered)

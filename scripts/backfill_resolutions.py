@@ -1,23 +1,4 @@
-"""One-off backfill of ``markets.resolution`` for already-resolved markets.
-
-Scope: markets with ``status='resolved_or_removed'``, NULL resolution, and at
-least one snapshot — the only markets that can ever become training rows
-(no snapshots means no features). Fetches each market's ``outcomePrices``
-from Gamma's single-market endpoint and stores the normalized outcome
-(1=YES, 0=NO, NULL=no definitive outcome).
-
-Resumable by construction: already-backfilled rows have non-NULL resolution
-and drop out of the candidate query, so an interrupted run just picks up
-where it left off (ambiguous markets stay NULL and are re-checked — cheap at
-this scope).
-
-Usage:
-    python scripts/backfill_resolutions.py                 # full backfill
-    python scripts/backfill_resolutions.py --only-id 703986  # single-market sanity test
-    python scripts/backfill_resolutions.py --limit 50        # bounded trial run
-
-Writes ONLY the markets.resolution column. Read-only against everything else.
-"""
+"""One-off backfill of ``markets.resolution`` for already-resolved markets."""
 
 from __future__ import annotations
 

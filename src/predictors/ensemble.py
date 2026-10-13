@@ -1,17 +1,4 @@
-"""Level 4 Predictor: Weighted ensemble of all predictors.
-
-Combines Bayesian + Classical ML + Claude LLM into a single probability
-estimate. Weights are based on each predictor's historical calibration
-performance (Brier score). Until we have enough history, uses
-confidence-weighted averaging.
-
-The ensemble almost always outperforms individual predictors because:
-1. Each model captures different aspects of the evidence
-2. Averaging reduces variance from any one model's biases
-3. Confidence weighting gives more weight to models that are more certain
-
-Phase 4+: Weights adapt based on tracked calibration performance.
-"""
+"""Level 4 Predictor: Weighted ensemble of all predictors."""
 
 import logging
 
@@ -22,8 +9,6 @@ from src.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
-# Default weights when no calibration history exists.
-# These reflect our prior belief about model quality.
 DEFAULT_WEIGHTS: dict[str, float] = {
     "bayesian": 0.25,
     "classical_ml": 0.25,
@@ -32,13 +17,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 
 
 class EnsemblePredictor(BasePredictor):
-    """Weighted combination of multiple predictors.
-
-    Weighting strategies:
-    1. confidence_weighted (default): weight by each predictor's confidence
-    2. calibration_weighted: weight by inverse Brier score from history
-    3. equal: simple average
-    """
+    """Weighted combination of multiple predictors."""
 
     name = "ensemble"
 
@@ -77,11 +56,7 @@ class EnsemblePredictor(BasePredictor):
         return prob, avg_conf, "\n".join(parts)
 
     def _calibration_weighted(self) -> tuple[float, float, str]:
-        """Weight by historical calibration performance (inverse Brier score).
-
-        Predictors with lower Brier scores (better calibration) get more weight.
-        Falls back to default weights if no learned weights are available.
-        """
+        """Weight by historical calibration performance (inverse Brier score)."""
         weights = self._learned_weights or DEFAULT_WEIGHTS
         valid = [p for p in self._sub_predictions if p.predictor_name in weights]
 
@@ -164,19 +139,7 @@ def compute_ensemble_weights(
     predictor_names: list[str] | None = None,
     min_predictions: int = 10,
 ) -> dict[str, float]:
-    """Compute optimal weights from historical calibration performance.
-
-    Uses inverse Brier score: predictors with lower Brier (better calibration)
-    get higher weight.
-
-    Args:
-        tracker: EvaluationTracker instance with historical data
-        predictor_names: Which predictors to weight (default: all)
-        min_predictions: Minimum resolved predictions required
-
-    Returns:
-        Dict of {predictor_name: weight} normalized to sum to 1.0
-    """
+    """Compute optimal weights from historical calibration performance."""
     resolved = tracker.get_resolved_predictions()
     if len(resolved) < min_predictions:
         logger.info(
@@ -208,8 +171,6 @@ def compute_ensemble_weights(
     if not brier_scores:
         return DEFAULT_WEIGHTS.copy()
 
-    # Inverse Brier -> weight (lower Brier = better = higher weight)
-    # Add small epsilon to avoid division by zero
     inv_brier = {name: 1.0 / (brier + 0.01) for name, brier in brier_scores.items()}
     total = sum(inv_brier.values())
     weights = {name: v / total for name, v in inv_brier.items()}

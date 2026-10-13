@@ -1,63 +1,4 @@
-"""Migrate `ibkr_paper.db` to the v2 schema and backfill legacy permIds.
-
-Three `placed` rows written on 2026-08-25 predate the `perm_id` column
-added to `trade_log` by Task 1.3, so they have no venue permId on file.
-The operator captured those permIds out-of-band via `reqAllOpenOrders`
-into a JSON file. This script (idempotent, safe to re-run):
-
-1. Ensures `trade_log` has the `perm_id`/`last_synced_utc` columns (a
-   no-op if Task 1.3's `PositionTracker._ensure_columns` already added
-   them -- this migration reuses that exact static method).
-2. Creates the `fill_events` table (see `src.trading.paper_schema` for
-   the DDL and the single source of truth for this table's shape).
-3. Backfills `perm_id` for rows named in an operator-supplied permId map,
-   accepting either shape:
-   - ``{order_id: perm_id}`` -- a simple mapping, matched by order_id.
-     An order_id absent from `trade_log` raises `ValueError` naming it.
-   - the raw Task-0.2 `reqAllOpenOrders` capture: a list of dicts with
-     keys ``order_id_venue``, ``perm_id``, ``con_id``, ``local_symbol``,
-     ``action``, ``qty``, ``lmt``, ``status``. Venue order ids do not
-     appear in `trade_log`, so these are matched to a row by
-     ``qty == trade_log.size AND lmt == trade_log.price``. A match that
-     is not unique (multiple trade_log rows with the same size+price, or
-     conflicting perm_ids resolving to the same row) raises `ValueError`
-     rather than guessing. A capture entry that matches zero rows is not
-     an error (the operator's console capture may legitimately cover
-     orders outside this backfill's target rows) but is never silently
-     dropped either: it is counted in the returned ``permids_unmatched``
-     and detailed in ``unmatched_entries`` so an operator can tell "decoy,
-     correctly ignored" apart from "a real row silently failed to match".
-
-`positions` is never touched -- the v2 schema needs no changes there.
-
-All schema changes and backfill writes happen in a single transaction:
-`sqlite3.Connection.autocommit` is set to `False` (Python 3.12+) so that
-DDL (CREATE/ALTER, which the stdlib sqlite3 module would otherwise
-auto-commit ahead of a surrounding transaction) rolls back together with
-the backfill UPDATEs if anything raises partway through.
-
-Timestamp/commission semantics for the `fill_events` table this script
-creates (operator-approved 2026-08-25; full note lives in
-`src.trading.paper_schema`, the single source of truth):
-
-- `detected_ts_utc` is the sync **detection** time, always set. On the
-  position-diff path the TRUE fill time is unknown -- a fill that landed
-  days ago is only detected at the next sync. Neither `detected_ts_utc`
-  nor `ts_utc` may be treated as the fill time in P&L timing analysis.
-- `ts_utc` is the best-known event time: for sync-created rows today it
-  equals `detected_ts_utc`; a future execution-report enrichment may set
-  it to the venue execution time instead.
-- `commission_usd` stays NULL today; the column exists now so a future
-  `reqExecutions`/`CommissionReport` enrichment does not need a second
-  migration.
-
-CLI:
-
-    python scripts/migrations/migrate_ibkr_paper_v2.py --db <path> \\
-        [--permid-map <path-to-json>]
-
-`--permid-map` is optional -- omitting it runs a schema-only migration.
-"""
+"""Migrate `ibkr_paper.db` to the v2 schema and backfill legacy permIds."""
 
 from __future__ import annotations
 
@@ -70,24 +11,13 @@ from pathlib import Path
 from src.trading.paper_schema import FILL_EVENTS_DDL
 from src.trading.position_tracker import PositionTracker
 
-# Columns Task 1.3 added to trade_log; this migration must be a no-op on
-# a db where PositionTracker has already added them.
 TRADE_LOG_V2_COLUMNS = {"perm_id": "TEXT", "last_synced_utc": "TEXT"}
 
 
 def _resolve_assignments(
     conn: sqlite3.Connection, permid_map
 ) -> tuple[dict[str, str], list[dict]]:
-    """Turn a permid_map (either accepted shape) into {order_id: perm_id_str},
-    validating every entry against the current trade_log contents.
-
-    Returns (assignments, unmatched_entries). `unmatched_entries` is always
-    empty for the dict shape (an unmatched order_id there is an error, not a
-    silent skip) and for None; for the list shape it holds one
-    {order_id_venue, perm_id, qty, lmt} dict per capture entry that could not
-    be resolved to exactly one trade_log row -- surfaced, never dropped
-    silently.
-    """
+    """Turn a permid_map into {order_id: perm_id_str}, validated against trade_log."""
     if permid_map is None:
         return {}, []
 
@@ -128,9 +58,6 @@ def _resolve_assignments(
             ).fetchall()
 
             if not rows:
-                # No matching legacy row. Not an error -- the capture may cover
-                # orders outside this backfill's target rows -- but it must be
-                # visible, not a silent no-op indistinguishable from a decoy.
                 unmatched.append(_unmatched_entry())
                 continue
 
@@ -172,26 +99,10 @@ def _apply_assignments(conn: sqlite3.Connection, assignments: dict[str, str]) ->
 
 
 def migrate(db_path: str, permid_map: dict | list | None = None) -> dict:
-    """Migrate `db_path` to the v2 schema and optionally backfill permIds.
-
-    Returns
-        {
-            "columns_added": [...],
-            "fill_events_created": bool,
-            "permids_backfilled": int,
-            "permids_unmatched": int,       # list-shape capture entries that
-                                             # matched no trade_log row; 0 for
-                                             # dict-shape/None maps
-            "unmatched_entries": [...],     # one {order_id_venue, perm_id,
-                                             # qty, lmt} dict per unmatched entry
-        }
-
-    Idempotent: re-running with the same (or no) permid_map changes nothing.
-    All writes happen in a single transaction (see module docstring).
-    """
+    """Migrate `db_path` to the v2 schema and optionally backfill permIds."""
     conn = sqlite3.connect(str(db_path))
     try:
-        conn.autocommit = False  # make DDL participate in the same transaction as the DML below
+        conn.autocommit = False
         with conn:
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(trade_log)")}
             columns_added = [c for c in TRADE_LOG_V2_COLUMNS if c not in existing_cols]

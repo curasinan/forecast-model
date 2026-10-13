@@ -1,24 +1,4 @@
-"""Level 2 Predictor: Gradient-boosted trees (XGBoost + LightGBM).
-
-This is the "workhorse" predictor that top Polymarket bots use.
-Gradient-boosted trees are the gold standard for tabular data — they
-handle feature interactions, nonlinearities, and missing values natively.
-
-The approach:
-1. Extract features from evidence (sentiment, frequency, temporal, market, credibility)
-2. Train on historical predictions with known outcomes
-3. Use CalibratedClassifierCV for proper probability calibration
-4. Ensemble XGBoost + LightGBM for robustness
-
-Until we have enough historical data to train on (Phase 4+), this predictor
-uses a heuristic feature-scoring approach that mimics what a trained model
-would learn, while providing the infrastructure for real training later.
-
-Key ML concepts used:
-- Gradient Boosting: builds trees sequentially, each correcting the previous
-- Calibration: transforms raw scores into true probabilities (Platt scaling / isotonic)
-- Ensemble: average of XGBoost + LightGBM reduces variance
-"""
+"""Level 2 Predictor: Gradient-boosted trees (XGBoost + LightGBM)."""
 
 import logging
 
@@ -29,9 +9,6 @@ from src.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
-# Feature weights learned from domain knowledge
-# Positive weight = feature increases YES probability
-# These serve as initial weights before we have training data
 FEATURE_WEIGHTS: dict[str, float] = {
     # Sentiment features (positive sentiment -> higher YES probability)
     "avg_sentiment": 0.15,
@@ -79,15 +56,7 @@ def _scale(value: float, min_val: float, max_val: float) -> float:
 
 
 class ClassicalMLPredictor(BasePredictor):
-    """Gradient-boosted tree predictor (heuristic mode until trained).
-
-    In heuristic mode: uses domain-knowledge feature weights to produce
-    a probability estimate. This mimics what XGBoost/LightGBM would learn
-    from training data, giving us the infrastructure now.
-
-    In trained mode (Phase 4+): loads a trained model from disk and
-    predicts using actual learned weights.
-    """
+    """Gradient-boosted tree predictor (heuristic mode until trained)."""
 
     name = "classical_ml"
 
@@ -96,14 +65,7 @@ class ClassicalMLPredictor(BasePredictor):
         self._is_trained = False
 
     def _heuristic_predict(self, features: dict[str, float], market_price: float) -> tuple[float, str]:
-        """Feature-weighted prediction (pre-training mode).
-
-        Uses domain knowledge weights to combine features into a probability
-        adjustment from the market price. The market price is the anchor —
-        we only deviate based on feature evidence.
-
-        Returns (probability, reasoning_string).
-        """
+        """Feature-weighted prediction (pre-training mode)."""
         # Start from market price as the anchor
         adjustments: list[tuple[str, float]] = []
         total_adjustment = 0.0
@@ -124,8 +86,6 @@ class ClassicalMLPredictor(BasePredictor):
                 adjustments.append((feature_name, adjustment))
                 total_adjustment += adjustment
 
-        # Apply adjustment to market price using sigmoid-like bounding
-        # This prevents extreme probabilities from feature noise
         raw_prob = market_price + total_adjustment
         probability = max(0.05, min(0.95, raw_prob))
 
@@ -147,14 +107,7 @@ class ClassicalMLPredictor(BasePredictor):
         return probability, "\n".join(reasoning_parts)
 
     def _trained_predict(self, features: dict[str, float]) -> tuple[float, str]:
-        """Predict using a trained XGBoost/LightGBM model.
-
-        This will be implemented in Phase 4 when we have training data.
-        """
-        # Placeholder for Phase 4. Would be:
-        #   feature_names = sorted(FEATURE_WEIGHTS.keys())
-        #   x = np.array([[features.get(f, 0.0) for f in feature_names]])
-        #   probability = self._model.predict_proba(x)[0][1]
+        """Predict using a trained XGBoost/LightGBM model."""
         raise NotImplementedError("Trained prediction requires Phase 4 training data")
 
     async def predict(

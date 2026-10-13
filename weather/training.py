@@ -1,20 +1,4 @@
-"""Build no-look-ahead EMOS training frames from the historical tables.
-
-Joins forecast_history_daily (Previous Runs backfill) to daily labels on
-(station, valid_local_date, lead_day) with two temporal guards:
-  1. forecast availability: effective init + per-model availability lag must
-     precede the decision time (local decision_hour on day D - lead_day);
-  2. label maturity: label rows must be finalized and >= 72h old — re-checked
-     at query time because the stored flag ages.
-
-Labels are resolved by source priority (``TrainingFrameSpec.label_sources``):
-settlement-quality NWS CLI / Wunderground values from ``resolution_labels``
-first, ASOS-derived ``obs_daily`` extremes only as fallback.
-
-Feature definition (stamp in model metadata; do NOT mix with the live
-per-model ensemble-member stats): cross-model mean / population variance of
-the deterministic previous-run daily values.
-"""
+"""Build no-look-ahead EMOS training frames from the historical tables."""
 
 from __future__ import annotations
 
@@ -45,8 +29,6 @@ FRAME_COLUMNS = [
     "label_source",
 ]
 
-# Settlement-quality first: markets resolve on NWS CLI (US) / Wunderground
-# (global); ASOS METAR extremes are the fallback and can understate by ~1F.
 OBS_LABEL_SOURCE = "iem_asos"
 DEFAULT_LABEL_SOURCES = ("iem_cli", "nws_cli", "wunderground_api", OBS_LABEL_SOURCE)
 
@@ -62,19 +44,13 @@ class TrainingFrameSpec:
     min_hours_obs: int = 18
     require_full_ensemble: bool = True
     feature_set: str = FEATURE_SET
-    # Priority order; earlier sources win. Sources other than OBS_LABEL_SOURCE
-    # are read from resolution_labels, which is settlement truth.
     label_sources: tuple[str, ...] = DEFAULT_LABEL_SOURCES
 
 
 def label_priority_rank_sql(
     alias: str, sources: tuple[str, ...] = DEFAULT_LABEL_SOURCES
 ) -> str:
-    """SQL CASE ranking label_source by priority (lower = preferred).
-
-    Lets consumers of ``resolution_labels`` pick one label per
-    (station, date, metric) instead of fanning out across sources.
-    """
+    """SQL CASE ranking label_source by priority (lower = preferred)."""
     if not all(s.replace("_", "").isalnum() for s in sources):
         raise ValueError(f"label sources must be identifier-like: {sources!r}")
     whens = " ".join(
@@ -106,21 +82,12 @@ def build_training_frame(
     registry: StationRegistry | None = None,
     now: datetime | None = None,
 ) -> pd.DataFrame:
-    """Columns: valid_local_date, obs_value, ens_mean, ens_var, n_models,
-    label_source.
-
-    ens_var is population variance (ddof=0), matching the live pipeline's
-    pstdev convention. Dates with fewer than 2 surviving models are dropped
-    (a single model has no spread); with require_full_ensemble, dates missing
-    any requested model are dropped so the feature keeps one composition.
-    """
+    """Columns: valid_local_date, obs_value, ens_mean, ens_var, n_models, label_source."""
     if spec.metric not in ("high", "low"):
         raise ValueError(f"metric must be 'high' or 'low', got {spec.metric!r}")
     registry = registry or load_station_registry()
     station = registry.require(spec.station_icao)
 
-    # Units must agree at the join: forecast rows carry the unit they were
-    # requested in; the obs column is picked from the same station unit.
     expected_unit = "celsius" if station.unit_default.upper() == "C" else "fahrenheit"
     placeholders = ",".join("?" for _ in spec.models)
     conn = sqlite3.connect(db_path)
@@ -191,15 +158,10 @@ def build_training_frame(
     else:
         obs_col = "tmax_f" if spec.metric == "high" else "tmin_f"
 
-    # Candidate labels per date, then resolve by spec.label_sources priority.
-    # NOTE: settlement sources publish whole degrees F; a station whose
-    # unit_default is C must not mix them with celsius obs.
     candidates: dict[str, dict[str, float]] = {}
     if station.unit_default.upper() != "C":
         for r in label_rows:
             d = r["valid_local_date"]
-            # Defensive re-check: the stored flag ages; the 72h rule must
-            # still hold at query time.
             if not usable_for_training(d, bool(r["finalized"]), now):
                 continue
             candidates.setdefault(d, {})[str(r["label_source"])] = float(r["label_value"])

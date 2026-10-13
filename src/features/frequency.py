@@ -12,8 +12,6 @@ class FrequencyExtractor(BaseFeatureExtractor):
         recent_7d = len(bundle.recent(days=7))
         recent_30d = len(bundle.recent(days=30))
 
-        # Acceleration: ratio of last-7d mentions to previous-23d mentions
-        # > 1 means mentions are accelerating (something is happening)
         older_23d = recent_30d - recent_7d
         if older_23d > 0:
             acceleration = recent_7d / (older_23d / (23 / 7))  # Normalize for time period

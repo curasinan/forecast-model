@@ -1,9 +1,4 @@
-"""IBKR adapter cross-client open-order fetch: get_all_open_orders() + venue_meta.
-
-Reuses the FakeIB pattern from test_ibkr_orders.py, extended with
-reqAllOpenOrders() so a fake session can carry orders placed by *another*
-client (orderId=0, only permId identifies them) alongside its own trades.
-"""
+"""IBKR adapter cross-client open-order fetch: get_all_open_orders() + venue_meta."""
 
 from __future__ import annotations
 
@@ -75,8 +70,6 @@ class FakeIB:
         return [t for t in self._trades if t.orderStatus.status in ("Submitted", "PreSubmitted")]
 
     def reqAllOpenOrders(self):
-        # A real cross-client session sees every resting order, own and
-        # foreign, regardless of which client id placed it.
         return list(self._trades) + list(self._foreign_trades)
 
 
@@ -84,7 +77,7 @@ def adapter_with_fake_ib() -> tuple[IBKRAdapter, FakeIB]:
     adapter = IBKRAdapter(make_settings(), role="paper_sync", read_only=True)
     fake = FakeIB()
     adapter.ib = fake
-    adapter.connect()  # verifies mode from the account prefix, as in test_ibkr_orders.py
+    adapter.connect()
     return adapter, fake
 
 

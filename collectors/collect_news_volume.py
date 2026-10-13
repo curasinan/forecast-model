@@ -1,20 +1,4 @@
-"""News-volume collector — GDELT 2.0 DOC API article counts per market.
-
-For every market with LLM-derived search keywords (from ``llm_scores``),
-queries GDELT for article counts over the trailing 72 hours and 30 days and
-stores a spike ratio (72h count vs the 30-day daily average).
-
-GDELT quirks handled (observed live):
-- Hard rate limit of ~1 request / 5 seconds; 429 bodies are PLAIN TEXT,
-  not JSON — any non-JSON response is treated as retryable.
-- ``timelinevolraw`` gives true counts as a time series; one 30-day query
-  yields BOTH windows (sum all points = 30d, sum trailing-72h points = 72h),
-  halving request volume. Fallback: two ``artlist`` calls whose counts cap
-  at 250 records (logged as capped).
-
-Run:
-    python -m collectors.collect_news_volume [--limit N]
-"""
+"""News-volume collector — GDELT 2.0 DOC API article counts per market."""
 
 from __future__ import annotations
 
@@ -42,9 +26,7 @@ REQUEST_TIMEOUT_S = 30
 log = logging.getLogger("collect_news_volume")
 
 
-# --------------------------------------------------------------------------- #
 # Logging / schema
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -84,9 +66,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-# --------------------------------------------------------------------------- #
 # Math helpers (unit-tested)
-# --------------------------------------------------------------------------- #
 
 
 def compute_spike_ratio(articles_72h: int | None, articles_30d: int | None) -> float | None:
@@ -102,11 +82,7 @@ def sum_timeline_counts(
     now: datetime,
     trailing_hours: int = 72,
 ) -> tuple[int, int] | None:
-    """From a ``timelinevolraw`` JSON payload, return (articles_72h, articles_30d).
-
-    Timeline data points look like {"date": "20260704T120000Z", "value": N}.
-    Returns None if the payload doesn't have the expected shape.
-    """
+    """From a ``timelinevolraw`` JSON payload, return (articles_72h, articles_30d)."""
     timeline = payload.get("timeline")
     if not isinstance(timeline, list) or not timeline:
         return None
@@ -143,9 +119,7 @@ def build_query(keywords: list[str]) -> str:
     return terms[0] if terms else ""
 
 
-# --------------------------------------------------------------------------- #
 # GDELT client
-# --------------------------------------------------------------------------- #
 
 
 def _gdelt_get(session: requests.Session, params: dict) -> dict | None:
@@ -210,9 +184,7 @@ def fetch_article_counts(
     return counts[0], counts[1]
 
 
-# --------------------------------------------------------------------------- #
 # Main
-# --------------------------------------------------------------------------- #
 
 
 def load_candidates(conn: sqlite3.Connection) -> list[tuple[str, list[str]]]:

@@ -1,15 +1,4 @@
-"""Gateway connection management under the single-writer client-id rule.
-
-Each process role owns exactly one client id (migration spec Stage 2.3/2.4):
-
-    live_trading   -> 1   (never connected by this codebase)
-    data_collector -> 2   (the recorder, the only sanctioned writer of ticks)
-    research       -> 3
-
-Ids are NEVER auto-incremented on collision: a second holder of an id means
-two processes think they own a role, which is exactly the bug the map exists
-to make loud. The collision raises ClientIdInUseError instead.
-"""
+"""Gateway connection management under the single-writer client-id rule."""
 
 from __future__ import annotations
 
@@ -38,12 +27,7 @@ class ClientIdInUseError(VenueError):
 
 
 def _configure_win32_event_loop() -> None:
-    """ib_async needs the selector loop on Windows (raw sockets).
-
-    The policy API is deprecated (removal in 3.16) but is still the only way
-    to steer ib_async's internally created loop; suppress the warning, same
-    as scripts/verify_ibkr_entitlements.py.
-    """
+    """ib_async needs the selector loop on Windows (raw sockets)."""
     if sys.platform == "win32":
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -56,22 +40,7 @@ def connect_ib(
     timeout: float = 10.0,
     readonly: bool | None = None,
 ):
-    """Connect to the Gateway as ``role`` and return a connected ib_async IB.
-
-    Raises ValueError for an unknown role and ClientIdInUseError when the
-    role's id is already connected (never auto-increments -- see module
-    docstring). ``readonly`` defaults to None, which resolves to
-    ``role != "live_trading"``: every role but ``live_trading`` connects
-    readonly.
-
-    ``readonly`` does NOT gate order transmission -- three real paper orders
-    went out over a ``readonly=True`` connection on 2026-08-25. The actual
-    transmission gates are the adapter's ``read_only`` flag and the
-    paper-account check in ``_place_order``. What ``readonly=False`` buys
-    ``live_trading`` is the startup open/completed-orders fetch, so the
-    session can see and bind its own resting orders instead of flying blind
-    to GTC orders it placed before restarting.
-    """
+    """Connect to the Gateway as ``role`` and return a connected ib_async IB."""
     if role not in CLIENT_IDS:
         raise ValueError(f"unknown role {role!r}; valid roles: {sorted(CLIENT_IDS)}")
     if readonly is None:
@@ -79,8 +48,6 @@ def connect_ib(
     _configure_win32_event_loop()
     from ib_async import IB  # lazy: the loop policy must be set first
 
-    # Without this, any request dropped during a Gateway<->IBKR connectivity
-    # blip (error 1100) blocks its sync wrapper forever (verified 2026-08-16).
     IB.RequestTimeout = 60
 
     client_id = CLIENT_IDS[role]

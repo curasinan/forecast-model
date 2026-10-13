@@ -7,13 +7,13 @@
 #               (REPO_WSL from scripts/spark/env.sh starts with //mnt on purpose: Git Bash
 #               rewrites a bare /mnt/... argument into a Windows path before wsl.exe sees it)
 #
-# Until the cutover (docs/plans/2026-10-05-spark-runtime-move-design.md section 6) the
+# Until the cutover the
 # Zenbook's ~/quant_data is the live root and this script feeds the Spark's research mirror.
 # From the cutover on, the Zenbook's root is itself a mirror and carries the marker file
 # .mirror-of-spark; this script then REFUSES to run (exit 3), because a mirror is never
 # pushed over anything. Data flows from the Spark from then on (pull_snapshot.sh).
 #
-# Steps (design: docs/plans/2026-09-30-spark-research-split-design.md section 4):
+# Steps:
 #   1. freeze  ~/quant_data -> ~/quant_data_snapshot   (local, --delete, so the Zenbook-side
 #      parity run reads exactly the bytes the Spark gets). parity/ and identity_spark.json
 #      inside the snapshot are evidence and survive the --delete. The recorder's state/ dir,
@@ -74,8 +74,6 @@ EXCLUDES=(--exclude "ibkr_ticks/state/" --exclude "*.tmp" --exclude "*-journal"
 if [ "$INCLUDE_RAW" -eq 0 ]; then
   EXCLUDES+=(--exclude "climate_data/raw/")
 fi
-# Evidence that lives inside the snapshot: protected from the freeze's --delete
-# (rsync never deletes excluded paths on the receiver) and never pushed.
 KEEP=(--exclude "/parity/" --exclude "/identity_spark.json")
 
 FREEZE=(rsync -rlt --delete "${EXCLUDES[@]}" "${KEEP[@]}" "$SRC/" "$SNAP/")

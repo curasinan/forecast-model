@@ -1,23 +1,4 @@
-"""Compare Metaculus list-endpoint vs detail-endpoint response shape.
-
-The collector currently uses /api2/questions/ (list) and reads
-``aggregations.recency_weighted.latest`` to extract the community
-probability. If 100% of stored rows have null community_probability,
-the most likely cause is one of:
-
-  (A) aggregations is absent from the LIST response (very common — many
-      APIs only return summary fields in lists, full payload in details);
-  (B) the field path moved (renamed, nested differently);
-  (C) the API requires a query-param like ``include=aggregations``.
-
-This script fetches a single question via BOTH endpoints, dumps full
-JSON to logs/, and reports which fields each response carries that
-match commun/aggregat/predict/prob/forecast.
-
-Run:
-    $env:METACULUS_API_TOKEN = "<your_token>"
-    python scripts/diagnose_metaculus.py
-"""
+"""Compare Metaculus list-endpoint vs detail-endpoint response shape."""
 
 from __future__ import annotations
 
@@ -64,7 +45,6 @@ def main() -> int:
     detail_path.write_text(json.dumps(detail, indent=2), encoding="utf-8")
     print(f"    saved -> {detail_path}  ({len(json.dumps(detail))} chars)")
 
-    # 2) LIST endpoint (the one the collector uses), filtered to this single id if possible
     list_url = "https://www.metaculus.com/api2/questions/"
     print(f"\n[2] GET {list_url}?ids={QUESTION_ID}")
     rl = requests.get(list_url, headers=headers, params={"ids": QUESTION_ID}, timeout=30)

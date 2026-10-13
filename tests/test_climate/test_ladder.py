@@ -42,7 +42,6 @@ def test_p_yes_resolution_shifts_threshold_half_a_print():
     pure = p_yes(1.10, mu=1.10, sigma=0.2)
     rounded = p_yes(1.10, mu=1.10, sigma=0.2, resolution=0.01)
     assert pure == pytest.approx(0.5)
-    # Tie at the printed value becomes NO under strictly-greater + 0.01 rounding.
     assert rounded < pure
     assert rounded == pytest.approx(p_yes(1.105, mu=1.10, sigma=0.2))
 
@@ -58,7 +57,6 @@ def test_target_month_prefers_local_symbol_over_expiry_heuristic():
     assert target_month_from_local_symbol("GTM_0726_0.6_YES") == "2026-07"
     assert target_month_from_local_symbol("GTM") is None
     assert target_month_from_contract_month("202612") == "2026-12"
-    # GTM_1226 expires 2027-02-12: the expiry heuristic maps to 2027-01, which is wrong.
     assert target_month_from_expiry("20270212") == "2027-01"
     tm, src = target_month_for_contract(
         local_symbol="GTM_1226_0.5_YES", expiry="20270212"

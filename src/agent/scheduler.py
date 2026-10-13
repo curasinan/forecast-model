@@ -1,17 +1,4 @@
-"""Scheduler — periodic re-evaluation of open questions.
-
-Runs the researcher on all tracked questions at a configurable interval.
-Each cycle:
-1. Load all open questions
-2. Run the full pipeline on each
-3. Log results and edge changes
-4. Sleep until next cycle
-
-Usage:
-    scheduler = Scheduler(interval_hours=6)
-    await scheduler.run()  # Runs forever
-    await scheduler.run_once()  # Single cycle
-"""
+"""Scheduler — periodic re-evaluation of open questions."""
 
 import asyncio
 import logging

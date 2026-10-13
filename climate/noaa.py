@@ -1,30 +1,4 @@
-"""NOAA label fetchers for climate contract oracles.
-
-Two source families (docs/venue_semantics.md, 'Climate contract
-resolution oracles', verified 2026-08-18):
-
-- GTM / GT: NCEI Climate at a Glance global land+ocean average
-  temperature departures, degC vs the 1901-2000 base period. GTM is
-  the monthly series, GT the January-December annual value.
-- ACD: NOAA GML Mauna Loa CO2 in ppm. The annual mean file settles
-  ACD; the monthly file is the (currently unlisted) MACD sibling.
-
-Endpoint shapes were discovered empirically (2026-08-18 probe):
-
-- Climate at a Glance data.json:
-    {"description": {"title": ..., "units": "Degrees Celsius",
-                     "base_period": "1901-2000"},
-     "data": {"185001": {"departure": -0.43}, ...}}
-  Monthly keys are 'YYYYMM'; the 12/12 annual variant uses plain 'YYYY'.
-- GML txt files: '#'-prefixed header lines, then whitespace columns
-  (annual: year mean unc; monthly: year month decimal-date average
-  deseasonalized ndays stdev unc).
-
-Fetchers return tidy lists of LabelObservation(series, period, value,
-source_url). They raise OracleDriftError when source metadata no longer
-matches the contract's oracle definition (base period or units change):
-fail loudly rather than record mislabeled settlement data.
-"""
+"""NOAA label fetchers for climate contract oracles."""
 
 from __future__ import annotations
 
@@ -150,10 +124,7 @@ def parse_gml_annual(text: str, source_url: str) -> list[LabelObservation]:
 
 
 def parse_gml_monthly(text: str, source_url: str) -> list[LabelObservation]:
-    """Parse co2_mm_mlo.txt (year month ... average ...) -> acd_monthly rows.
-
-    Uses the 'average' column (4th), which is what the oracle publishes.
-    """
+    """Parse co2_mm_mlo.txt (year month ... average ...) -> acd_monthly rows."""
     rows: list[LabelObservation] = []
     for line in text.splitlines():
         line = line.strip()

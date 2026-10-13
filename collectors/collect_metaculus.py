@@ -1,20 +1,4 @@
-"""Metaculus question collector + Polymarket auto-matcher.
-
-Fetches open forecast-type questions from Metaculus, filters to the
-politics/geopolitics categories, and upserts them into the existing
-``data/polymarket.db`` SQLite (two new tables, no separate DB).
-
-Then runs a token-overlap auto-matcher against the existing Polymarket
-``markets`` table and persists matches to ``metaculus_polymarket_matches``.
-A manual-override JSON at ``config/metaculus_matches_manual.json`` is loaded
-last so hand-curated pairs always win.
-
-Run from the repo root:
-    python -m collectors.collect_metaculus
-
-Env vars:
-    METACULUS_API_TOKEN — required. Sent as ``Authorization: Token <value>``.
-"""
+"""Metaculus question collector + Polymarket auto-matcher."""
 
 from __future__ import annotations
 
@@ -30,8 +14,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import requests
-
-# --- Configuration --------------------------------------------------------- #
 
 METACULUS_BASE_URL = "https://www.metaculus.com/api2"
 QUESTIONS_ENDPOINT = f"{METACULUS_BASE_URL}/questions/"
@@ -60,9 +42,7 @@ TOP_MATCHES_TO_LOG = 5
 log = logging.getLogger("collect_metaculus")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -83,9 +63,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Database
-# --------------------------------------------------------------------------- #
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -128,9 +106,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-# --------------------------------------------------------------------------- #
 # Metaculus API client
-# --------------------------------------------------------------------------- #
 
 
 def _read_token() -> str:
@@ -199,9 +175,7 @@ def fetch_questions_page(
     )
 
 
-# --------------------------------------------------------------------------- #
 # Question parsing
-# --------------------------------------------------------------------------- #
 
 
 def _categories(question: dict[str, Any]) -> list[dict[str, Any]]:
@@ -222,24 +196,7 @@ def _is_target_category(question: dict[str, Any]) -> bool:
 
 
 def _community_probability(question: dict[str, Any]) -> float | None:
-    """Pull the recency-weighted community probability, defensively.
-
-    Spec hint: ``question.aggregations.recency_weighted.latest``. Metaculus'
-    actual ``latest`` is an object whose ``centers`` array holds the binary
-    median (or numeric central estimate). Returns None on any missing piece.
-
-    KNOWN LIMITATION (2026-05-06): Both the /api2/questions/ and /api/posts/
-    endpoints return ``aggregations.recency_weighted.latest = null`` for ALL
-    questions, even active ones with hundreds of forecasts. The actual CP
-    data lives at /api/aggregation_explorer/ which is permission-gated
-    (HTTP 403 "contact support@metaculus.com if you'd like to gain access").
-    Until that scope is granted on the API token, this function will return
-    None for every question. The collector still populates question
-    metadata + matches; only the divergence feature is degraded.
-    """
-    # The diagnostic-found nested key under question.question.aggregations
-    # is also handled because some response shapes wrap question metadata
-    # under a "question" sub-object on the post.
+    """Pull the recency-weighted community probability, defensively."""
     inner = question.get("question") if isinstance(question.get("question"), dict) else None
     aggs = (inner or question).get("aggregations")
     if not isinstance(aggs, dict):
@@ -250,7 +207,6 @@ def _community_probability(question: dict[str, Any]) -> float | None:
     latest = rw.get("latest")
     if latest is None:
         return None
-    # Some API versions inline the value as a float; modern ones nest under .centers
     if isinstance(latest, (int, float)):
         return float(latest)
     if isinstance(latest, dict):
@@ -343,9 +299,7 @@ def upsert_metaculus_question(
     return "inserted"
 
 
-# --------------------------------------------------------------------------- #
 # Auto-matching
-# --------------------------------------------------------------------------- #
 
 
 _PUNCT_RE = re.compile(r"[^\w\s]+")
@@ -374,14 +328,7 @@ def find_auto_matches(
     conn: sqlite3.Connection,
     threshold: float = MATCH_THRESHOLD,
 ) -> list[tuple[int, str, float, str, str]]:
-    """For every Metaculus question without an existing match, find the best
-    Polymarket market by token-overlap and return (mid, pid, score, mq_title,
-    pm_title) tuples for those above threshold.
-
-    Restricts the Polymarket candidate pool to ``status='active'`` markets
-    with non-null question text — resolved/removed markets are not useful as
-    auto-match targets.
-    """
+    """Best Polymarket match by token overlap for each unmatched Metaculus question."""
     # Polymarket candidate pool, pre-tokenized once.
     pm_rows = conn.execute(
         """
@@ -464,9 +411,7 @@ def upsert_match(
     return "inserted"
 
 
-# --------------------------------------------------------------------------- #
 # Manual matches
-# --------------------------------------------------------------------------- #
 
 
 def load_manual_matches(path: Path = MANUAL_MATCHES_PATH) -> list[dict[str, Any]]:
@@ -489,30 +434,14 @@ def load_manual_matches(path: Path = MANUAL_MATCHES_PATH) -> list[dict[str, Any]
     return [d for d in data if isinstance(d, dict)]
 
 
-# --------------------------------------------------------------------------- #
 # Feature helper (for downstream use)
-# --------------------------------------------------------------------------- #
 
 
 def get_metaculus_divergence(
     market_ids: Iterable[str],
     db_path: Path | str = DB_PATH,
-):  # -> pd.DataFrame  (deferred import so module loads without pandas if just running CLI)
-    """For each Polymarket market_id, return community_probability minus the
-    latest snapshot midpoint (the *Metaculus divergence*).
-
-    A positive value means Metaculus' community is more bullish than the
-    Polymarket book; negative means Polymarket is more bullish.
-
-    Resolution rules when multiple Metaculus questions match the same
-    Polymarket market:
-      1. Prefer ``verified = 1`` (manual) matches over auto matches.
-      2. Within the same verification class, prefer the higher
-         ``similarity_score`` (NULLs sort last).
-
-    Markets without a match — or matched to a Metaculus question with null
-    ``community_probability``, or with no snapshot — return NaN divergence.
-    """
+):
+    """Community probability minus the latest snapshot midpoint, per market_id."""
     import pandas as pd  # local import keeps the CLI light
 
     ids = [str(m) for m in market_ids]
@@ -522,7 +451,6 @@ def get_metaculus_divergence(
     placeholders = ",".join("?" * len(ids))
     conn = sqlite3.connect(db_path)
     try:
-        # Best Metaculus match per polymarket_id (prefer manual, then highest score)
         match_rows = conn.execute(
             f"""
             SELECT polymarket_id, metaculus_id, verified, similarity_score
@@ -592,9 +520,7 @@ def get_metaculus_divergence(
     return pd.DataFrame(rows, columns=["market_id", "metaculus_divergence"])
 
 
-# --------------------------------------------------------------------------- #
 # Main
-# --------------------------------------------------------------------------- #
 
 
 def run() -> int:
@@ -664,8 +590,6 @@ def run() -> int:
                     continue
             conn.commit()
 
-            # Pagination: stop when fewer than PAGE_SIZE returned, OR when
-            # the API tells us there's no `next` link.
             if len(results) < PAGE_SIZE:
                 log.info(
                     "Page %s returned fewer than %s; pagination complete",

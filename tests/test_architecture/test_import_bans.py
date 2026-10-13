@@ -1,9 +1,4 @@
-"""Architecture guard: venue SDKs must not leak outside the venue layer.
-
-Pure-AST scan (no module is imported) of every *.py under the scanned
-top-level directories. Banned roots may only appear under src/venues/,
-legacy/, or in scripts/verify_ibkr_entitlements.py.
-"""
+"""Architecture guard: venue SDKs must not leak outside the venue layer."""
 
 from __future__ import annotations
 

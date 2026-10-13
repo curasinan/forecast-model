@@ -1,23 +1,4 @@
-"""Alert on health state changes, not on every unhealthy run.
-
-The probe (scripts/check_ibkr_recorder.py) runs hourly. It used to alert on
-every non-OK run -- about 15 identical DOWN messages a day during the
-2026-09-29..10-03 outage, until the operator stopped reading them. It now
-alerts when the (recorder_status, sync_status) pair changes, reminds once per
-24 hours of an unchanged outage, retries an undelivered alert on its next run,
-and logs every send attempt durably. Layers tested here, bottom up:
-
-  1. decide_alert: a pure function of (previous state, current pair, now), so
-     the decision matrix and the exact 24 h boundary need no patched clock
-  2. the alert state file: atomic writes; a corrupt file fails toward alerting
-  3. main(): wiring, durable log lines, exit codes, channel independence
-  4. --test-alert
-  5. secret hygiene: a leaky exception must not put the bot token anywhere
-
-Everything runs against tmp_path. send_alert is replaced by a recorder, or
-requests.post is patched, in every test that gets near the alert path (the
-conftest.py next to this file also trips on any unpatched requests.post).
-"""
+"""Alert on health state changes, not on every unhealthy run."""
 
 from __future__ import annotations
 
@@ -40,8 +21,6 @@ OK_PAIR = ("OK", "OK")
 
 
 def _prev(pair=("DOWN", "OK"), **overrides) -> probe.AlertState:
-    """A stored alert state: an outage three days old whose last alert (a
-    delivered one) went out an hour ago. Override any field."""
     fields = {
         "since": T0 - timedelta(days=3),
         "last_alert": T0 - timedelta(hours=1),
@@ -52,9 +31,7 @@ def _prev(pair=("DOWN", "OK"), **overrides) -> probe.AlertState:
     return probe.AlertState(pair[0], pair[1], **fields)
 
 
-# --------------------------------------------------------------------------- #
 # 1. decide_alert: when to send
-# --------------------------------------------------------------------------- #
 
 
 def test_no_state_reads_as_healthy_with_nothing_alerted_yet():
@@ -74,7 +51,6 @@ def test_unhealthy_run_with_no_state_is_a_transition_from_ok():
     assert decision.state.pair == ("DOWN", "OK")
     assert decision.state.since == T0
     assert decision.state.outage_since == T0
-    # Nothing has been sent for the new pair yet: record_alert_attempt fills this in.
     assert decision.state.last_alert is None
     assert decision.state.last_alert_ok is None
 
@@ -89,8 +65,6 @@ def test_recovery_is_a_transition_that_reports_how_long_the_outage_lasted():
     assert decision.prefix == "[DOWN -> OK] recovered after 4d 12h:"
     assert decision.state.pair == OK_PAIR
     assert decision.state.since == T0
-    # Until this message is delivered the successor remembers what a retry has
-    # to say again (record_alert_attempt clears it on delivery).
     assert decision.state.outage_since == started
     assert decision.state.recovered_from == ("DOWN", "OK")
 
@@ -106,8 +80,6 @@ def test_recovery_is_a_transition_that_reports_how_long_the_outage_lasted():
 )
 def test_change_of_kind_is_a_transition_and_the_outage_clock_keeps_running(before, after, prefix):
     outage_start = T0 - timedelta(days=2, hours=3)
-    # The previous alert was only an hour ago and was delivered: a changed pair
-    # is news whatever the 24 h rule says.
     prev = _prev(before, outage_since=outage_start)
 
     decision = probe.decide_alert(prev, after, T0)
@@ -130,8 +102,6 @@ def test_change_of_kind_is_a_transition_and_the_outage_clock_keeps_running(befor
     ids=["no-state", "healthy-for-30-days", "healthy-never-alerted", "healthy-no-outcome"],
 )
 def test_unchanged_all_ok_with_nothing_failed_never_sends(prev):
-    """Healthy and unchanged sends nothing -- unless the last attempt FAILED
-    (an explicit False), which is retried below whatever the pair is."""
     decision = probe.decide_alert(prev, OK_PAIR, T0)
 
     assert decision.kind is None
@@ -192,9 +162,6 @@ def test_reminder_clock_runs_from_the_last_alert_not_from_the_start_of_the_outag
     ids=["now", "1s-ahead", "1d-ahead", "1y-ahead"],
 )
 def test_a_last_alert_in_the_future_counts_as_due(ahead, expected_kind):
-    """The clock was stepped back after the write: a timestamp ahead of now can
-    never age into a reminder on its own (one a year ahead would silence a year
-    of reminders). It counts as due, and the reminder's own stamp heals it."""
     prev = _prev(("DOWN", "OK"), last_alert=T0 + ahead, last_alert_ok=True)
 
     assert probe.decide_alert(prev, ("DOWN", "OK"), T0).kind == expected_kind
@@ -239,8 +206,6 @@ def test_undelivered_previous_attempt_is_retried_whatever_its_age(age):
     ids=["ok-without-time", "nothing-recorded", "failed-without-time", "no-outcome"],
 )
 def test_unhealthy_pair_with_no_confirmed_alert_is_retried(last_alert, last_alert_ok):
-    """Nothing proves the operator was ever told (a hand-edited or partial
-    state file), so the probe tells them: it fails toward alerting."""
     prev = _prev(("DOWN", "OK"), last_alert=last_alert, last_alert_ok=last_alert_ok)
 
     assert probe.decide_alert(prev, ("DOWN", "OK"), T0).kind == "retry"
@@ -258,12 +223,7 @@ def test_unhealthy_previous_state_without_an_outage_start_is_tolerated():
     assert retry.state.outage_since is None  # unchanged: nothing was invented
 
 
-# -- a recovery message that did not get through is retried like any other alert --
-
-
 def _lost_recovery(age: timedelta, **overrides) -> probe.AlertState:
-    """All-OK again, but the recovery message (after an outage of 4 d 12 h 5 min)
-    went out ``age`` before T0 and did not get through."""
     recovered = T0 - age
     fields = {
         "since": recovered,
@@ -293,7 +253,6 @@ def test_undelivered_recovery_message_is_retried_whatever_its_age(age):
     decision = probe.decide_alert(prev, OK_PAIR, T0)
 
     assert decision.kind == "retry"
-    # The recovery text; the outage length runs to the recovery, not to the retry.
     assert decision.prefix == "[DOWN -> OK] recovered after 4d 12h:"
     assert decision.state == prev  # still pending until one attempt gets through
 
@@ -354,8 +313,7 @@ def test_record_alert_attempt_closes_a_recovery_only_when_it_was_delivered(deliv
 
 
 def test_recovery_retry_without_a_remembered_outage_is_still_a_recovery_message():
-    """A hand-edited or partial state: all-OK, last attempt failed, nothing else
-    known. The probe still says something, and says that it does not know."""
+    """A hand-edited or partial state: all-OK, last attempt failed, nothing else known."""
     prev = _lost_recovery(timedelta(hours=1), outage_since=None, recovered_from=None)
 
     decision = probe.decide_alert(prev, OK_PAIR, T0)
@@ -388,9 +346,7 @@ def test_record_alert_attempt_stamps_the_attempt_and_its_outcome(delivered):
     assert replace(after, last_alert=prev.last_alert, last_alert_ok=prev.last_alert_ok) == prev
 
 
-# --------------------------------------------------------------------------- #
 # Message prefix: one short ASCII fragment saying what happened
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
@@ -442,18 +398,13 @@ def test_every_prefix_is_one_ascii_line():
     assert all(prefix and prefix.isascii() and "\n" not in prefix for prefix in prefixes)
 
 
-# --------------------------------------------------------------------------- #
 # 2. The alert state file
-# --------------------------------------------------------------------------- #
 
 FAKE_TOKEN = "123456789:FAKE-test-token-NOT-A-REAL-SECRET"
 FAKE_CHAT_ID = "-1000000000000"
 
 
 def _on_disk(pair=("DOWN", "OK"), *, now=T0, **changes) -> dict:
-    """The documented on-disk form of ``_prev(pair)`` as of ``now``, written
-    out by hand so a renamed key shows up here rather than being masked by a
-    round trip."""
     payload = {
         "recorder_status": pair[0],
         "sync_status": pair[1],
@@ -475,8 +426,6 @@ def test_documented_on_disk_form_loads(tmp_path):
 
 
 def test_documented_on_disk_form_of_a_pending_recovery_loads(tmp_path):
-    """All-OK again, last attempt failed: the outage start and the pair it
-    recovered from are still there for the retry."""
     path = tmp_path / "state.json"
     started = T0 - timedelta(days=4, hours=12)
     payload = _on_disk(
@@ -572,9 +521,6 @@ def test_a_pending_recovery_is_stored_as_the_pair_it_recovered_from(tmp_path):
          "newline", "nulls", "an-object", "a-number"],
 )
 def test_malformed_recovered_from_is_ignored_not_trusted(tmp_path, bad):
-    """``recovered_from`` only words the retry's message, so a bad value must
-    not cost the retry itself: the rest of the file is kept, and the retry
-    admits that it does not know what was recovered from."""
     path = tmp_path / "state.json"
     started = T0 - timedelta(days=1)
     payload = _on_disk(
@@ -616,8 +562,6 @@ _CORRUPT_CONTENTS = {
     "timestamp-garbage": json.dumps(_on_disk(since_utc="yesterday")).encode(),
     "timestamp-blank": json.dumps(_on_disk(last_alert_utc="  ")).encode(),
     "timestamp-not-a-string": json.dumps(_on_disk(outage_since_utc=12345)).encode(),
-    # parse_iso8601 converts to UTC; at the edge of the datetime range that raises
-    # OverflowError, which load_alert_state must absorb like every other bad file.
     "timestamp-overflow-high": json.dumps(_on_disk(since_utc="9999-12-31T23:30:00-01:00")).encode(),
     "timestamp-overflow-low": json.dumps(_on_disk(since_utc="0001-01-01T00:30:00+01:00")).encode(),
     "last-alert-ok-a-string": json.dumps(_on_disk(last_alert_ok="yes")).encode(),
@@ -700,9 +644,7 @@ def test_save_creates_the_missing_directory(tmp_path):
     assert probe.load_alert_state(path) == state
 
 
-# --------------------------------------------------------------------------- #
 # 3. main(): wiring, durable log lines, exit codes, channel independence
-# --------------------------------------------------------------------------- #
 
 SENT_LINE = re.compile(
     r"^(?P<ts>\S+) ALERT_SENT (?P<kind>transition|reminder|retry|test) (?P<status>\S+) "
@@ -715,10 +657,6 @@ FAILED_LINE = re.compile(
 
 
 class _FakeSendAlert:
-    """Stands in for monitoring.heartbeat.send_alert: records every message and
-    answers with ``outcome`` -- True (delivered), False (not delivered), or an
-    exception instance to raise."""
-
     def __init__(self) -> None:
         self.messages: list[str] = []
         self.outcome: object = True
@@ -738,10 +676,6 @@ def sent(monkeypatch) -> _FakeSendAlert:
 
 
 class _Run:
-    """The files of one probe run, all under tmp_path -- never the real logs/
-    directory or the real home. ``make`` arranges the inputs so the next run
-    sees the wanted (recorder, sync) pair."""
-
     def __init__(self, root: Path, clock: datetime | None = None) -> None:
         self.clock = clock
         self.heartbeat_path = root / "state" / "recorder_state.json"
@@ -821,9 +755,6 @@ def _ts(text: str) -> datetime:
 
 
 def _freeze_clock(monkeypatch, instant: datetime):
-    """Make the probe's ``datetime.now`` tick one second per call from
-    ``instant``, so a second reading of the clock within a run is visible."""
-
     class _Clock(datetime):
         calls = 0
 
@@ -834,9 +765,6 @@ def _freeze_clock(monkeypatch, instant: datetime):
 
     monkeypatch.setattr(probe, "datetime", _Clock)
     return _Clock
-
-
-# -- when to send --------------------------------------------------------------
 
 
 def test_first_unhealthy_run_sends_one_transition_alert_and_stores_the_state(tmp_path, sent):
@@ -850,7 +778,6 @@ def test_first_unhealthy_run_sends_one_transition_alert_and_stores_the_state(tmp
     stored = run.stored()
     assert (stored["recorder_status"], stored["sync_status"]) == ("STALE", "OK")
     assert stored["last_alert_ok"] is True
-    # One run, one clock: the pair changed, was alerted and began its outage at one instant.
     assert stored["since_utc"] == stored["last_alert_utc"] == stored["outage_since_utc"]
 
 
@@ -897,7 +824,6 @@ def test_reminder_is_sent_once_the_last_delivered_alert_is_24_hours_old(tmp_path
     ((kind, status),) = [(m["kind"], m["status"]) for m in map(SENT_LINE.match, run.alert_lines())]
     assert (kind, status) == ("reminder", "STALE")
 
-    # The reminder restarted the 24 h clock: the next hourly run is silent again.
     assert run.run("--quiet") == 1
     assert len(sent.messages) == 1
 
@@ -963,7 +889,6 @@ def test_undelivered_alert_is_retried_on_every_run_until_it_gets_through(tmp_pat
         ("retry", "STALE", "not_delivered"),
     ]
     assert reported == [("retry", "STALE")]
-    # Fourth run was silent, so the durable log holds 4 status lines + 3 alert lines.
     assert len(run.status_lines()) == 4
     assert len(run.alert_lines()) == 3
 
@@ -986,7 +911,6 @@ def test_recovery_sends_one_transition_alert_and_clears_the_outage(tmp_path, sen
     assert stored["outage_since_utc"] is None
     assert stored["since_utc"] == stored["last_alert_utc"]
     assert stored["last_alert_ok"] is True
-    # The one OK run that writes to the durable log: its alert line, no status line.
     (line,) = run.log_lines()
     assert SENT_LINE.match(line)["kind"] == "transition"
     assert SENT_LINE.match(line)["status"] == "OK"
@@ -1009,9 +933,6 @@ def _seed_unhealthy_outage_of_4d12h(run: _Run) -> None:
 
 
 def test_failed_recovery_alert_is_retried_until_it_is_delivered(tmp_path, sent):
-    """The operator asked for DOWN -> UP messages: one lost to a network that is
-    still coming back is retried on every run, with the recovery text, until an
-    attempt gets through; then the probe is silent again."""
     run = _Run(tmp_path).make(recorder="OK")
     _seed_unhealthy_outage_of_4d12h(run)
 
@@ -1030,7 +951,6 @@ def test_failed_recovery_alert_is_retried_until_it_is_delivered(tmp_path, sent):
     stored = run.stored()
     assert stored["last_alert_ok"] is True
     assert (stored["outage_since_utc"], stored["recovered_from"]) == (None, None)
-    # A healthy run writes no status line: just the three attempts, one per run.
     attempts = [FAILED_LINE.match(line) or SENT_LINE.match(line) for line in run.log_lines()]
     assert [(m["kind"], m.re is FAILED_LINE) for m in attempts] == [
         ("transition", True),
@@ -1048,7 +968,7 @@ def test_a_channel_that_stays_down_leaves_one_alert_failed_line_per_run(tmp_path
         assert run.run("--quiet") == 0
 
     lines = run.log_lines()
-    assert len(lines) == 4  # one per run, and nothing else: healthy runs have no status line
+    assert len(lines) == 4
     assert [FAILED_LINE.match(line)["kind"] for line in lines] == [
         "transition", "retry", "retry", "retry"
     ]
@@ -1161,8 +1081,6 @@ def test_quiet_recovery_prints_nothing_but_still_alerts(tmp_path, sent, capsys):
 
 
 def test_help_lists_the_new_options(capsys):
-    """argparse %-formats every help string: a stray percent sign in one would
-    only blow up when someone asks for --help."""
     with pytest.raises(SystemExit) as excinfo:
         probe.main(["--help"])
 
@@ -1203,11 +1121,8 @@ def test_one_run_reads_the_clock_once_and_stamps_everything_with_that_instant(
         T0.isoformat()
     }
     lines = run.log_lines()
-    assert len(lines) == 2  # the status line and the transition's ALERT_SENT line
+    assert len(lines) == 2
     assert all(line.startswith(T0.isoformat() + " ") for line in lines)
-
-
-# -- durable log format ----------------------------------------------------------
 
 
 def test_alert_lines_have_the_documented_shape(tmp_path, sent):
@@ -1244,9 +1159,6 @@ def test_alert_lines_have_the_documented_shape(tmp_path, sent):
 def test_alert_lines_name_the_delivery_method(
     tmp_path, sent, monkeypatch, alert_method, expected, delivered
 ):
-    """send_alert answers True for a log_only run too (its line was written), so
-    the durable line must say which channel the attempt used. Only the
-    normalised name is logged, never the raw ALERT_METHOD text."""
     if alert_method is None:
         monkeypatch.delenv("ALERT_METHOD", raising=False)
     else:
@@ -1263,9 +1175,6 @@ def test_alert_lines_name_the_delivery_method(
 
 
 def test_a_log_only_run_is_recorded_as_log_only_end_to_end(tmp_path, caplog):
-    """The real send_alert with no ALERT_METHOD: it reports the alert as
-    delivered (its CRITICAL line was written) -- and the durable line says
-    log_only, so the run cannot pass for a Telegram delivery."""
     run = _Run(tmp_path).make(recorder="STALE")
 
     with caplog.at_level(logging.CRITICAL, logger="monitoring.heartbeat"):
@@ -1274,9 +1183,6 @@ def test_a_log_only_run_is_recorded_as_log_only_end_to_end(tmp_path, caplog):
     (line,) = run.alert_lines()
     assert SENT_LINE.match(line)["method"] == "log_only"
     assert any(r.getMessage().startswith("ALERT: [OK -> STALE]") for r in caplog.records)
-
-
-# -- exit codes and channel independence ---------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1289,7 +1195,7 @@ def test_exit_code_follows_health_alone_never_the_alert_outcome(tmp_path, sent, 
     run = _Run(tmp_path).make(recorder="STALE")
     assert run.run("--quiet") == 1
 
-    run.make(recorder="OK")  # recovered: its alert goes through the same outcome
+    run.make(recorder="OK")
     assert run.run("--quiet") == 0
 
     assert len(sent.messages) == 2
@@ -1297,8 +1203,6 @@ def test_exit_code_follows_health_alone_never_the_alert_outcome(tmp_path, sent, 
 
 @pytest.mark.parametrize("answer", [None, 0, "sent"], ids=["none", "zero", "truthy-string"])
 def test_only_an_explicit_true_counts_as_delivered(tmp_path, sent, answer):
-    """A stub (or a future bug) answering with anything but True must not be
-    recorded as a delivery: the alert is retried rather than lost."""
     sent.outcome = answer
     run = _Run(tmp_path).make(recorder="STALE")
 
@@ -1348,18 +1252,11 @@ def test_state_write_failure_never_stops_the_alert_or_changes_the_exit_code(
     err = capsys.readouterr().err
     assert "alert state write failed (OSError)" in err
     assert "disk full" not in err  # class name only
-    # What is true when the state file cannot be written for a while: the stored
-    # state falls behind, so alerts can repeat -- or be missed (a change back to
-    # the pair that is still stored goes unannounced). The note says so.
     assert "alerts may repeat or be missed until the state file can be written again" in err
     assert "the next run may repeat this alert" not in err
 
 
 def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path, sent):
-    """A state path that can be neither read nor written (here: a directory where
-    the file should be) is the old behaviour: an alert per unhealthy run, not a
-    crash and not silence. A file that can be READ but not replaced behaves
-    differently -- see the next two tests."""
     run = _Run(tmp_path).make(recorder="STALE")
     run.alert_state.mkdir(parents=True)  # a directory where the file should be
 
@@ -1373,11 +1270,6 @@ def test_unwritable_state_location_alerts_every_run_and_exits_as_before(tmp_path
 def test_a_state_file_that_can_be_read_but_not_replaced_repeats_the_recovery_every_run(
     tmp_path, sent, monkeypatch, capsys
 ):
-    """MEASURED behaviour (a handle held open on Windows, modelled here by a
-    replace that always fails; documented in the runbook, section 7): the stored
-    pair never advances, so every healthy run announces the recovery again, and
-    each run says so on stderr twice -- the save before the send and the one
-    after it both fail."""
     run = _Run(tmp_path).make(recorder="OK")
     _seed_unhealthy_outage_of_4d12h(run)  # STALE for 4 d 12 h, announced
 
@@ -1399,11 +1291,6 @@ def test_a_state_file_that_can_be_read_but_not_replaced_repeats_the_recovery_eve
 def test_a_lock_that_spans_both_saves_of_a_run_still_leaves_the_old_pair_on_disk(
     tmp_path, sent, monkeypatch
 ):
-    """MEASURED limit of the save-before-send fix (documented in the runbook): it
-    covers ONE failed write. A lock that lasts through both saves of a transition
-    run leaves the old pair on disk, so if the outage has ended by the next run
-    its recovery is not announced (if it is still on, the transition is
-    announced a second time)."""
     run = _Run(tmp_path).make(recorder="STALE")
     run.store(OK_PAIR)
     real_replace = probe.os.replace
@@ -1431,22 +1318,7 @@ def test_a_lock_that_spans_both_saves_of_a_run_still_leaves_the_old_pair_on_disk
     assert _prefixes(sent)[before:] == ["[OK -> STALE]"]  # announced a second time
 
 
-# -- one failed write, or a kill, must never swallow the NEXT alert ---------------
-#
-# The state is saved twice per alert: before the send (the successor state, the
-# attempt marked "not delivered") and after it (stamped with the real outcome).
-# Whatever happens to either write, or to the process in between, the stored
-# state still says "not confirmed", so the next run says it again or announces
-# the next change. Saving only after the send let a failed write (or a kill)
-# leave the OLD pair on disk: a one-run outage whose transition was delivered
-# then never got its "recovered" message.
-
-
 def _fail_one_save(monkeypatch, sent, *, when, exc=PermissionError):
-    """Make the next ``save_alert_state`` call that happens ``when`` -- "before_send"
-    or "after_send", relative to the messages ``sent`` has recorded so far --
-    raise ``exc`` once (a transient lock); every other call writes for real.
-    Returns the list that records the failure, so a test can prove it happened."""
     real = probe.save_alert_state
     baseline = len(sent.messages)
     failures: list[str] = []
@@ -1469,8 +1341,6 @@ def _prefixes(sent) -> list[str]:
 def test_a_failed_save_after_a_delivered_transition_cannot_swallow_the_recovery(
     tmp_path, sent, monkeypatch
 ):
-    """The review's scenario: [OK -> STALE] is delivered, the write after it hits
-    a lock, and the outage is over by the next run."""
     run = _Run(tmp_path).make(recorder="STALE")
     run.store(OK_PAIR)  # healthy, everything delivered so far
     failures = _fail_one_save(monkeypatch, sent, when="after_send")
@@ -1490,8 +1360,6 @@ def test_a_failed_save_after_a_delivered_transition_cannot_swallow_the_recovery(
 def test_a_kill_between_the_send_and_the_save_cannot_swallow_the_recovery(
     tmp_path, sent, monkeypatch
 ):
-    """The task has a time cap: the process can die after the message went out
-    and before the state was stamped."""
     run = _Run(tmp_path).make(recorder="STALE")
     run.store(OK_PAIR)
     failures = _fail_one_save(monkeypatch, sent, when="after_send", exc=KeyboardInterrupt)
@@ -1521,16 +1389,13 @@ def test_a_failed_save_before_the_send_changes_nothing_when_the_save_after_it_wo
     stored = run.stored()
     assert (stored["recorder_status"], stored["last_alert_ok"]) == ("STALE", True)
     assert "alert state write failed (PermissionError)" in capsys.readouterr().err
-    assert run.run("--quiet") == 1  # as before: an unchanged outage inside 24 h is silent
+    assert run.run("--quiet") == 1
     assert len(sent.messages) == 1
 
 
 def test_an_undelivered_send_is_still_recorded_when_the_save_before_it_failed(
     tmp_path, sent, monkeypatch
 ):
-    """The save after the send is not redundant: when the one before it failed,
-    it is the only record that this attempt did not get through (found by a
-    surviving mutant: skipping it for an undelivered attempt)."""
     run = _Run(tmp_path).make(recorder="STALE")
     sent.outcome = False
     failures = _fail_one_save(monkeypatch, sent, when="before_send")
@@ -1554,7 +1419,7 @@ def test_a_failed_save_after_a_change_of_kind_cannot_hide_the_change_back(
     run.make(recorder="STALE", sync="SYNC_STALE")
     failures = _fail_one_save(monkeypatch, sent, when="after_send")
 
-    assert run.run("--quiet") == 1  # [STALE -> STALE+SYNC_STALE] delivered, the save fails
+    assert run.run("--quiet") == 1
     assert failures == ["after_send"]
 
     run.make(recorder="STALE", sync="OK")  # the sync axis recovers
@@ -1571,7 +1436,7 @@ def test_the_successor_state_is_on_disk_before_the_send_marked_as_not_delivered(
     seen: list[dict] = []
 
     def _spy(message, method=None):
-        seen.append(run.stored())  # what a kill at this very moment would leave behind
+        seen.append(run.stored())
         return True
 
     monkeypatch.setattr(probe, "send_alert", _spy)
@@ -1586,7 +1451,7 @@ def test_the_successor_state_is_on_disk_before_the_send_marked_as_not_delivered(
 
 def test_a_kill_before_the_send_completes_is_retried_by_the_next_run(tmp_path, sent):
     run = _Run(tmp_path).make(recorder="STALE")
-    sent.outcome = KeyboardInterrupt()  # killed during the send: it may or may not have gone out
+    sent.outcome = KeyboardInterrupt()
 
     with pytest.raises(KeyboardInterrupt):
         run.run("--quiet")
@@ -1617,10 +1482,7 @@ def test_state_read_failure_never_stops_the_alert(tmp_path, sent, monkeypatch):
 def test_an_exception_anywhere_in_the_alert_path_never_changes_the_exit_code(
     tmp_path, sent, monkeypatch, capsys, recorder, expected_rc
 ):
-    """The decision is a pure function that cannot raise on a loaded state --
-    today. Nothing in the alert path may change the exit code whatever happens:
-    the durable status line (written first) stays, and the note names only the
-    exception's class."""
+    """The decision is a pure function that cannot raise on a loaded state -- today."""
 
     def _boom(*args, **kwargs):
         raise RuntimeError(f"a bug in the decision (simulated) /bot{FAKE_TOKEN}/")
@@ -1704,9 +1566,7 @@ def test_quiet_silences_every_failure_note(tmp_path, sent, monkeypatch, capsys, 
     assert len(sent.messages) == 1  # still alerted
 
 
-# --------------------------------------------------------------------------- #
 # 4. --test-alert: a labelled message through the normal path, on demand
-# --------------------------------------------------------------------------- #
 
 TEST_MESSAGE = re.compile(
     r"^TEST ibkr health alert, sent \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z -- no action needed$"
@@ -1716,7 +1576,7 @@ TEST_MESSAGE = re.compile(
 def test_test_alert_sends_one_labelled_ascii_line_and_logs_a_test_line(
     tmp_path, sent, capsys
 ):
-    run = _Run(tmp_path)  # deliberately no inputs: a health check would report CRITICAL
+    run = _Run(tmp_path)
 
     rc = probe.main(run.argv("--test-alert"))
 
@@ -1741,7 +1601,6 @@ def test_test_alert_stamps_message_and_log_with_the_run_clock(tmp_path, sent, mo
     assert sent.messages == [
         "TEST ibkr health alert, sent 2026-10-03T12:00:00Z -- no action needed"
     ]
-    # No ALERT_METHOD in the environment: the log_only path (the conftest clears it).
     assert run.log_lines() == [f"{T0.isoformat()} ALERT_SENT test - log_only"]
 
 
@@ -1770,10 +1629,6 @@ NOT_TO_TELEGRAM = (
 def test_test_alert_names_the_method_it_used(
     tmp_path, sent, monkeypatch, capsys, alert_method, outcome, rc, expected_out, method
 ):
-    """A log_only run is a success (exit 0: the configured path worked) but must
-    not look like a Telegram delivery: the printed line and the durable line
-    both name the method, and the log_only line says plainly that nothing was
-    sent to Telegram."""
     if alert_method is None:
         monkeypatch.delenv("ALERT_METHOD", raising=False)
     else:
@@ -1887,16 +1742,6 @@ def test_test_alert_log_write_failure_does_not_change_the_outcome(
     assert "alert log write failed (OSError)" in capsys.readouterr().err
 
 
-# --------------------------------------------------------------------------- #
-# 5. Secret hygiene. Telegram's API takes the bot token in the URL PATH
-# (/bot<TOKEN>/sendMessage) and a connection error quotes that path verbatim.
-# The probe's stdout/stderr are appended to logs/ibkr_health_task.log, and the
-# new durable lines and the alert state file are files on a synced disk too, so
-# the token must reach none of them. These tests run the REAL send_alert with a
-# FAKE token against a requests.post that fails with the full URL in its text.
-# --------------------------------------------------------------------------- #
-
-
 def _leaky_text() -> str:
     return (
         "HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries exceeded "
@@ -1907,8 +1752,7 @@ def _leaky_text() -> str:
 
 
 class _FakePost:
-    """requests.post stand-in. ``failure`` is an exception type raised with the
-    leaky text; None answers HTTP 200. Records the URL of every call."""
+    """requests.post stand-in."""
 
     def __init__(self, failure=None) -> None:
         self.failure = failure
@@ -1932,8 +1776,6 @@ def _telegram(monkeypatch, failure=requests.ConnectionError) -> _FakePost:
 
 
 def _all_logged_text(caplog) -> str:
-    """Every rendered log line plus every record's formatted exc_info/stack, so
-    a traceback-carried leak is caught too, not just the message."""
     parts = [caplog.text]
     formatter = logging.Formatter()
     for record in caplog.records:
@@ -2032,7 +1874,6 @@ def test_token_is_only_ever_in_the_request_url_when_the_send_succeeds(
         rc = run.run()
 
     assert rc == 1
-    # The API needs the token in the URL: that is the one place it may appear.
     assert post.urls == [f"https://api.telegram.org/bot{FAKE_TOKEN}/sendMessage"]
     (line,) = run.alert_lines()
     assert SENT_LINE.match(line)["kind"] == "transition"

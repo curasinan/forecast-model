@@ -1,13 +1,4 @@
-"""Discover live Polymarket weather markets → weather_markets table.
-
-Sources (in order):
-  1. Gamma /events?tag_slug=weather
-  2. Gamma /public-search?q=highest temperature
-  3. Local data/polymarket.db active markets matching temperature regex
-     (uses local description/end_date; optional Gamma hydrate)
-
-Does not touch EMOS training / backfill (Claude Code track).
-"""
+"""Discover live Polymarket weather markets → weather_markets table."""
 
 from __future__ import annotations
 

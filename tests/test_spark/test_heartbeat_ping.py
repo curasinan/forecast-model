@@ -112,7 +112,7 @@ def test_a_command_that_carries_its_own_double_dash_is_run_whole():
                             "--", "x"]
     rc = heartbeat_ping.main(["--url-env", "HEARTBEAT_URL_TEST", "--ok-exit", "3", "--",
                               *counts_its_arguments], opener=opener)
-    assert rc == 3 and opener.urls == [URL]  # the command saw ['-c', '--', 'x']: nothing was eaten
+    assert rc == 3 and opener.urls == [URL]
 
 
 def test_a_non_existent_binary_returns_127_and_sends_nothing(capsys):

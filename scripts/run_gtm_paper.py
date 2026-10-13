@@ -1,9 +1,4 @@
-"""GTM paper loop: latest recorder sweep vs fitted EMOS. No orders.
-
-Usage:
-    python scripts/run_gtm_paper.py
-    python scripts/run_gtm_paper.py --model %LOCALAPPDATA%\\climate_data\\models\\gtm_emos.json
-"""
+"""GTM paper loop: latest recorder sweep vs fitted EMOS. No orders."""
 
 from __future__ import annotations
 
@@ -86,11 +81,6 @@ def main(argv: list[str] | None = None) -> int:
     manual_paper_days = args.paper_days is not None
     manual_resolved_months = args.resolved_months is not None
     if (manual_paper_days or manual_resolved_months) and not args.allow_manual_gate_inputs:
-        # print (not just log.error) to match the other CLI refusals in this
-        # file below: logging.basicConfig only configures the root logger
-        # once per process, so a stream captured by an EARLIER test's
-        # capsys can go stale across repeated main() calls in the same
-        # pytest run -- stderr always gets it.
         reason = (
             "refusing: --paper-days/--resolved-months must be computed from the "
             "run/label ledgers (audit finding M2b); pass --allow-manual-gate-inputs "
@@ -117,19 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     ticks_root = Path(args.ticks_root) if args.ticks_root else _default_ticks_root()
     universe = args.universe_json or str(REPO_ROOT / "data" / "ibkr_universe_live.json")
 
-    # Audit finding M2b: paper_days/resolved_months are DERIVED from the
-    # run/label ledgers, not trusted from the CLI, so nobody can
-    # (accidentally or otherwise) inflate paper-trading progress. A manual
-    # value is only used when the operator explicitly opted in above via
-    # --allow-manual-gate-inputs; per-field, so e.g. a manual --paper-days
-    # can be combined with a computed --resolved-months.
     paper_days = args.paper_days
     resolved_months = args.resolved_months
-    # Final-review bundle B-1: provenance. A manual value is legitimate
-    # (the operator opted in above) but must never be indistinguishable,
-    # after the fact, from a ledger-derived one -- so it is WARNED here and
-    # recorded as go_live.gate_inputs_source in the payload (and therefore
-    # in the gtm_signals_history.jsonl line) below.
     manual_fields = [
         f"{name}={value}"
         for name, value in (("paper_days", paper_days), ("resolved_months", resolved_months))
@@ -163,8 +142,6 @@ def main(argv: list[str] | None = None) -> int:
     log.info("loading frame from %s, model from %s", root, model_path)
     frame = build_training_frame(root)
     model = EmosModel.from_json(model_path)
-    # The hindcast go-live gate scores the fit's expanding-window summary,
-    # which fit_gtm_emos.py writes next to the model (reports/...json).
     summary = None
     diag_path = root / "reports" / "gtm_emos_diagnostics.json"
     if diag_path.exists():
@@ -185,24 +162,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     payload["go_live"]["gate_inputs_source"] = gate_inputs_source  # B-1 provenance
 
-    # Staleness gate (H2): refuse to write a signals file priced off a
-    # stale sweep or a stale SEAS5 init. This must run BEFORE
-    # write_paper_payload -- a stale sweep must not even produce a
-    # gtm_signals.json for run_ibkr_paper.py to (mis)trust later. No
-    # signal-file-age check here: this process is the one writing the
-    # file, so it is fresh by construction; run_ibkr_paper.py checks that
-    # age against its OWN clock when it later reads the file.
     sweep_ts = parse_ts_utc(payload["sweep_ts_utc"]) if payload.get("sweep_ts_utc") else None
     reasons: list[str] = []
     if sweep_ts is None:
-        # This entrypoint ALWAYS loads quotes from disk (run_paper is
-        # never called with an injected quotes_df here), so a null
-        # sweep_ts_utc cannot mean "no sweep file to be stale" -- it means
-        # a real sweep file was found but its name did not match the
-        # recorder's own quotes-HHMMSSZ.parquet convention. That must
-        # refuse just as loudly as an actually-old sweep; check_staleness's
-        # "None skips this check" path is reserved for data that is absent
-        # BY DESIGN (e.g. an injected quotes_df in tests), not this case.
         try:
             bad_path = latest_sweep_path(ticks_root)
         except FileNotFoundError:
@@ -211,10 +173,6 @@ def main(argv: list[str] | None = None) -> int:
             f"could not parse a sweep timestamp from {bad_path} "
             "(unrecognised filename; expected quotes-HHMMSSZ.parquet)"
         )
-    # payload["inits"] covers the PRICED LADDER's target months only
-    # (climate.paper.inits_for_priced_targets), and each must carry
-    # min(expected latest init, target) -- final-review finding C-1; the
-    # same shared check runs in scripts/run_ibkr_paper.py.
     reasons += check_staleness(
         sweep_ts=sweep_ts,
         signal_ts=None,
@@ -228,10 +186,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     out = write_paper_payload(payload, root=root)
-    # L8 (Task 3.8): AFTER the latest-file write, so a run that refused
-    # above (staleness gate) never appends a history line for a signals
-    # file it never produced -- write_paper_payload overwrites gtm_signals
-    # .json every run, this is the run-by-run series alongside it.
     append_paper_history(payload, root=root)
     log.info(
         "ladder=%s tradeable=%s go_live=%s -> %s",

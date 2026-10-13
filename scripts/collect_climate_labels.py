@@ -1,36 +1,4 @@
-"""Collect NOAA climate oracle labels into the first-print ledger.
-
-Modes:
-  --backfill   First run: fetch all four series (gtm, gt, acd_annual,
-               acd_monthly) and record every period as
-               'backfill_current_vintage' -- history fetched today can
-               only be the current revised vintage, never a proven
-               first print.
-  (default)    Incremental: fetch, append unseen periods as
-               'live_first_print', record changed values for
-               already-seen periods as revision rows (originals are
-               never overwritten; Rule 603(e) settles on first print).
-
-Designed to be scheduled DAILY (cron / Windows Task Scheduler). Source
-release cadence (docs/venue_semantics.md, verified 2026-08-18):
-
-  - NOAA NCEI temperature (GTM monthly / GT annual): monthly release in
-    the FIRST HALF of each month at 10:00 US Central; the annual value
-    arrives with the January-cycle release.
-  - NOAA GML Mauna Loa CO2: monthly mean on the 5th of the month at
-    8:00 US Central; annual mean published ~Jan 5.
-
-A daily run therefore captures each first print within ~24h of
-publication, which is what irrevocable-settlement (Rule 603(e)) vintage
-discipline requires.
-
-Exit codes: 0 on success, INCLUDING when nothing new was found
-(cron-friendly); 1 when the fetch of ANY series fails (fail loudly so
-the scheduler alerts). Series that did fetch successfully are still
-appended before the failure exit.
-2 when the data root is a mirror of the live root: nothing is fetched and
-nothing is written.
-"""
+"""Collect NOAA climate oracle labels into the first-print ledger."""
 
 from __future__ import annotations
 

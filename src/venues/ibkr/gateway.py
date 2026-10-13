@@ -1,29 +1,4 @@
-"""Gateway session supervisor (migration spec Stage 2.2).
-
-Deliberately THREAD-LESS and synchronous: the recorder is a sync sweep
-loop with a 20-minute cadence, so a background heartbeat thread would
-add cross-thread races (two owners of one ib_async socket) for no
-benefit. Instead the driving process probes health right before each
-sweep (``ensure_connected``) and routes mid-sweep connection failures
-back through the same call. Worst case a dead session goes unnoticed
-for one interval, which the 60s request timeout inside a sweep already
-bounds far tighter.
-
-Liveness is an ACTIVE heartbeat, not TCP liveness: after Gateway's
-nightly auto-restart stalled collection for 15 hours (2026-08-16) the
-socket stayed "connected" while every request went unanswered.
-``isConnected()`` alone is therefore never trusted; a healthy session
-must answer ``reqCurrentTime()`` within a short timeout.
-
-Expected-window classification: IB Gateway with "Auto restart" drops
-the API around ~midnight US-Eastern daily. ``settings.restart_window_local``
-expresses that window in THIS machine's LOCAL clock ('HH:MM-HH:MM', may
-cross midnight); events emitted inside it get ``expected=True`` so
-monitoring can separate planned restarts from real outages. When an
-outage overlaps the window but the Gateway is still unreachable after
-the window closes, a single ``gave_up_window`` event fires -- with Auto
-restart, that usually means the weekly manual re-login is due.
-"""
+"""Gateway session supervisor (migration spec Stage 2.2)."""
 
 from __future__ import annotations
 
@@ -58,7 +33,7 @@ class ConnectionEvent:
     kind: EventKind
     ts_utc: str
     detail: str
-    expected: bool  # True when emitted inside settings.restart_window_local
+    expected: bool
     downtime_seconds: float | None
 
 
@@ -75,11 +50,7 @@ def _minute_of_day(text: str) -> int:
 
 
 def parse_restart_window(spec: str) -> tuple[int, int]:
-    """Parse 'HH:MM-HH:MM' (LOCAL clock) into (start, end) minutes of day.
-
-    start > end means the window crosses midnight (e.g. '23:30-00:45').
-    Both boundary minutes are inside the window.
-    """
+    """Parse 'HH:MM-HH:MM' (LOCAL clock) into (start, end) minutes of day."""
     try:
         start_s, end_s = spec.strip().split("-")
         return _minute_of_day(start_s), _minute_of_day(end_s)
@@ -108,21 +79,7 @@ def append_event_jsonl(event: ConnectionEvent, path: str | Path = DEFAULT_EVENTS
 
 
 class GatewaySession:
-    """Owns one Gateway connection for one role and supervises its liveness.
-
-    The driving loop calls ``ensure_connected()`` before each unit of work;
-    everything else (heartbeat, backoff, events, resubscription hooks) hangs
-    off that single entry point. ``connect_validator`` runs after every
-    successful connect and its exceptions PROPAGATE out of the retry loop:
-    it is for configuration errors (e.g. the recorder's account-mode
-    cross-check) that must kill the process, not be retried. The same
-    applies to ``ClientIdInUseError`` from ``self._connect`` itself: a
-    clientId collision means a second process already owns this role, so
-    it too propagates out of ``_reconnect_loop`` instead of being retried.
-
-    The keyword-only ``connect``/``sleep``/``clock``/``local_now`` seams
-    exist for unit tests; production code never passes them.
-    """
+    """Owns one Gateway connection for one role and supervises its liveness."""
 
     def __init__(
         self,
@@ -153,27 +110,16 @@ class GatewaySession:
         self._outage_touched_window = False
         self._gave_up_emitted = False
 
-    # -- registration --------------------------------------------------------
     def on_event(self, sink: Callable[[ConnectionEvent], None]) -> None:
         """Register an event sink; sink exceptions are logged, never raised."""
         self._sinks.append(sink)
 
     def on_reconnect(self, hook: Callable[[], None]) -> None:
-        """Register a resubscription hook (market data subscriptions, order
-        status watches, cache flushes). Every hook runs after each successful
-        RE-connect -- not after the first-ever connect, where there is nothing
-        to re-establish. Hook exceptions are logged, never raised."""
+        """Register a hook that runs after each successful RE-connect."""
         self._reconnect_hooks.append(hook)
 
-    # -- health --------------------------------------------------------------
     def ensure_connected(self) -> Any:
-        """Return a healthy ib_async IB, reconnecting (with backoff) if needed.
-
-        Healthy = socket connected AND an active ``reqCurrentTime()`` answered
-        within ``heartbeat_timeout_s``. Socket-alive alone is NOT enough: the
-        2026-08-16 auto-logoff stall kept the TCP session up while every
-        request hung.
-        """
+        """Return a healthy ib_async IB, reconnecting (with backoff) if needed."""
         ib = self._ib
         if ib is not None:
             if not ib.isConnected():
@@ -196,13 +142,8 @@ class GatewaySession:
             except Exception:
                 logger.warning("disconnect during close failed", exc_info=True)
 
-    # -- internals -----------------------------------------------------------
     def _heartbeat_error(self, ib: Any) -> str | None:
-        """None when the session answers; otherwise a short failure summary.
-
-        The short timeout is applied via ib_async's class-level RequestTimeout
-        (the only knob its sync wrappers expose) and restored afterwards.
-        """
+        """None when the session answers; otherwise a short failure summary."""
         cls = type(ib)
         saved = getattr(cls, "RequestTimeout", None)
         try:
@@ -236,9 +177,6 @@ class GatewaySession:
             except KeyboardInterrupt:
                 raise
             except ClientIdInUseError:
-                # A second process already owns this role's client id --
-                # a config error, not a transient outage. Propagate
-                # instead of retrying forever (audit M5).
                 raise
             except Exception as exc:
                 self._begin_outage(f"connect failed: {exc}")

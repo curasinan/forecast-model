@@ -1,12 +1,4 @@
-"""Polymarket market data collector.
-
-Fetches active events (and their nested markets) from the Gamma API and
-upserts them into a local SQLite database. Markets previously marked
-'active' but not seen in this run are flagged 'resolved_or_removed'.
-
-Run from the repo root:
-    python -m collectors.collect_markets
-"""
+"""Polymarket market data collector."""
 
 from __future__ import annotations
 
@@ -33,32 +25,16 @@ MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 30
 
-# Max Gamma single-market lookups per collector run for the resolution pass.
-# The collector fires every 6h -> up to 400 resolutions/day, well ahead of the
-# observed resolution rate, while keeping each run fast.
 RESOLUTION_PASS_LIMIT = 100
 
-# Max Gamma lookups per run for the scored-market probe. Since the 422
-# pagination ceiling forces the stale sweep to be skipped on every run,
-# NOTHING else flips status='active' markets to resolved_or_removed anymore —
-# so this pass probes prospective-scored, still-'active' markets directly
-# against Gamma's `closed` flag, independent of the sweep. At ~305 scored
-# markets and 4 runs/day the whole cohort is re-checked about every 18h.
 SCORED_PROBE_LIMIT = 100
 
-# A latest midpoint at/beyond these bounds is the local signature of a market
-# that has de facto resolved (price pinned) — those candidates are probed first.
 PINNED_MIDPOINT_LOW = 0.02
 PINNED_MIDPOINT_HIGH = 0.98
 
 
 class PaginationLimitReached(Exception):
-    """Raised when the Gamma API signals the offset pagination ceiling (HTTP 422).
-
-    As of 2026-06 the Gamma /events endpoint rejects offset >= 2100 with a 422.
-    This is a normal end-of-pagination signal, not a transient error — the
-    caller stops paginating cleanly rather than retrying.
-    """
+    """Raised when the Gamma API signals the offset pagination ceiling (HTTP 422)."""
 
     def __init__(self, offset: int):
         self.offset = offset
@@ -113,7 +89,6 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    # Additive migration for databases created before orderbook_missing existed.
     existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(markets)")}
     if "orderbook_missing" not in existing_columns:
         conn.execute(
@@ -124,11 +99,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 def fetch_events_page(offset: int) -> list[dict[str, Any]]:
-    """Fetch a single page of events, retrying transient failures.
-
-    Raises RuntimeError if all retries are exhausted so the caller can
-    decide whether the failure should abort the run.
-    """
+    """Fetch a single page of events, retrying transient failures."""
     params = {
         "closed": "false",
         "order": "id",
@@ -154,8 +125,6 @@ def fetch_events_page(offset: int) -> list[dict[str, Any]]:
                     )
                 return payload
             if status == 422:
-                # Gamma's offset-pagination ceiling. Not retryable, not an
-                # error — signal clean end-of-pagination to the caller.
                 raise PaginationLimitReached(offset)
             if status == 429 or 500 <= status < 600:
                 log.warning(
@@ -206,10 +175,7 @@ def iter_markets(events: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
 
 
 def _normalize_clob_token_ids(value: Any) -> str | None:
-    """Gamma returns clobTokenIds as either a list or a JSON-encoded string.
-
-    Normalize to a JSON array string for storage.
-    """
+    """Gamma returns clobTokenIds as either a list or a JSON-encoded string."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -322,21 +288,11 @@ def mark_stale(
     return len(stale_ids)
 
 
-# --------------------------------------------------------------------------- #
 # Resolution capture (Gamma outcomePrices -> markets.resolution)
-# --------------------------------------------------------------------------- #
 
 
 def _parse_outcome_prices(raw: Any) -> int | None:
-    """Normalize Gamma's ``outcomePrices`` field to a binary resolution.
-
-    Gamma returns it as a JSON-encoded string like ``'["0", "1"]'`` (YES price
-    first), but is handled defensively as a real list too — the API has
-    changed encodings before (cf. ``clobTokenIds``). A YES price pinned to 1
-    means resolved YES, pinned to 0 means resolved NO. Anything interior
-    (e.g. ``["0.56", "0.44"]`` on a removed/unresolved market) is not a
-    definitive outcome -> None. Never raises.
-    """
+    """Normalize Gamma's ``outcomePrices`` field to a binary resolution."""
     if raw is None:
         return None
     prices = raw
@@ -362,16 +318,7 @@ def fetch_market_status(
     session: requests.Session,
     market_id: str,
 ) -> tuple[str, int | None]:
-    """Fetch one market from Gamma; return (state, resolution).
-
-    States:
-    - ``"closed"``  — Gamma says the market is closed; resolution is 1/0 when
-      ``outcomePrices`` is definitive, else None (still closed, outcome pending).
-    - ``"open"``    — market exists and is not closed.
-    - ``"gone"``    — 404 (removed from Gamma).
-    - ``"error"``   — retries exhausted / unexpected response; caller should
-      leave the row untouched and retry on a later run.
-    """
+    """Fetch one market from Gamma; return (state, resolution)."""
     url = f"{MARKETS_ENDPOINT}/{market_id}"
     last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -418,12 +365,7 @@ def fetch_market_resolution(
     session: requests.Session,
     market_id: str,
 ) -> int | None:
-    """Fetch one market from Gamma and return its resolution (1/0) or None.
-
-    None means: not found (404), not closed yet, no definitive outcome, or
-    retries exhausted on transient errors. Callers leave the DB row NULL in
-    all of those cases.
-    """
+    """Fetch one market from Gamma and return its resolution (1/0) or None."""
     state, resolution = fetch_market_status(session, market_id)
     return resolution if state == "closed" else None
 
@@ -434,14 +376,7 @@ def fetch_missing_resolutions(
     limit: int = RESOLUTION_PASS_LIMIT,
     fetcher=fetch_market_resolution,
 ) -> int:
-    """Populate ``markets.resolution`` for snapshot-backed resolved markets.
-
-    Picks up to ``limit`` markets with status='resolved_or_removed', NULL
-    resolution, and at least one snapshot (only snapshot-backed markets can
-    ever become training rows), newest last_updated first so freshly-flipped
-    markets are captured promptly. Returns the number of rows updated.
-    Per-market failures are logged and skipped; this never aborts the run.
-    """
+    """Populate ``markets.resolution`` for snapshot-backed resolved markets."""
     rows = conn.execute(
         """
         SELECT m.id FROM markets m
@@ -485,25 +420,7 @@ def probe_scored_unresolved(
     fetcher=fetch_market_status,
     now_iso: str | None = None,
 ) -> tuple[int, int]:
-    """Probe prospective-scored, still-'active' markets directly against Gamma.
-
-    The stale sweep is skipped on every run (422 pagination truncation), so no
-    market ever flips to resolved_or_removed and the resolution pass starves.
-    This pass restores the bookkeeping independent of the sweep: any market we
-    have a prospective LLM score for, still marked 'active' with NULL
-    resolution, is checked against Gamma's ``closed`` flag. Closed (or 404)
-    markets get status='resolved_or_removed' + last_updated=now, and the
-    resolution when ``outcomePrices`` is definitive; ambiguous outcomes leave
-    resolution NULL for ``fetch_missing_resolutions`` to retry next run.
-
-    Candidates are probed pinned-midpoint-first (latest midpoint at/beyond
-    0.02/0.98 — the local signature of a de facto resolved market), so likely
-    resolutions are captured earliest. Empirically end_date is useless as a
-    trigger here: these markets close far before their formal end date.
-
-    Returns (n_flipped, n_resolutions_written). Never raises on a per-market
-    failure. Missing llm_scores table (scorer never ran) -> (0, 0).
-    """
+    """Probe prospective-scored, still-'active' markets directly against Gamma."""
     try:
         rows = conn.execute(
             """
@@ -566,8 +483,6 @@ def probe_scored_unresolved(
     return flipped, resolved
 
 
-# Backwards-compatible alias: this helper used to live in this module before
-# being promoted to ``src.utils.dates``. Kept so any old import paths still work.
 _parse_iso8601 = parse_iso8601
 
 
@@ -585,23 +500,7 @@ def _is_weather_market_question(question: str | None) -> bool:
 def get_snapshot_candidates(
     db_path: Path | str = DB_PATH,
 ) -> list[dict[str, Any]]:
-    """Return markets eligible for order-book snapshotting.
-
-    Filter:
-      - status = 'active'
-      - clob_token_ids is non-empty (not NULL, '', or '[]')
-      - Politics / default: liquidity > 250000 OR volume > 500000,
-        end_date more than 24 hours in the future
-      - Weather override: lower liquidity/volume floors and nearer expiry
-        (temperature markets are thinner and resolve daily)
-      - orderbook_missing is not set (i.e. the CLOB has a book for it;
-        the flag is cleared on every collect_markets run so a relisted
-        market becomes eligible again automatically)
-
-    Each returned dict has keys: ``id``, ``question``, ``clob_token_ids``.
-    Also logs the count of candidates vs total active markets.
-    """
-    # Import here to avoid circular imports at module load for non-weather runs.
+    """Return markets eligible for order-book snapshotting."""
     try:
         from src.config import settings as _settings
 
@@ -678,9 +577,6 @@ def run() -> int:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     try:
-        # Wait up to 15s on a locked DB instead of failing instantly — the
-        # snapshot collector (and occasional backfill scripts) write to the
-        # same file on their own schedules.
         conn.execute("PRAGMA busy_timeout = 15000")
         init_db(conn)
 
@@ -756,13 +652,6 @@ def run() -> int:
             offset += PAGE_SIZE
 
         if pagination_truncated:
-            # The API truncated pagination at its offset ceiling, so seen_ids
-            # is only the newest slice of the active universe (not the whole
-            # set). Running mark_stale here would wrongly flip every active
-            # market beyond the ceiling to resolved_or_removed. Skip it — a
-            # resolved market lingering as 'active' is caught downstream by the
-            # signal generator's freshness guard and the snapshot 404 handler,
-            # which is far safer than mass-mislabeling live markets.
             stale_count = 0
             log.warning(
                 "Stale sweep SKIPPED — pagination was truncated by the API "
@@ -774,9 +663,6 @@ def run() -> int:
             stale_count = mark_stale(conn, seen_ids, now_iso)
         conn.commit()
 
-        # Resolution pass: capture Gamma outcomePrices for snapshot-backed
-        # markets that resolved (flipped by this or any earlier run) but have
-        # no stored outcome yet. Bounded per run to keep the collector fast.
         try:
             resolutions_captured = fetch_missing_resolutions(conn)
         except Exception as exc:  # noqa: BLE001 — never let this kill the run
@@ -785,9 +671,6 @@ def run() -> int:
         if resolutions_captured:
             log.info("Resolution pass: captured %s outcome(s)", resolutions_captured)
 
-        # Scored-market probe: with the stale sweep permanently skipped (422
-        # truncation), this is the ONLY path that flips scored 'active' markets
-        # to resolved_or_removed. See probe_scored_unresolved docstring.
         try:
             probe_flipped, probe_resolved = probe_scored_unresolved(conn)
         except Exception as exc:  # noqa: BLE001 — never let this kill the run

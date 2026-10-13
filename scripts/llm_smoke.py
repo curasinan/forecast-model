@@ -1,13 +1,4 @@
-"""Is the local model up, and is LLM_MODEL what it actually serves?
-
-    python scripts/llm_smoke.py                  # on the Spark
-    ssh -L 8000:127.0.0.1:8000 spark             # from the Zenbook: tunnel first, then run
-
-Exit 0 only when: the configured model is served, one schema-constrained
-extraction round-trips as JSON, and the parsed object has every required
-key. Prints latency, tokens/s and the reasoning-token count so a change in
-serving flags (reasoning_effort, MTP) shows up here first.
-"""
+"""Is the local model up, and is LLM_MODEL what it actually serves?"""
 
 from __future__ import annotations
 
@@ -47,7 +38,7 @@ PROMPT = (
 def main(argv: list[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
     try:
         settings = LocalLLMSettings()
-    except ValidationError as exc:  # the settings hide their input, so the text is safe to print
+    except ValidationError as exc:
         print(f"FAIL: settings: {exc}", file=sys.stderr)
         return 1
     print(f"base_url={settings.base_url} model={settings.model} effort={settings.reasoning_effort}")
@@ -73,7 +64,6 @@ def main(argv: list[str] | None = None, *, transport: httpx.BaseTransport | None
         f"{rate:.1f} tok/s, reasoning tokens {reply.usage.get('reasoning_tokens', 'n/a')}"
     )
     print("parsed:", reply.parsed)
-    # Not an object: a list or str would pass the `in` test below, a number would raise.
     if not isinstance(reply.parsed, dict):
         print(
             f"FAIL: parsed reply is not a JSON object ({type(reply.parsed).__name__})",

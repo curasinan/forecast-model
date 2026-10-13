@@ -1,21 +1,4 @@
-"""Is an IB Gateway session possible on this machine right now?
-
-    python scripts/spark/session_check.py                                  # port 4002
-    python scripts/spark/session_check.py --process ibgateway              # Zenbook
-    python scripts/spark/session_check.py --container ibgw                 # Spark
-
-Exit 0 when nothing listens on the port and nothing named runs: this machine
-has given the session up, and the other one may log in. Exit 1 when a Gateway
-is here, or when that could not be established -- never "all clear" by default.
-
-A paper user can be logged in from one place at a time, so every procedure
-that moves the session (spike, cutover, rollback) calls this between its two
-halves (docs/plans/2026-10-05-spark-runtime-move-design.md, section 4).
-
-The port is not probed with a connection: on the Spark an owner rule rejects
-connections from every user but the runtime's, which would read as "nothing
-listens". The operating system is asked which sockets listen instead.
-"""
+"""Is an IB Gateway session possible on this machine right now?"""
 
 from __future__ import annotations
 
@@ -43,13 +26,7 @@ def _output(cmd: list[str], run) -> str:
 
 
 def listening_ports(run=subprocess.run) -> set[int]:
-    """Local TCP ports with a listening socket.
-
-    A listing that has rows but yields no port at all is a listing this function could not
-    read (a language that does not say LISTENING, a changed format), not a machine where
-    nothing listens: both machines always have listeners, so that raises CheckFailed. Only a
-    listing with no output at all reads as "nothing listens".
-    """
+    """Local TCP ports with a listening socket."""
     if sys.platform == "win32":
         tool = "netstat"
         text = _output([tool, "-an"], run)
@@ -92,12 +69,7 @@ def process_running(name: str, run=subprocess.run) -> bool:
 
 
 def container_running(name: str, run=subprocess.run) -> bool:
-    """True when a Docker container with exactly this name is up.
-
-    No status filter: `status=running` leaves out a container that is restarting (or paused),
-    and a Gateway restarting in a loop is one that logs in. Plain `docker ps` lists running,
-    paused and restarting containers, and not the stopped ones.
-    """
+    """True when a Docker container with exactly this name is up."""
     cmd = ["docker", "ps", "--quiet", "--filter", f"name=^{name}$"]
     return bool(_output(cmd, run).strip())
 

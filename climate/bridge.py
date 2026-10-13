@@ -1,34 +1,4 @@
-"""ERA5 (absolute Kelvin) -> NOAA GTM anomaly (degC) bridge.
-
-Why a bridge at all
--------------------
-The forecast input is the SEAS5 cosine-latitude-weighted global-mean 2m
-temperature in absolute Kelvin (climate/reduce.py); the settlement
-target is the NOAA NCEI monthly global land+ocean anomaly in degC
-relative to the 1901-2000 base period (series ``gtm`` in the label
-ledger). ERA5 monthly means are the natural verifying analysis for SEAS5
-(same model family, same absolute-K scale), so we learn one linear map
-from ERA5 global-mean K to the NOAA anomaly and apply it to the SEAS5
-ensemble. Any systematic SEAS5-vs-ERA5 bias is left for the EMOS layer.
-
-Why per-month intercepts and one common slope
----------------------------------------------
-NOAA anomalies are departures from a MONTHLY 1901-2000 climatology: the
-seasonal cycle is removed month by month, so January and July anomalies
-of +0.9 degC mean "0.9 above the respective January / July normals".
-ERA5 absolute K, by contrast, retains the seasonal cycle of the global
-mean (~3.5 K peak-to-trough, driven by the Northern Hemisphere land
-fraction). A single intercept would therefore fold the seasonal cycle
-into the residual (and bias every month by up to ~1.5 K). Twelve
-intercepts ``alpha[m]`` absorb the per-month climatology offset; a
-single slope ``beta`` (expected ~1: both sides are temperatures in
-Kelvin-sized units, the anomaly is a shift not a rescale) converts
-Kelvin spreads to degC spreads, so ``fc_sd_C = beta * ens_sd_K``.
-
-Model:  y_C(t) = alpha[month_of_year(t)] + beta * x_K(t) + eps,
-fitted by ordinary least squares (12 one-hot month columns + x) on the
-months where both ERA5 and NOAA are available.
-"""
+"""ERA5 (absolute Kelvin) -> NOAA GTM anomaly (degC) bridge."""
 
 from __future__ import annotations
 
@@ -44,12 +14,7 @@ N_PARAMS = 13  # 12 intercepts + 1 slope
 
 
 def to_year_month_index(index: pd.Index | pd.Series | list) -> pd.Index:
-    """Normalise an index of months to 'YYYY-MM' strings.
-
-    Accepts DatetimeIndex / datetime Series (any resolution), PeriodIndex,
-    or strings already in 'YYYY-MM' form. Raises on anything else so a
-    mis-keyed join fails loudly instead of producing an empty overlap.
-    """
+    """Normalise an index of months to 'YYYY-MM' strings."""
     idx = pd.Index(index)
     if isinstance(idx, pd.DatetimeIndex):
         return pd.Index(idx.to_period("M").astype(str))
@@ -65,13 +30,7 @@ def to_year_month_index(index: pd.Index | pd.Series | list) -> pd.Index:
 
 
 class Bridge:
-    """Linear map ERA5 global-mean K -> NOAA GTM anomaly degC.
-
-    ``alpha`` is a dict month_of_year (1..12) -> intercept (degC);
-    ``beta`` the common slope (degC per K). ``r2`` and ``resid_sd``
-    (ddof = n - 13) describe the in-sample fit; ``params`` bundles all of
-    it for logging. Unfitted until :meth:`fit` or :meth:`from_json`.
-    """
+    """Linear map ERA5 global-mean K -> NOAA GTM anomaly degC."""
 
     def __init__(
         self,
@@ -92,8 +51,6 @@ class Bridge:
         self.fit_start = fit_start
         self.fit_end = fit_end
 
-    # ------------------------------------------------------------------ fitting
-
     @property
     def is_fitted(self) -> bool:
         return self.beta is not None and len(self.alpha) == 12
@@ -106,14 +63,7 @@ class Bridge:
         start: str | None = None,
         end: str | None = None,
     ) -> "Bridge":
-        """Least-squares fit on the overlap of the two monthly series.
-
-        ``era5_K`` is indexed by month (datetime 1st-of-month, Period, or
-        'YYYY-MM'); ``noaa_anom_C`` by 'YYYY-MM'. ``start``/``end`` are
-        optional inclusive 'YYYY-MM' bounds on the fitting window.
-        Requires every calendar month to appear at least once in the
-        overlap (otherwise an intercept is unidentified).
-        """
+        """Least-squares fit on the overlap of the two monthly series."""
         x = pd.Series(np.asarray(era5_K, dtype=float), index=to_year_month_index(era5_K.index))
         y = pd.Series(
             np.asarray(noaa_anom_C, dtype=float), index=to_year_month_index(noaa_anom_C.index)
@@ -154,18 +104,12 @@ class Bridge:
         self.fit_end = str(joined.index[-1])
         return self
 
-    # --------------------------------------------------------------- prediction
-
     def _require_fit(self) -> None:
         if not self.is_fitted:
             raise RuntimeError("Bridge is not fitted; call fit() or from_json() first")
 
     def predict_mean(self, era5_K, month_of_year):
-        """alpha[month_of_year] + beta * era5_K, vectorised.
-
-        Scalars in -> float out; array-likes in -> float ndarray out
-        (a pandas Series input returns a Series with the same index).
-        """
+        """alpha[month_of_year] + beta * era5_K, vectorised."""
         self._require_fit()
         x = np.asarray(era5_K, dtype=float)
         m = np.asarray(month_of_year)
@@ -181,16 +125,9 @@ class Bridge:
         return out
 
     def predict_sd_scale(self) -> float:
-        """Multiplier converting a Kelvin spread to a degC spread on the NOAA scale.
-
-        This is |beta| (a scale must be non-negative; beta itself is
-        expected to be ~+1, and a negative fitted slope would indicate a
-        broken input rather than a physical relation).
-        """
+        """Multiplier converting a Kelvin spread to a degC spread on the NOAA scale."""
         self._require_fit()
         return abs(float(self.beta))
-
-    # ------------------------------------------------------------- persistence
 
     @property
     def params(self) -> dict[str, Any]:

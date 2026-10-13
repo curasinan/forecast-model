@@ -1,14 +1,4 @@
-"""Verify a mirrored quant-data root and print its snapshot identity.
-
-    python scripts/spark/verify_mirror.py --root ~/quant_data
-
-Exit 0: every canonical file opens; stdout is the identity JSON (design
-section 5.1). Exit 1: stderr lists every unreadable or missing file --
-never a silent skip. Read-only, and meant for a mirror or a frozen snapshot:
-the sweep folder is listed twice (once to verify, once for the identity), so
-on a root that is being written to the identity can name a newer sweep than
-the one that was checked.
-"""
+"""Verify a mirrored quant-data root and print its snapshot identity."""
 
 from __future__ import annotations
 

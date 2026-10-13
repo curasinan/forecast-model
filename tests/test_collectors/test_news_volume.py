@@ -15,9 +15,7 @@ from collectors.collect_news_volume import (
 NOW = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
 
 
-# --------------------------------------------------------------------------- #
 # Spike ratio
-# --------------------------------------------------------------------------- #
 
 
 def test_spike_ratio_normal():
@@ -26,7 +24,6 @@ def test_spike_ratio_normal():
 
 
 def test_spike_ratio_flat_news():
-    # 3 in 72h vs 30 over 30d = exactly the daily average x3 days... ratio 3.0
     assert compute_spike_ratio(3, 30) == pytest.approx(3.0)
 
 
@@ -36,9 +33,7 @@ def test_spike_ratio_null_safe():
     assert compute_spike_ratio(9, 0) is None
 
 
-# --------------------------------------------------------------------------- #
 # Timeline summing
-# --------------------------------------------------------------------------- #
 
 
 def _point(hours_ago: float, value: int) -> dict:
@@ -86,9 +81,7 @@ def test_sum_timeline_bad_shape_returns_none():
     assert sum_timeline_counts({"timeline": [{"nodata": 1}]}, NOW) is None
 
 
-# --------------------------------------------------------------------------- #
 # Query builder
-# --------------------------------------------------------------------------- #
 
 
 def test_build_query_quotes_phrases_and_ors():

@@ -78,13 +78,8 @@ from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 
 log = logging.getLogger("backfill_ibkr_hourly")
 
-# The modelled lane (docs/gtm_model_report.md) plus the other climate symbols
-# whose ladders the GTM work reads; everything else needs --symbols/--all-symbols.
 CLIMATE_LANE = ("GTM", "GT", "GTTA", "GTTM", "ACD")
 SNAPSHOT = REPO_ROOT / "data" / "ibkr_universe_live.json"
-# One run at a time per store: two overlapping runs would each read the stored
-# bars once and then both write the same ones. A run is about two hours for
-# the climate lane, so the lock only counts as abandoned well after that.
 LOCK_STALE_MIN = 240.0
 
 
@@ -142,14 +137,7 @@ def select_con_ids(resolver: ContractResolver, symbols: list[str],
 
 
 def resolve_window(args: argparse.Namespace, data_root: Path) -> tuple[date, date, list[date]]:
-    """(gap_start, gap_end, missing dates) inside the requested window.
-
-    Raises ValueError for a window that is reversed or reaches into today (a
-    bar of the current hour would be stored incomplete and, once stored, is
-    never replaced), and for a ``--refetch`` date outside the window or
-    before the available history: dropping it silently would let the
-    operator believe it was fetched.
-    """
+    """(gap_start, gap_end, missing dates) inside the requested window."""
     today = datetime.now(timezone.utc).date()
     end = args.end or today - timedelta(days=1)
     start = args.start or end - timedelta(days=MAX_GAP_DAYS - 1)
@@ -190,12 +178,7 @@ def _check_mode(ib, settings: IBKRSettings) -> None:
 
 
 def write_summary(payload: dict, data_root: Path) -> Path:
-    """Append the run record NEXT TO THE DATA, not into the repo.
-
-    It is provenance for the bars (what was requested, what came back, what
-    had no history), so it belongs with them rather than in logs/, which is
-    untracked scratch.
-    """
+    """Append the run record NEXT TO THE DATA, not into the repo."""
     path = data_root / "backfill_runs.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -276,8 +259,6 @@ def main(argv: list[str] | None = None) -> int:
         lock_target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with acquire_db_lock(lock_target, stale_after_min=LOCK_STALE_MIN):
-                # Read under the lock: read before it, another run could finish
-                # in between and its bars would be written a second time.
                 stored = _read_stored(data_root, requests)
                 if stored is None:
                     return 5
@@ -292,11 +273,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _read_stored(data_root: Path, requests: list) -> dict | None:
-    """Stored keys of the plan's window, reported; None when a file cannot be read.
-
-    Done before anything connects, so an unreadable file is found by the plan
-    (the dry run included), not by a run with the venue on the line.
-    """
+    """Stored keys of the plan's window, reported; None when a file cannot be read."""
     try:
         stored = read_stored_window(data_root, requests)
     except RuntimeError as exc:
@@ -312,12 +289,7 @@ def _read_stored(data_root: Path, requests: list) -> dict | None:
 def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
                    requests: list, skipped: int, gap_start: date, gap_end: date,
                    gaps: list[date], data_root: Path, stored: dict) -> int:
-    """Connect once, run the plan, print the outcome and append the run record.
-
-    One connection attempt, not the recorder's endless retry loop: a Gateway
-    that is down is an answer here (exit 3), and the lock must not be held
-    by a process waiting for it.
-    """
+    """Connect once, run the plan, print the outcome and append the run record."""
     try:
         ib = connect_ib("research", settings)
     except KeyboardInterrupt:
@@ -346,8 +318,6 @@ def _run_connected(args: argparse.Namespace, settings: IBKRSettings, resolver,
         print(f"refusing: {exc}")
         return 5
     except KeyboardInterrupt:
-        # The backfiller flushed what it had; record the run so the operator
-        # can finish it with --refetch over the same window.
         interrupted = True
         result = backfiller.last_result
     except Exception as exc:  # noqa: BLE001 -- recorded in the ledger, never swallowed

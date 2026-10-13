@@ -1,7 +1,4 @@
-"""Tests for model.train_outcome dataset assembly + 48h-before extraction.
-
-Synthetic-only — no live DB or API.
-"""
+"""Tests for model.train_outcome dataset assembly + 48h-before extraction."""
 
 from __future__ import annotations
 
@@ -41,8 +38,6 @@ def _make_db(tmp_path: Path) -> Path:
             (mid, question, status, resolution,
              (BASE + timedelta(days=30)).isoformat()),
         )
-        # n_snaps evenly spaced over hours_of_snaps, midpoint ramping
-        # linearly from ramp[0] to ramp[1] (simulates a market pinning).
         for i in range(n_snaps):
             frac = i / max(n_snaps - 1, 1)
             ts = BASE + timedelta(hours=frac * hours_of_snaps)
@@ -55,10 +50,8 @@ def _make_db(tmp_path: Path) -> Path:
                  1000.0, 1000.0, mid_price, 0.01, mid_price, 5000.0),
             )
 
-    # Political, resolved, backfilled, plenty of snapshots over 72h -> candidate
     add_market("pol1", "Will Trump win the election?", "resolved_or_removed",
                "1", hours_of_snaps=72, n_snaps=150)
-    # Political, resolved, backfilled, but only 24h of history -> dropped by 48h rule
     add_market("pol2", "Will the ceasefire hold in Gaza?", "resolved_or_removed",
                "0", hours_of_snaps=24, n_snaps=120)
     # Political, resolved, NO resolution -> excluded by candidate query
@@ -79,17 +72,12 @@ def _make_db(tmp_path: Path) -> Path:
     return db
 
 
-# --------------------------------------------------------------------------- #
 # Candidate / label assembly
-# --------------------------------------------------------------------------- #
 
 
 def test_candidate_query_filters_correctly(tmp_path):
     db = _make_db(tmp_path)
     ids = load_candidate_market_ids(db, min_snapshots=100)
-    # pol1: qualifies. pol2: qualifies at the candidate stage (span filter is
-    # a later step). pol3: no resolution. pol4: active. sport1: not political.
-    # pol5: too few snapshots.
     assert sorted(ids) == ["pol1", "pol2"]
 
 
@@ -101,9 +89,7 @@ def test_outcome_labels_integration(tmp_path):
     assert got == {"pol1": 1, "pol2": 0, "sport1": 1}  # pol3 has NULL resolution
 
 
-# --------------------------------------------------------------------------- #
 # 48h-before reference extraction
-# --------------------------------------------------------------------------- #
 
 
 def test_reference_timestamp_is_48h_before_last_snapshot(tmp_path):
@@ -119,8 +105,6 @@ def test_reference_timestamp_is_48h_before_last_snapshot(tmp_path):
 
 
 def test_features_at_reference_do_not_see_the_pin(tmp_path):
-    """The anti-leakage property: price_now at T_ref reflects the market
-    ~24h into its 72h life (midpoint ramp 0.30 -> 0.99), NOT the final pin."""
     db = _make_db(tmp_path)
     refs, _ = compute_reference_timestamps(db, ["pol1"])
     t_ref = refs["pol1"]
@@ -128,8 +112,6 @@ def test_features_at_reference_do_not_see_the_pin(tmp_path):
     feats = compute_features_batch(["pol1"], t_ref, db).iloc[0]
     price_at_ref = float(feats["price_now"])
 
-    # At 24h of 72h the linear ramp 0.30->0.99 sits at ~0.53; the causal
-    # lookup takes the latest snapshot <= T_ref so allow a small tolerance.
     assert 0.45 <= price_at_ref <= 0.56, price_at_ref
     # And it must be far from the pinned final value.
     assert price_at_ref < 0.90

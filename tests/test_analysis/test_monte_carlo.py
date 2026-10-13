@@ -1,10 +1,4 @@
-"""Tests for the Monte Carlo bankroll simulator.
-
-Kelly sizing under every cap branch, drawdown/ruin, and the drag/payout arithmetic
-are verified on deterministic inputs (fill_rate=1 with win_prob pinned to 0 or 1 makes
-the vectorized simulator fully deterministic regardless of seed). RNG reproducibility
-and a fair-game integration check use a fixed seed.
-"""
+"""Tests for the Monte Carlo bankroll simulator."""
 
 from __future__ import annotations
 
@@ -14,9 +8,7 @@ import pytest
 import analysis.monte_carlo as mc
 
 
-# --------------------------------------------------------------------------- #
 # Kelly sizing under caps
-# --------------------------------------------------------------------------- #
 
 
 def test_full_kelly_fraction():
@@ -29,8 +21,7 @@ def test_position_size_floor_branches():
     # quarter-Kelly fraction = 0.25 * 2 * 0.02 = 0.01 of bankroll
     assert mc.position_size(500, **kw) == pytest.approx(5.0)    # desired 5 == floor
     assert mc.position_size(2000, **kw) == pytest.approx(20.0)  # desired 20, uncapped
-    assert mc.position_size(300, **kw) == pytest.approx(5.0)    # desired 3 -> floored up
-    # below ~$100 the 5% max cap drops below the $5 floor and wins
+    assert mc.position_size(300, **kw) == pytest.approx(5.0)
     assert mc.position_size(50, **kw) == pytest.approx(2.5)     # 5% of 50
     # high believed edge -> 5% max cap binds
     assert mc.position_size(500, believed_edge=0.20, kelly_multiplier=0.25,
@@ -47,14 +38,11 @@ def test_position_size_gate_mode():
 
 
 def test_drag_fraction():
-    # even-money $0.50 contract: a $1 stake buys 2 contracts, so 3.125c -> 6.25%
     assert mc.drag_fraction(0.03125) == pytest.approx(0.0625)
     assert mc.drag_fraction(0.05, entry_price=0.5) == pytest.approx(0.10)
 
 
-# --------------------------------------------------------------------------- #
 # Drawdown + ruin on deterministic paths
-# --------------------------------------------------------------------------- #
 
 
 def test_max_drawdown_known_path():
@@ -67,9 +55,7 @@ def test_max_drawdown_monotone_increasing_is_zero():
     assert mc.max_drawdown(np.array([100, 200, 300], dtype=float)) == pytest.approx(0.0)
 
 
-# --------------------------------------------------------------------------- #
 # Deterministic simulator behavior (fill_rate=1, win_prob pinned)
-# --------------------------------------------------------------------------- #
 
 
 def _sim(true_edge, n_bets, adverse_cost=0.0, n_runs=1, **kw):
@@ -106,15 +92,12 @@ def test_drag_applied_to_payout():
 
 
 def test_sustained_losses_trigger_ruin():
-    # Always-lose for many bets drives the bankroll below the 20% floor ($100).
     out = _sim(-0.5, n_bets=200, adverse_cost=0.03125, n_runs=3)
     assert out["ruined"].all()
     assert out["max_dds"].min() > 0.8   # dropped >80% from the $500 peak
 
 
-# --------------------------------------------------------------------------- #
 # Summarize + RNG reproducibility + fair-game sanity
-# --------------------------------------------------------------------------- #
 
 
 def test_summarize_metrics():
@@ -141,7 +124,6 @@ def test_seed_reproducibility():
 
 
 def test_fair_game_median_near_start():
-    # fill=1, zero true edge, zero drag -> a fair even-money game; median stays ~flat.
     rng = np.random.default_rng(123)
     out = mc.simulate_scenario(
         rng, 0.0, believed_edge=0.02, starting=500.0, n_bets=200, n_runs=20_000,

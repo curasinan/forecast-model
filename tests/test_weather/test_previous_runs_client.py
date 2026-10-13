@@ -110,8 +110,6 @@ def test_previous_runs_host_resolution(monkeypatch):
 
 
 def test_self_hosted_base_not_routed_to_public(monkeypatch):
-    # A self-hosted base must be used as-is: falling back to the public host
-    # would silently bypass the licensing gate.
     from src.config import settings
 
     monkeypatch.setattr(settings, "open_meteo_api_key", "")

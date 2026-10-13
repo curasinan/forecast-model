@@ -1,19 +1,4 @@
-"""Run a command, then tell an external check that it ran.
-
-    python scripts/spark/heartbeat_ping.py --url-env HEARTBEAT_URL_HEALTH --ok-exit 0 1 -- \\
-        python scripts/check_ibkr_recorder.py
-
-The command's exit status is this script's exit status, always: a ping that
-fails never turns a good run into a bad one, nor the reverse. When the status
-is one of --ok-exit (default: 0), the URL held by the named environment
-variable is fetched (GET, 10 s timeout, three attempts).
-
-The URL is a capability: whoever holds it can fake the signal. It is read
-from the environment, never from an argument, and it is NEVER printed -- not
-in a message and not through an exception, whose text usually quotes it. Only
-"sent", "not sent" and the class name of an error leave this script.
-(docs/plans/2026-10-05-spark-runtime-move-design.md, section 8.)
-"""
+"""Run a command, then tell an external check that it ran."""
 
 from __future__ import annotations
 

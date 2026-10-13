@@ -51,9 +51,6 @@ def make_manager(
     return mgr, ft
 
 
-# -- construction / defaults -------------------------------------------------
-
-
 def test_default_rate_is_half_the_line_count():
     mgr, _ = make_manager(max_lines=10)
     assert mgr.subscribe_rate_per_sec == pytest.approx(5.0)
@@ -72,9 +69,6 @@ def test_invalid_max_lines_rejected():
 def test_invalid_rate_rejected():
     with pytest.raises(ValueError):
         SubscriptionManager(4, subscribe_rate_per_sec=0.0)
-
-
-# -- filling to capacity -----------------------------------------------------
 
 
 def test_fills_up_to_capacity_with_free_lines():
@@ -101,9 +95,6 @@ def test_re_request_of_active_line_is_noop():
     d = mgr.request("a")
     assert d == Decision(action="noop", market_id="a", evict=None)
     assert mgr.stats()["active"] == 1  # not double counted
-
-
-# -- eviction: lowest priority, then LRU -------------------------------------
 
 
 def test_eviction_picks_lowest_priority():
@@ -139,9 +130,6 @@ def test_eviction_tie_without_touch_evicts_oldest():
     assert d.evict == "a"  # all equal priority, "a" is oldest
 
 
-# -- rejection: nothing evictable -------------------------------------------
-
-
 def test_equal_priority_at_capacity_raises():
     mgr, _ = make_manager(max_lines=2)
     mgr.request("a", priority=5)
@@ -169,9 +157,6 @@ def test_rejection_does_not_evict_or_add():
     assert mgr.active_ids() == ["a"]
 
 
-# -- release -----------------------------------------------------------------
-
-
 def test_release_frees_a_line():
     mgr, _ = make_manager(max_lines=2)
     mgr.request("a", priority=5)
@@ -192,9 +177,6 @@ def test_release_unknown_returns_false():
 def test_touch_unknown_returns_false():
     mgr, _ = make_manager(max_lines=2)
     assert mgr.touch("nope") is False
-
-
-# -- token bucket: blocks to enforce the subscribe rate ----------------------
 
 
 def test_first_slot_is_immediate():
@@ -244,9 +226,6 @@ def test_slot_block_logs_warning(caplog):
     assert any("subscription pacing" in r.getMessage() for r in caplog.records)
 
 
-# -- WARNING logging for eviction and rejection ------------------------------
-
-
 def test_eviction_logs_warning(caplog):
     mgr, _ = make_manager(max_lines=1)
     mgr.request("a", priority=1)
@@ -266,9 +245,6 @@ def test_rejection_logs_warning(caplog):
     assert any("rejecting" in m for m in msgs)
 
 
-# -- stats counters ----------------------------------------------------------
-
-
 def test_stats_counters():
     mgr, _ = make_manager(max_lines=2)
     assert mgr.stats() == {"active": 0, "capacity": 2, "evictions": 0, "rejections": 0}
@@ -284,9 +260,6 @@ def test_stats_counters():
     with pytest.raises(LineBudgetExceeded):
         mgr.request("d", priority=0)  # nothing lower to evict
     assert mgr.stats()["rejections"] == 1
-
-
-# -- thread safety smoke -----------------------------------------------------
 
 
 def test_thread_safety_smoke_unique_lines():

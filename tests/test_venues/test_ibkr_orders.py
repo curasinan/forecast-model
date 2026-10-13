@@ -1,8 +1,4 @@
-"""IBKR adapter order path: paper-only transmission, ack mapping, get_order.
-
-Uses a fake IB object; the only ib_async import is the real LimitOrder /
-MarketOrder / Contract classes the adapter builds (pure data objects).
-"""
+"""IBKR adapter order path: paper-only transmission, ack mapping, get_order."""
 
 from __future__ import annotations
 

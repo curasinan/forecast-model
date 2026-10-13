@@ -1,10 +1,4 @@
-"""Polymarket collectors and trade CLIs are retired; IBKR ForecastEx is the venue.
-
-Library imports (tests, archival reads of a local ``polymarket.db``) still
-work. CLI entry points, scheduled jobs, and MCP tools that *collect* from
-Gamma/CLOB or *trade* on Polymarket must refuse unless the operator sets
-``POLYMARKET_RUNTIME=1`` for a one-off archival run.
-"""
+"""Polymarket collectors and trade CLIs are retired; IBKR ForecastEx is the venue."""
 
 from __future__ import annotations
 

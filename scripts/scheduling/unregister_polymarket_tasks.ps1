@@ -1,30 +1,8 @@
-# Remove leftover Polymarket collector jobs from Windows Task Scheduler.
-#
-# Run from an ELEVATED PowerShell:
-#
-#   cd C:\Users\asus\OneDrive\Desktop\new_work
-#   .\scripts\scheduling\unregister_polymarket_tasks.ps1
-#
-# Idempotent: already-absent tasks are reported and skipped.
-#
-# DELIBERATELY NOT REMOVED: \Polymarket\backup_db. It backs up
-# data/predictions.db, which still holds the preserved research history
-# (questions, predictions, resolutions) -- the migration spec keeps the
-# Polymarket RESEARCH pipeline; only its live collection is retired. Pass
-# -IncludeBackup to remove it too, if you have decided otherwise.
-#
-# The task folder is only deleted once it is empty, so it survives while
-# backup_db does.
-
 param(
     [string]$TaskPath = "\Polymarket\",
     [switch]$IncludeBackup
 )
 
-# The first three were the original collectors; the next three were still
-# registered on 2026-08-25, all pointing at code that now exits 2 unless
-# POLYMARKET_RUNTIME=1 (heartbeat had been failing 0x1 for that reason --
-# \IBKR\IBKR Recorder Health replaced it).
 $taskNames = @(
     "collect_markets",
     "collect_snapshots",

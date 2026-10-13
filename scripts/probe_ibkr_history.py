@@ -1,16 +1,4 @@
-"""Stage 5 probe: historical bar + market-depth availability for ForecastEx.
-
-Answers venue_semantics.md questions 4 (native order book / depth) and 7
-(reqHistoricalData availability and depth) empirically. Read-only,
-clientId=3. A standalone Gateway diagnostic in the same class as
-scripts/verify_ibkr_entitlements.py -- it imports ib_async directly and is
-exempted from the TID251 venue-import ban via pyproject per-file-ignore
-(the reviewable mechanism), not an inline suppression.
-
-Usage (Gateway logged in on 127.0.0.1:4002):
-    python scripts/probe_ibkr_history.py
-Writes docs/stage5_probe_findings.md. Exit 3 if the Gateway is offline.
-"""
+"""Stage 5 probe: historical bar + market-depth availability for ForecastEx."""
 
 from __future__ import annotations
 

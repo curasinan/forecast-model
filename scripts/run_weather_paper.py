@@ -1,11 +1,4 @@
-"""Paper loop: xmodel_prevruns_v1 EMOS → weather_edge → go-live check.
-
-Loads persisted EMOS params only when metadata.feature_set matches
-``xmodel_prevruns_v1``. Serve features come from Previous Runs history
-(same definition as training), not live ensemble-member stats.
-
-Does NOT call decision/edge_calculator.py.
-"""
+"""Paper loop: xmodel_prevruns_v1 EMOS → weather_edge → go-live check."""
 
 from __future__ import annotations
 
@@ -144,7 +137,6 @@ def run_paper(
     features_missing = 0
     emos_hits = 0
     skipped_stale = 0
-    # Cache features per (station, date, metric) — many buckets share one day.
     feat_cache: dict[tuple[str, str, str], XModelFeatures | None] = {}
     today_utc = date.today()
 
@@ -261,10 +253,6 @@ def run_paper(
 
     conn = sqlite3.connect(db_path)
     try:
-        # A station-date-metric can carry labels from several oracles
-        # (nws_cli, iem_cli, wunderground_api, ...). Keep only the
-        # highest-priority one so each prediction contributes exactly one
-        # calibration row instead of fanning out across sources.
         cal_rows = conn.execute(
             f"""
             SELECT mp.model_p, l.label_value, wm.bucket_lo, wm.bucket_hi, wm.metric

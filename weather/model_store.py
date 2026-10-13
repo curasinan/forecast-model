@@ -1,9 +1,4 @@
-"""Persist fitted EMOS parameters as JSON under <data_root>/models/emos/.
-
-One file per (station, metric, lead_day). Files carry a metadata block
-(sample count, train range, feature_set, ...) so consumers can refuse
-params fitted on a mismatched feature definition.
-"""
+"""Persist fitted EMOS parameters as JSON under <data_root>/models/emos/."""
 
 from __future__ import annotations
 

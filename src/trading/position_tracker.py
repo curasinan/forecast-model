@@ -1,11 +1,4 @@
-"""Position tracker — persistent portfolio state in SQLite.
-
-Tracks:
-- Open positions (question, side, entry price, size, current value)
-- Realized P&L (closed trades)
-- Unrealized P&L (open positions vs current market)
-- Trade history log
-"""
+"""Position tracker — persistent portfolio state in SQLite."""
 
 import logging
 import sqlite3
@@ -86,12 +79,6 @@ class PositionTracker:
                     filled_at TEXT
                 )
             """)
-            # Venue-neutral columns added by the IBKR migration (2026-08-23);
-            # ALTER-in-place so an existing predictions.db keeps its history.
-            # perm_id: the venue's permId from the order ack (IBKR), persisted
-            # as TEXT so a later reconciliation task can join against venue
-            # state by str-normalized permId. last_synced_utc is written by
-            # that future sync path, not by record_trade below.
             self._ensure_columns(conn, "trade_log", {
                 "market_id": "TEXT", "venue": "TEXT", "venue_order_id": "TEXT",
                 "filled_size": "REAL", "perm_id": "TEXT", "last_synced_utc": "TEXT",
@@ -132,7 +119,7 @@ class PositionTracker:
                     getattr(order, "venue_order_id", "") or "",
                     float(getattr(order, "filled_size", 0.0) or 0.0),
                     getattr(order, "perm_id", "") or "",
-                    None,  # last_synced_utc: written by the future venue-sync path
+                    None,
                 ),
             )
 
@@ -141,11 +128,7 @@ class PositionTracker:
             self._open_position(order)
 
     def backfill_perm_id(self, order_id: str, perm_id: str) -> bool:
-        """Set ``trade_log.perm_id`` for ``order_id`` ONLY where it is still
-        empty (final-review finding I-1). A targeted UPDATE rather than
-        ``record_trade``'s INSERT OR REPLACE: it touches that one column and
-        can never overwrite a permId already on file. Returns True if a row
-        changed."""
+        """Set ``trade_log.perm_id`` for ``order_id`` only where it is still empty."""
         if not perm_id:
             return False
         with sqlite3.connect(self._db_path) as conn:
@@ -188,16 +171,7 @@ class PositionTracker:
         outcome: str,
         resolution: int,
     ) -> float:
-        """Close a position when market resolves.
-
-        Args:
-            question_id: Which market resolved
-            outcome: "YES" or "NO" (what we held)
-            resolution: 1 if YES won, 0 if NO won
-
-        Returns:
-            Realized P&L for this position.
-        """
+        """Close a position when market resolves."""
         positions = self.get_open_positions(question_id)
         total_pnl = 0.0
 
@@ -205,8 +179,6 @@ class PositionTracker:
             if pos.outcome != outcome:
                 continue
 
-            # If we held YES and YES won: payout = size * $1
-            # If we held YES and NO won: payout = 0
             if (pos.outcome == "YES" and resolution == 1) or \
                (pos.outcome == "NO" and resolution == 0):
                 payout = pos.size * 1.0  # Each winning token pays $1

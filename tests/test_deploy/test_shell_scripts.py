@@ -1,9 +1,4 @@
-"""scripts/spark/*.sh: syntax, line endings, dry runs and refusals.
-
-Every script is run by a real bash in its dry-run mode, which prints the
-commands and calls neither ssh nor rsync. On Windows that bash is Git Bash;
-System32\\bash.exe is the WSL launcher and is never used here.
-"""
+"""scripts/spark/*.sh: syntax, line endings, dry runs and refusals."""
 
 from __future__ import annotations
 
@@ -70,9 +65,6 @@ def unmarked(tmp_path) -> Path:
     return root
 
 
-# ----------------------------------------------------------------- every script
-
-
 def test_the_directory_holds_exactly_these_shell_scripts():
     assert sorted(p.name for p in SCRIPTS.glob("*.sh")) == ALL_SCRIPTS
 
@@ -103,13 +95,8 @@ def test_an_unknown_argument_is_a_usage_error(name):
     assert "unknown argument" in done.stderr
 
 
-# ----------------------------------------------------------------- the exclude lists agree
-
 COPIES_FROM_THE_SPARK = ["pull_snapshot.sh", "mirror_live.sh", "rollback.sh"]
-MARKER_ENTRY = "/$MARKER"  # the pattern as the scripts spell it; they set MARKER=".mirror-of-spark"
-# What every copy leaves out except rollback.sh's: a journal, WAL or SHM file is a live
-# writer's, and the book it belongs to may be copied mid-write. Rollback runs with every
-# writer stopped, so a journal it finds belongs to its database and goes with it.
+MARKER_ENTRY = "/$MARKER"
 HOT_SQLITE = ["*-journal", "*.db-wal", "*.db-shm"]
 
 
@@ -125,23 +112,14 @@ def exclude_patterns(name: str) -> list[str]:
 
 def test_the_exclude_lists_of_the_four_copy_scripts_cannot_drift_apart():
     lists = {name: exclude_patterns(name) for name in [*COPIES_FROM_THE_SPARK, "push_snapshot.sh"]}
-    # the three scripts that copy FROM the Spark carry the marker entry: the marker of the
-    # mirror (or of a kept live root) is never overwritten by the Spark's own
     assert all(MARKER_ENTRY in lists[name] for name in COPIES_FROM_THE_SPARK)
-    # push_snapshot.sh refuses a marked source, so the marker entry would be inert there; but
-    # with that one entry set aside, pull, mirror and push are the same list of volatile files
     volatile = {name: [p for p in patterns if p != MARKER_ENTRY] for name, patterns in lists.items()}
     shared = volatile["pull_snapshot.sh"]
     assert volatile["mirror_live.sh"] == volatile["push_snapshot.sh"] == shared, volatile
     assert len(shared) >= 5  # state/, *.tmp, the journal, wal and shm files
     assert [p for p in HOT_SQLITE if p not in shared] == []
-    # rollback.sh differs by exactly those three patterns: nothing more is dropped and none
-    # of them stays, and the pull and the mirror still leave them out
     assert volatile["rollback.sh"] == [p for p in shared if p not in HOT_SQLITE], volatile
     assert lists["pull_snapshot.sh"] == lists["mirror_live.sh"]
-
-
-# ----------------------------------------------------------------- push_snapshot.sh
 
 
 def test_push_refuses_a_source_that_is_a_mirror(mirror, tmp_path):
@@ -181,7 +159,6 @@ def test_push_cutover_goes_into_the_live_root_as_trading(unmarked, tmp_path):
 
 
 def test_push_cutover_refuses_a_source_that_is_a_mirror(mirror, tmp_path):
-    # the cutover push goes into the Spark's LIVE root: the mirror rule matters most there
     snapshot = tmp_path / "snapshot"
     done = run_script("push_snapshot.sh", "--cutover", "--dry-run", QUANT_DATA_SRC=mirror.as_posix(),
                       QUANT_DATA_SNAPSHOT=snapshot.as_posix())
@@ -190,9 +167,6 @@ def test_push_cutover_refuses_a_source_that_is_a_mirror(mirror, tmp_path):
     assert "DRY-RUN" not in done.stdout  # it refused before it printed a single command
     assert not snapshot.exists()
     assert sorted(p.name for p in mirror.iterdir()) == [MARKER]
-
-
-# ----------------------------------------------------------------- pull_snapshot.sh
 
 
 def test_pull_refuses_a_root_without_the_marker(unmarked):
@@ -224,9 +198,6 @@ def test_pull_include_raw_drops_the_raw_exclude(mirror):
     assert "climate_data/raw/" not in done.stdout
 
 
-# ----------------------------------------------------------------- mirror_live.sh
-
-
 def test_mirror_refuses_a_destination_without_the_marker(unmarked, tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -255,9 +226,6 @@ def test_mirror_dry_run_reads_the_live_root_and_never_deletes(mirror, unmarked):
     assert "--delete" not in line and "ibkr_ticks/state/" in line
 
 
-# ----------------------------------------------------------------- deploy.sh
-
-
 def test_deploy_dry_run_pushes_then_compares_then_restarts():
     done = run_script("deploy.sh", "--dry-run")
     assert done.returncode == 0, done.stderr
@@ -283,9 +251,6 @@ def test_the_restart_a_deploy_asks_for_is_one_sudo_allows():
     calls = set(re.findall(r"sudo -n /usr/bin/systemctl (\S+) (\S+)", done.stdout))
     assert calls == {("restart", "ibkr-recorder.service")}
     assert calls <= sudo_allowed()
-
-
-# ----------------------------------------------------------------- rollback.sh
 
 
 NOT_TOUCHED = "the Spark was not touched and may still hold the session; --no-copy releases it"
@@ -323,9 +288,6 @@ def test_rollback_dry_run_gives_the_session_up_before_it_copies(unmarked):
 
 
 def test_rollback_copies_the_journal_wal_and_shm_files_with_their_databases(unmarked):
-    # Every writer is stopped by the copy, so a journal on the Spark belongs to its database:
-    # leaving it behind would hand the Zenbook a book a stop interrupted mid-transaction with
-    # nothing to roll it back. The state directory, *.tmp and the marker stay out.
     done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix())
     assert done.returncode == 0, done.stderr
     (copy_line,) = [line for line in done.stdout.splitlines() if line.startswith("DRY-RUN: rsync ")]
@@ -350,8 +312,6 @@ def test_rollback_stops_every_runtime_unit_with_a_command_sudo_allows(unmarked):
 
 
 def test_rollback_has_the_restored_book_checked_before_the_kept_root_goes_back(unmarked):
-    # The copy can hand the Zenbook a book a stop interrupted: the check runs first, on the
-    # kept root where it was copied, and the by-hand list says it must print RESTORE OK.
     done = run_script("rollback.sh", "--dry-run", ROLLBACK_DEST=unmarked.as_posix())
     assert done.returncode == 0, done.stderr
     by_hand = done.stdout[done.stdout.index("== 5/5 by hand"):]
@@ -370,12 +330,6 @@ def test_the_restore_check_the_rollback_prints_is_one_restore_check_accepts():
     assert done.returncode == 0, done.stderr
     assert "--from" in done.stdout and "--scratch" in done.stdout
     assert "RESTORE OK" in (SCRIPTS / "restore_check.py").read_text(encoding="utf-8")
-
-
-# ----------------------------------------------------------------- real runs against stand-ins
-#
-# A dry run shows the commands; these run the scripts for real, with a stand-in for ssh
-# (and for git), to see what they do when the other machine answers badly.
 
 
 def stand_in(tmp_path: Path, name: str, body: str) -> str:
@@ -437,9 +391,6 @@ def on_path(tmp_path: Path, name: str, body: str) -> dict[str, str]:
 @pytest.mark.parametrize("status", [1, 3, 4, 23, 127])
 def test_a_failed_copy_exits_5_and_says_the_session_is_released_and_to_run_again(
         unmarked, tmp_path, status):
-    # rsync's own statuses include 3 and 4, which are this script's "destination refused" and
-    # "the Spark may still hold the session": a copy that failed after the session was
-    # released must not look like either, so it exits 5 and puts rsync's status in the message.
     ssh = stand_in(tmp_path, "ssh_ok", SSH_THAT_OBEYS)
     rsync = on_path(tmp_path, "rsync", f"exit {status}\n")
     done = run_script("rollback.sh", ROLLBACK_DEST=unmarked.as_posix(), SPARK_SSH=ssh, **rsync)
@@ -466,7 +417,6 @@ def test_runbook_7_9_tells_the_operator_what_each_exit_and_the_restore_check_mea
     assert "copy failed (rsync exit N)" in flat
     assert "the Spark was not touched, so it may still hold the session" in flat
     assert "`--no-copy` releases it" in flat
-    # the restore check comes before the swap in the runbook as it does in the script's list
     check = section.index("python scripts/spark/restore_check.py --from ~/quant_data_zenbook_final")
     assert "--scratch <a fresh directory>" in section[check:check + 140]
     assert check < section.index("swap_live_root_for_mirror.ps1")
@@ -486,7 +436,6 @@ def test_the_exit_list_in_the_header_names_every_status_the_script_ends_with():
 
 SSH_OPTS = "-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 
-# Logs the arguments of every call and, for the session check, what arrived on its stdin.
 SSH_THAT_LOGS = """\
 echo "argv: $*" >> "$STAND_IN_LOG"
 case "$*" in
@@ -499,8 +448,6 @@ exit 0
 
 
 def run_logged_rollback(tmp_path: Path) -> tuple[list[str], Path]:
-    """A --no-copy rollback against an ssh that logs each call: the log lines, and the file that
-    holds what the session check read on its stdin."""
     log, taken = tmp_path / "calls.log", tmp_path / "stdin.bin"
     ssh = stand_in(tmp_path, "ssh_that_logs", SSH_THAT_LOGS)
     done = run_script("rollback.sh", "--no-copy", SPARK_SSH=ssh,
@@ -510,8 +457,6 @@ def run_logged_rollback(tmp_path: Path) -> tuple[list[str], Path]:
 
 
 def test_rollback_sends_the_session_check_once_with_this_machines_copy_on_stdin(tmp_path):
-    # The dry run prints this command; only a real run shows what the Spark is really asked,
-    # and the Zenbook's login depends on the answer.
     lines, taken = run_logged_rollback(tmp_path)
     calls = [line.removeprefix("argv: ") for line in lines if line.startswith("argv: ")]
     assert len(calls) == 3  # stop the units, stop the container, check
@@ -530,9 +475,6 @@ def test_every_direct_ssh_call_of_a_rollback_carries_the_connection_options(tmp_
     assert all(call.startswith(f"{SSH_OPTS} spark ") for call in calls), calls
 
 
-# Stands in for an ssh that is interrupted while it works: it signals the script that started
-# it, as Ctrl-C, a closed terminal or a kill would, and keeps hanging for a moment. A real
-# Ctrl-C reaches ssh too, so for INT it dies of the signal as well.
 SSH_THAT_GETS_INTERRUPTED = """\
 kill -"$STAND_IN_SIGNAL" "$PPID"
 [ "$STAND_IN_SIGNAL" != INT ] || kill -INT $$
@@ -642,7 +584,6 @@ def test_deploy_asks_again_right_before_the_restart(tmp_path):
 
 
 def test_deploy_stops_when_the_recorders_state_cannot_be_asked(tmp_path):
-    # a dead ssh (255, no output) is no answer: it must not read as "not running"
     done, calls = run_deploy(tmp_path, STAND_IN_STATE_EXIT="255")
     assert done.returncode == 255
     assert "state query" in done.stderr and "is-active ibkr-recorder.service" in done.stderr
@@ -667,15 +608,6 @@ def test_deploy_stops_when_the_second_answer_cannot_be_had(tmp_path):
     assert not [call for call in calls if "systemctl restart" in call]
 
 
-# ----------------------------------------------------------------- the deploy's remote command lines
-#
-# deploy.sh keeps its remote commands in single-quoted variables: `bash -n` on the script cannot
-# see inside them and a stand-in ssh only matches substrings of them. So each one is taken from
-# the dry run (the very text a real run sends), then parsed and run here in bash, as the Spark's
-# shell would run it. What a command uses of the machine (sleep, the clock, git, systemctl) is a
-# shell function in a prologue, which shadows the program of the same name; a script on PATH
-# would cost a bash start per call, and the wait calls sleep 132 times.
-
 CLONE = "/home/trading/forecast-model"
 INSTALLED = "/etc/systemd/system"
 HEARTBEAT = "/srv/quant_data/ibkr_ticks/state/recorder_state.json"
@@ -698,9 +630,9 @@ def remote() -> dict[str, str]:
     ((diff_host, diff),) = by_step["2"]
     ((state_host, state), (wait_host, wait), (again_host, again), (restart_host, restart)) = by_step["3"]
     ((status_host, status),) = by_step["4"]
-    assert state == again  # the same question is asked again right before the restart
+    assert state == again
     assert {diff_host, state_host, wait_host, again_host, status_host} == {"spark-rt"}
-    assert restart_host == "spark"  # the operator, who is the one allowed to restart the unit
+    assert restart_host == "spark"
     return {"diff": diff, "state": state, "wait": wait, "restart": restart, "status": status}
 
 
@@ -712,8 +644,6 @@ def run_command_line(tmp_path: Path, command: str, prologue: str = "",
                           capture_output=True, text=True, timeout=300)
 
 
-# The sleeps of the wait are recorded, not slept; after 300 of them a loop that never ends
-# fails at once instead of running on. The clock and stat are fixed where a test needs that.
 SLEEP_STUB = ("__sleeps=0\n"
               'sleep() { echo "$1" >> "$SLEEP_LOG"; __sleeps=$((__sleeps + 1)); '
               '[ "$__sleeps" -lt 300 ] || exit 99; }\n')
@@ -752,7 +682,7 @@ def test_the_unit_comparison_prints_the_changed_and_missing_units_and_nothing_el
 
     bare = tmp_path / "bare"
     (bare / "deploy" / "spark" / "systemd").mkdir(parents=True)
-    nothing = compare(bare)  # no unit file in the clone: the glob matches nothing, and not a word
+    nothing = compare(bare)
     assert nothing.returncode == 0 and nothing.stdout == "", nothing.stderr
 
 
@@ -792,9 +722,6 @@ def test_the_status_line_reports_the_commit_the_recorder_and_every_timer(remote,
     assert first == "abc1234 a commit"
     assert sorted(states) == sorted(
         f"{unit}: active" for unit in {"ibkr-recorder.service"} | {p.name for p in UNIT_DIR.glob("*.timer")})
-
-
-# ----------------------------------------------------------------- research_run.sh
 
 
 def test_research_run_sets_the_ceiling_and_the_kill_priority():

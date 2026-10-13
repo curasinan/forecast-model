@@ -1,19 +1,4 @@
-"""Task 1.6: the DB lockfile (`src/trading/locks.py`) and the two pure
-helpers behind `scripts/sync_ibkr_paper.py`.
-
-The entrypoint's venue-touching `main()` is exercised by the operator in
-Task 1.9 -- no test here connects anywhere. What IS unit-tested, per the
-task brief, are its two pure helpers: the jsonl record builder (from a
-`ReconcileReport`) and the report summary formatter. They are kept as
-module-level functions in the script itself rather than moved into
-`src/trading/reconcile.py` -- this repo already imports script modules as a
-namespace package in tests (see
-`tests/test_trading/test_migrate_ibkr_paper_v2.py`'s
-`from scripts.migrations.migrate_ibkr_paper_v2 import migrate`), so no new
-machinery is needed, and `reconcile.py` (owned by Task 1.5, out of this
-task's allowed-files set except for this one permitted option) stays
-untouched.
-"""
+"""The DB lockfile and the two pure helpers behind `scripts/sync_ibkr_paper.py`."""
 
 from __future__ import annotations
 
@@ -34,7 +19,6 @@ def _lock_path(db_path: Path) -> Path:
     return Path(str(db_path) + ".lock")
 
 
-# ------------------------------------------------------------------ locks
 def test_concurrent_acquisition_raises(tmp_path):
     db = tmp_path / "book.db"
     with acquire_db_lock(db):
@@ -67,9 +51,6 @@ def test_stale_lock_is_broken_with_a_warning_and_acquired(tmp_path, caplog):
 
 
 def test_a_fresh_lock_is_not_broken_even_if_requested_stale_window_is_tiny(tmp_path):
-    # A lock written "now" must not be treated as stale just because the
-    # caller passes a very small stale_after_min -- age is computed from the
-    # real wall clock, not assumed.
     db = tmp_path / "book.db"
     with acquire_db_lock(db):
         with pytest.raises(LockHeldError):
@@ -99,9 +80,6 @@ def test_lock_replaced_by_another_process_is_not_deleted_on_exit(tmp_path):
     db = tmp_path / "book.db"
     lock_path = _lock_path(db)
     with acquire_db_lock(db):
-        # Simulate another process breaking our lock as stale and taking it
-        # over while we are still "running" (clock skew, or a run that
-        # legitimately outran stale_after_min).
         other = {"pid": 424242, "ts_utc": datetime.now(timezone.utc).isoformat()}
         lock_path.write_text(json.dumps(other), encoding="utf-8")
     # Our exit must not have deleted the other process's lock.
@@ -117,7 +95,6 @@ def test_missing_lock_file_at_release_is_tolerated(tmp_path):
     assert not lock_path.exists()  # no error raised getting here
 
 
-# ---------------------------------------------------------- entrypoint helpers
 def _report(**overrides) -> ReconcileReport:
     fields = dict(examined=3, filled=1, partially_filled=1, cancelled=0, unchanged=1,
                   unmatched_venue_orders=2, notes=["note one", "note two"], aborted=False)
@@ -147,9 +124,6 @@ def test_build_jsonl_record_carries_every_contract_field():
 
 
 def test_build_jsonl_record_ok_false_when_a_row_is_missing_its_perm_id():
-    """Final-review I-1: a candidate row reconcile had to skip for a missing
-    permId is outside fill capture -- the run must not report healthy, so
-    the health probe's SYNC_STALE axis eventually fires."""
     rep = _report(skipped_missing_perm_id=1)
     record = build_jsonl_record(rep, account="DU1", db="db.db")
     assert record["ok"] is False

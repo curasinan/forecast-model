@@ -1,8 +1,4 @@
-"""Snapshot CLOB books for markets already in weather_markets.
-
-Bypasses politics liquidity filters so thin daily temperature buckets get mids.
-Requires network access to clob.polymarket.com.
-"""
+"""Snapshot CLOB books for markets already in weather_markets."""
 
 from __future__ import annotations
 

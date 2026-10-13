@@ -1,12 +1,4 @@
-"""Show price movement summary for every market with >= 20 snapshots.
-
-For each qualifying market:
-  - question text
-  - snapshot count
-  - earliest / latest snapshot timestamp
-  - min / max midpoint (over the lifetime of snapshots in the table)
-  - first vs latest midpoint, and whether |delta| > 0.05
-"""
+"""Show price movement summary for every market with >= 20 snapshots."""
 
 from __future__ import annotations
 

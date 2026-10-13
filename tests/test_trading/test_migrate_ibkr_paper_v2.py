@@ -1,14 +1,4 @@
-"""Task 1.4: migrate_ibkr_paper_v2 adds the v2 schema (fill_events table +
-trade_log.perm_id/last_synced_utc) to a v1 `ibkr_paper.db` and backfills
-permId for the three legacy `placed` rows that predate Task 1.3's
-perm_id column, from an operator-supplied JSON map.
-
-The v1 schema below is copied literally from
-src/trading/position_tracker.py (the CREATE TABLE statements as they were
-before Task 1.3 added perm_id/last_synced_utc to trade_log) so the test
-exercises the real pre-migration shape rather than PositionTracker's
-current (already-migrated) init path.
-"""
+"""migrate_ibkr_paper_v2 adds the v2 schema to a v1 `ibkr_paper.db` and backfills permIds."""
 
 from __future__ import annotations
 
@@ -57,8 +47,6 @@ POSITIONS_V1_COLUMNS = {
     "opened_at", "closed_at", "exit_price", "realized_pnl",
 }
 
-# The three legacy rows this migration exists to fix (real sizes/prices
-# from 2026-08-25, captured before perm_id existed).
 LEGACY_ROWS = [
     ("a1", "q1", "YES", "BUY", 0.34, 29, 9.86, "placed", None, "2026-08-25T10:00:00", None),
     ("a2", "q2", "YES", "BUY", 0.24, 41, 9.84, "placed", None, "2026-08-25T10:05:00", None),
@@ -144,9 +132,6 @@ def test_migrate_backfills_dict_shaped_permid_map(tmp_path):
     result = migrate(str(db), {"a1": "111", "a2": "222", "a3": "333"})
 
     assert result["permids_backfilled"] == 3
-    # Dict shape has no "unmatched" concept -- an unknown order_id there is
-    # an error (see test_migrate_dict_map_unknown_order_id_raises), never a
-    # silent skip.
     assert result["permids_unmatched"] == 0
     assert result["unmatched_entries"] == []
     conn = sqlite3.connect(db)
@@ -162,8 +147,6 @@ def test_migrate_dict_map_unknown_order_id_raises(tmp_path):
     with pytest.raises(ValueError, match="zzz"):
         migrate(str(db), {"a1": "111", "zzz": "999"})
 
-    # Validation failed before any write -- fully rolled back, including schema DDL:
-    # perm_id was never added and fill_events was never created.
     conn = sqlite3.connect(db)
     order_ids = {row[0] for row in conn.execute("SELECT order_id FROM trade_log")}
     tables = _tables(conn)
@@ -186,7 +169,6 @@ def test_migrate_backfills_list_shaped_permid_map(tmp_path):
          "action": "BUY", "qty": 41, "lmt": 0.24, "status": "PreSubmitted"},
         {"order_id_venue": "V3", "perm_id": 333, "con_id": 1, "local_symbol": "Z",
          "action": "BUY", "qty": 71, "lmt": 0.14, "status": "PreSubmitted"},
-        # Decoy: doesn't match any trade_log row (qty/lmt don't line up) -- must not error.
         {"order_id_venue": "V4", "perm_id": 444, "con_id": 3, "local_symbol": "W",
          "action": "SELL", "qty": 5, "lmt": 0.99, "status": "PreSubmitted"},
     ]
@@ -199,9 +181,6 @@ def test_migrate_backfills_list_shaped_permid_map(tmp_path):
     conn.close()
     assert rows == {"a1": "111", "a2": "222", "a3": "333"}
 
-    # The decoy must be loudly surfaced, not silently indistinguishable from
-    # "everything matched" -- an operator needs to tell "decoy, correctly
-    # ignored" apart from "a real row silently failed to backfill".
     assert result["permids_unmatched"] == 1
     assert result["unmatched_entries"] == [
         {"order_id_venue": "V4", "perm_id": 444, "qty": 5, "lmt": 0.99}
@@ -211,7 +190,6 @@ def test_migrate_backfills_list_shaped_permid_map(tmp_path):
 def test_migrate_list_map_ambiguous_db_match_raises(tmp_path):
     db = tmp_path / "ibkr_paper.db"
     _make_v1_db(db)
-    # A second row with the same size+price as a1 makes qty+lmt no longer unique.
     conn = sqlite3.connect(db)
     conn.execute(
         """INSERT INTO trade_log
@@ -236,7 +214,6 @@ def test_migrate_list_map_ambiguous_conflicting_entries_raises(tmp_path):
     db = tmp_path / "ibkr_paper.db"
     _make_v1_db(db)
 
-    # Two capture entries both resolve (uniquely) to a1, but disagree on the permId.
     operator_capture = [
         {"order_id_venue": "V1", "perm_id": 111, "con_id": 1, "local_symbol": "X",
          "action": "BUY", "qty": 29, "lmt": 0.34, "status": "PreSubmitted"},
@@ -278,11 +255,6 @@ def test_migrate_is_idempotent(tmp_path):
 
 
 def test_migrate_idempotent_with_task_1_3_ensure_columns(tmp_path):
-    """Task 1.3's PositionTracker._ensure_columns may have already added
-    perm_id/last_synced_utc (and other venue-neutral columns) to trade_log
-    before this migration ever runs. Adding an already-present column must
-    stay a no-op.
-    """
     from src.trading.position_tracker import PositionTracker
 
     db = tmp_path / "ibkr_paper.db"
@@ -338,11 +310,6 @@ def test_cli_with_permid_map_file(tmp_path):
 
 
 def test_cli_with_list_shaped_permid_map_file(tmp_path):
-    """The float-matching (qty/lmt) path exercised through a real JSON
-    round-trip -- not in-memory float literals -- against the operator's
-    actual capture shape (order_id_venue/perm_id/con_id/local_symbol/
-    action/qty/lmt/status), run as a real subprocess against a tmp v1 DB.
-    """
     db = tmp_path / "ibkr_paper.db"
     _make_v1_db(db)
     permid_map_path = tmp_path / "permid_map.json"
@@ -379,9 +346,6 @@ def test_cli_with_list_shaped_permid_map_file(tmp_path):
 
 
 def test_cli_prints_unmatched_entries_loudly(tmp_path):
-    """A capture entry that matches zero trade_log rows must be visible in
-    the CLI output, not silently indistinguishable from a fully-matched run.
-    """
     db = tmp_path / "ibkr_paper.db"
     _make_v1_db(db)
     permid_map_path = tmp_path / "permid_map.json"

@@ -77,12 +77,8 @@ class TestGapDetection:
             missing_dates(tmp_path, date(2026, 8, 20), date(2026, 8, 10))
 
     def test_missing_dates_excludes_backfilled_dates(self, tmp_path):
-        # Day D is in quotes_hourly but NOT in quotes
-        # missing_dates should not re-plan D since it's already backfilled
         make_backfilled_dirs(tmp_path, ["2026-08-18"])
         gaps = missing_dates(tmp_path, date(2026, 8, 16), date(2026, 8, 20))
-        # All days in range are missing from quotes, but 2026-08-18 is backfilled,
-        # so it should not appear in the missing list
         assert date(2026, 8, 18) not in gaps
         assert date(2026, 8, 16) in gaps  # not backfilled
         assert date(2026, 8, 19) in gaps  # not backfilled
@@ -127,15 +123,10 @@ class TestPlanning:
         assert skipped == 0 and len(reqs) == 4
         # 8 gap days plus the session that opens the evening before the first one
         assert {r.duration_str for r in reqs} == {"9 D"}
-        # endDateTime is the exclusive right edge: midnight AFTER the last gap day
         assert {r.end_date_time for r in reqs} == {"20260826-00:00:00"}
         assert [r.con_id for r in reqs] == [1, 1, 2, 2]
 
     def test_one_gap_day_needs_the_session_that_opens_the_evening_before(self):
-        # IB counts "N D" in sessions, and a FORECASTX session opens at 21:16 UTC
-        # the evening before its date: the 30 D run of 2026-10-04, ending
-        # 2026-10-03 00:00, came back from 2026-09-03 21:16 -- three bars into
-        # the first day it was meant to fill.
         reqs, _ = plan_requests([1], date(2026, 9, 3), date(2026, 9, 3))
         assert reqs[0].duration_str == "2 D"
         assert reqs[0].end_date_time == "20260904-00:00:00"
@@ -350,8 +341,6 @@ class TestRun:
 
     @pytest.mark.parametrize("bad_day", ["2026-08-18", "2026-08-20"])
     def test_every_day_of_the_window_is_read_before_the_first_request(self, tmp_path, bad_day):
-        # the first and the last day of a three-day window: an edge left out of
-        # the pre-read would let the run start and then stop at a flush
         make_backfilled_dirs(tmp_path, [bad_day])
         reqs, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 20))
         ib = FakeIB({(11, "BID_ASK"): [_bar(19, 10)]})
@@ -376,8 +365,6 @@ class TestRun:
         assert len(stamps) == len(set(stamps)) == 4
 
     def test_an_empty_answer_for_a_contract_with_stored_bars_is_a_failure(self, tmp_path):
-        # ib_async returns [] on a timeout; for a contract whose history is on
-        # disk that cannot be "no history" and must not be reported as such
         reqs, _ = plan_requests([11, 12], date(2026, 8, 18), date(2026, 8, 18))
         HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
                              FakeResolver({}), tmp_path).run(reqs, "old")
@@ -389,8 +376,6 @@ class TestRun:
         assert result.empty_con_ids == [12]
 
     def test_the_failure_rule_is_per_tick_type(self, tmp_path):
-        # stored BID_ASK bars say nothing about MIDPOINT: an empty MIDPOINT
-        # answer is honest "no history", not a failure
         first, _ = plan_requests([11], date(2026, 8, 18), date(2026, 8, 18))
         HistoricalBackfiller(FakeIB({(11, "BID_ASK"): [_bar(18, 10)]}),
                              FakeResolver({}), tmp_path).run(first, "old")
@@ -469,7 +454,6 @@ class TestRun:
 
         with pytest.raises(RuntimeError, match="hourly-broken.parquet"):
             stored_bar_keys(tmp_path, "2026-08-18")
-        # narrowed to the contracts a run requests, such a row is simply not one of them
         assert stored_bar_keys(tmp_path, "2026-08-18", con_ids=[11]) == set()
 
     def test_an_interrupted_run_leaves_its_counts_on_the_backfiller(self, tmp_path):

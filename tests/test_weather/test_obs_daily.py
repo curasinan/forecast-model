@@ -31,7 +31,6 @@ def _obs_frame(timestamps: list[str], temps: list[float]) -> pd.DataFrame:
 
 @pytest.fixture()
 def fall_back_day() -> pd.DataFrame:
-    # Local 2024-11-03 (America/Chicago) is a 25h day: UTC 11-03T05:00..11-04T05:59.
     start = datetime(2024, 11, 3, 5, 0, tzinfo=timezone.utc)
     stamps = [(start + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%S+0000") for i in range(25)]
     temps = [50.0 + i for i in range(25)]  # max 74 at the last hour, min 50
@@ -71,7 +70,6 @@ def test_partial_day_not_finalized():
 
 def test_finalized_and_72h_transition(fall_back_day):
     daily = observations_to_daily(fall_back_day, timezone_name=TZ_CHI)
-    # Day complete, but only 48h after UTC midnight of 11-03 -> not usable yet.
     early = finalize_obs_daily(
         daily, timezone_name=TZ_CHI, now=datetime(2024, 11, 5, 0, 0, tzinfo=timezone.utc)
     )

@@ -1,5 +1,4 @@
-"""The Polymarket live write path is retired; the wallet's dry-run simulation
-still works, and the order manager now routes through VenueAdapter."""
+"""The Polymarket live write path is retired; the dry-run simulation still works."""
 
 import pytest
 
@@ -75,8 +74,6 @@ class TestLivePathRetired:
             wallet.get_client()
 
     def test_polymarket_adapter_never_transmits(self):
-        """Even asking for a non-simulated manager on the research adapter
-        simulates: the adapter is read-only and place_order would refuse."""
         manager = OrderManager(PolymarketAdapter(), simulate=False)
         assert manager.is_simulated is True
         order = edge_to_order(edge=_edge(), size_usd=25.0, market=_market())

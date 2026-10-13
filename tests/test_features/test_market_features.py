@@ -1,24 +1,4 @@
-"""Verification tests for ``features.market_features``.
-
-Per the plan in ``build-a-feature-engineering-zippy-kettle.md``, this exercises
-all seven verification steps.
-
-M11 (Task 3.8, test hygiene): these used to read ``data/polymarket.db`` --
-the real (584MB, gitignored) research DB -- and skip cleanly when a
-developer's checkout didn't have it. That made the suite non-deterministic
-across machines and coupled these assertions to whatever the live DB
-happened to contain. Every fixture below is now a synthetic, session-scoped
-sqlite DB built once per test session (never touching any real DB file),
-with a ``snapshots`` schema copied verbatim from the real writer's DDL
-(``collectors/collect_snapshots.py::init_db``) -- this team's documented
-failure mode is a hand-drawn fixture shape the real code never exercises,
-so the schema is derived from that code, not redrawn by hand.
-
-Exception: the performance check (section 6) already ran against its own
-synthetic DB of fixed size (unchanged here), so its workload -- and
-therefore its time budget -- does not drift as a live DB would accumulate
-snapshots.
-"""
+"""Verification tests for ``features.market_features``."""
 
 from __future__ import annotations
 
@@ -32,9 +12,6 @@ import pytest
 from features import compute_features, compute_features_batch
 from features.market_features import FEATURE_KEYS
 
-# Five markets (not one) so test_batch_matches_singles below can always
-# exercise a real >=5-market batch instead of conditionally skipping when
-# the (previously real, now synthetic) pool happened to be too small.
 MARKET_IDS: tuple[str, ...] = tuple(f"synthetic-market-{i}" for i in range(5))
 N_SNAPSHOTS = 30  # >= 20, the original "populated market" bar
 SNAPSHOT_INTERVAL_HOURS = 4
@@ -43,20 +20,11 @@ LAST_TS = FIRST_TS + timedelta(hours=SNAPSHOT_INTERVAL_HOURS * (N_SNAPSHOTS - 1)
 EVAL_T = LAST_TS + timedelta(hours=2)  # a bit past the last snapshot
 
 
-# --------------------------------------------------------------------------- #
 # Fixtures
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture(scope="session")
 def db(tmp_path_factory) -> Path:
-    """Synthetic sqlite DB: schema from collectors/collect_snapshots.py's
-    ``snapshots`` table (verbatim) plus a minimal ``markets`` table (only
-    the ``id``/``end_date`` columns ``features.market_features`` reads).
-    Five markets, each with ``N_SNAPSHOTS`` deterministic, steadily-rising
-    snapshots -- so momentum, spread averages, and causal lookbacks all
-    resolve to known, non-random values.
-    """
     path = tmp_path_factory.mktemp("market_features_db") / "synthetic.db"
     conn = sqlite3.connect(path)
     try:
@@ -121,9 +89,7 @@ def evaluation_T() -> datetime:
     return EVAL_T
 
 
-# --------------------------------------------------------------------------- #
 # 1. Smoke
-# --------------------------------------------------------------------------- #
 
 
 def test_smoke_full_feature_dict(db, populated_market, evaluation_T):
@@ -137,15 +103,11 @@ def test_smoke_full_feature_dict(db, populated_market, evaluation_T):
     assert feats["snapshot_count"] >= 1
 
 
-# --------------------------------------------------------------------------- #
 # 2. Causality
-# --------------------------------------------------------------------------- #
 
 
 def test_causality_uses_only_past_snapshots(db, populated_market):
     mid, _, last_ts = populated_market
-    # Pick T just before the latest snapshot — price_now must be the
-    # second-to-latest midpoint, NOT the very latest.
     T = last_ts - timedelta(seconds=1)
 
     conn = sqlite3.connect(db)
@@ -181,9 +143,7 @@ def test_before_history_returns_nulls(db, populated_market):
     assert feats["snapshot_count"] == 0
 
 
-# --------------------------------------------------------------------------- #
 # 3. Missing market
-# --------------------------------------------------------------------------- #
 
 
 def test_unknown_market_does_not_crash(db, evaluation_T):
@@ -195,16 +155,10 @@ def test_unknown_market_does_not_crash(db, evaluation_T):
     assert feats["time_to_resolution"] is None
 
 
-# --------------------------------------------------------------------------- #
 # 4. Batch parity
-# --------------------------------------------------------------------------- #
 
 
 def test_batch_matches_singles(db, evaluation_T):
-    # M11: MARKET_IDS is fixed at 5 synthetic markets, each with >= 20
-    # snapshots by construction (see the `db` fixture) -- no more
-    # conditional skip when the (previously real) pool happened to be
-    # smaller than 5.
     ids = list(MARKET_IDS)
 
     batch = compute_features_batch(ids, evaluation_T, db)
@@ -227,9 +181,7 @@ def test_batch_matches_singles(db, evaluation_T):
             ), f"mismatch on {mid}.{key}: single={sval!r}, batch={bval!r}"
 
 
-# --------------------------------------------------------------------------- #
 # 5. Hand-checked spread average
-# --------------------------------------------------------------------------- #
 
 
 def test_spread_avg_24h_matches_sql(db, populated_market, evaluation_T):
@@ -253,21 +205,10 @@ def test_spread_avg_24h_matches_sql(db, populated_market, evaluation_T):
     assert feats["spread_avg_24h"] == pytest.approx(float(avg), rel=1e-9, abs=1e-9)
 
 
-# --------------------------------------------------------------------------- #
 # 6. Performance
-# --------------------------------------------------------------------------- #
 
-# The perf check must time a FIXED workload. Running over every market in the
-# live DB made the test degrade as collector runs accumulated data, failing on
-# volume rather than on code. Instead we build a synthetic DB whose schema
-# (columns, UNIQUE constraint, index) mirrors collectors/collect_snapshots.py.
-#
-# Cost is ~linear in markets WITH history (~7ms each on dev hardware, nearly
-# independent of snapshots-per-market) while history-less ids are ~free, so
-# the pool mixes both — like the live pool, where most markets have no
-# snapshots before the frozen evaluation date. 200 dense markets ≈ 1.5-2s.
-PERF_N_MARKETS = 1_000  # > IN_CLAUSE_CHUNK (500), so query chunking is exercised
-PERF_DENSE_EVERY = 5  # every 5th id has history (200 dense), spread over chunks
+PERF_N_MARKETS = 1_000
+PERF_DENSE_EVERY = 5
 PERF_SNAPS_PER_MARKET = 25  # every 4h over (T-96h, T]; every lookback resolves
 PERF_T = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
 PERF_TIME_BUDGET_S = 5.0  # ~2.5-3x headroom over dev-hardware measurement
@@ -283,10 +224,6 @@ def _perf_is_dense(i: int) -> bool:
 
 @pytest.fixture(scope="module")
 def perf_db(tmp_path_factory) -> Path:
-    """Synthetic fixed-size DB: PERF_N_MARKETS ids, every PERF_DENSE_EVERY-th
-    with PERF_SNAPS_PER_MARKET snapshots at/before PERF_T, the rest with no
-    history. Values are deterministic functions of the market/snapshot index —
-    no randomness, so every run times the exact same workload."""
     path = tmp_path_factory.mktemp("perf") / "perf.db"
     conn = sqlite3.connect(path)
     try:
@@ -357,9 +294,6 @@ def test_batch_under_time_budget_for_fixed_pool(perf_db):
     elapsed = time.perf_counter() - started
 
     assert list(df["market_id"]) == ids
-    # The budget is only meaningful if the timed run did real work: a
-    # mis-built fixture (wrong timestamp format, empty window) would produce
-    # all-null rows and a vacuously fast pass.
     dense = df.iloc[[i for i in range(PERF_N_MARKETS) if _perf_is_dense(i)]]
     empty = df.iloc[[i for i in range(PERF_N_MARKETS) if not _perf_is_dense(i)]]
     assert dense["price_now"].notna().all()
@@ -372,9 +306,7 @@ def test_batch_under_time_budget_for_fixed_pool(perf_db):
     )
 
 
-# --------------------------------------------------------------------------- #
 # 7. Snapshot count is monotone in T
-# --------------------------------------------------------------------------- #
 
 
 def test_snapshot_count_monotone(db, populated_market):

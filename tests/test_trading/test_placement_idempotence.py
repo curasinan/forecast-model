@@ -1,19 +1,4 @@
-"""Task 1.7: placement idempotence + persistent exposure seeding (C2).
-
-A GTC order rests at the venue for days or weeks under the SAME book.
-Nothing before this task stopped a re-run of the paper entrypoint from
-placing that exact order a second time (idempotence: audit finding C2's
-first half), and every fresh Python process started `RiskManager`
-exposure back at zero even though the venue and the book already carry
-real risk from a prior run (C2's second half). These tests pin both
-fixes: `load_open_commitments` / `drop_already_committed`
-(`src/trading/reconcile.py`, additive) and `RiskManager.seed_exposure`
-(`src/trading/risk_manager.py`, additive).
-
-Ground rule this suite enforces: dedup only ever SKIPS a would-be
-duplicate placement. Nothing here may cancel anything found resting --
-that is measurement state, not something to auto-clean.
-"""
+"""Placement idempotence + persistent exposure seeding (C2)."""
 
 from __future__ import annotations
 
@@ -36,15 +21,7 @@ YES_CON = 712856754
 NO_CON = 712856759
 
 
-# ------------------------------------------------------------------ fakes
 class FakeVenue(_BaseFakeVenue):
-    """`test_executor_venue.FakeVenue` plus the venue-wide open-orders read
-    `drop_already_committed` dedups against (IBKRAdapter.get_all_open_orders,
-    reqAllOpenOrders semantics: every currently-resting order). This fake
-    has only one client, so "resting" is just "still open" in its own
-    order book.
-    """
-
     def get_all_open_orders(self) -> list[Order]:
         return [o for o in self._orders.values() if o.status == "open"]
 
@@ -64,7 +41,6 @@ def _ibkr_market(days: int = 120) -> Market:
     )
 
 
-# ------------------------------------------------------------------ db helpers
 def _make_book(path) -> None:
     """Create a v2-shaped paper book (PositionTracker owns the DDL)."""
     PositionTracker(db_path=str(path))
@@ -107,7 +83,6 @@ def _insert_position_row(path, *, order_id: str, question_id: str, market_id: st
     conn.close()
 
 
-# ------------------------------------------------------------------ (a) end-to-end idempotence
 def test_rerun_with_resting_orders_places_nothing(tmp_path):
     db = str(tmp_path / "p.db")
     venue = FakeVenue(read_only=False)
@@ -128,15 +103,6 @@ def test_rerun_with_resting_orders_places_nothing(tmp_path):
 
 
 def test_exposure_seeded_from_db_binds_headroom_below_the_kelly_cap():
-    """Controller ruling R10: replaces the brief's original verbatim test,
-    which was vacuous -- with `_edge()`'s kelly_fraction=0.10 and
-    bankroll=100.0 the Kelly cap alone clamps size to $10 before the
-    exposure check ever runs, so `adjusted_size_usd <= 50.0 - 29.64` held
-    even with `seed_exposure` never called. Seeding to 46.0 instead leaves
-    only $4 of headroom under a $50 limit -- BELOW the $10 Kelly-capped
-    size -- so the assertion only holds if `seed_exposure` actually moved
-    `_total_exposure`.
-    """
     rm = RiskManager(limits=RiskLimits(max_total_exposure_usd=50.0), bankroll=100.0)
     rm.seed_exposure(46.0)
     res = rm.check_trade(edge=_edge(), proposed_size_usd=30.0)
@@ -153,7 +119,6 @@ def test_exposure_seeded_from_db_can_exhaust_headroom_and_reject():
     assert res.adjusted_size_usd == 0.0
 
 
-# ------------------------------------------------------------------ (c) load_open_commitments
 def test_missing_db_file_returns_the_empty_shape(tmp_path):
     commitments = load_open_commitments(str(tmp_path / "does_not_exist.db"))
     assert commitments == {
@@ -162,21 +127,6 @@ def test_missing_db_file_returns_the_empty_shape(tmp_path):
 
 
 def test_load_open_commitments_avoids_double_counting_a_partial_fill(tmp_path):
-    """A partially_filled row's cost_usd is the FULL intended commitment
-    (the whole order, not just what has filled so far). Its own partial
-    position row must not be added on top of that -- 9.84, not 12.24.
-    A filled row is no longer a trade_log commitment, so it contributes
-    only through its (now fully-sized) position: 9.86.
-
-    `by_group_counts` (controller ruling R16, additive) counts the SAME
-    contributing rows `by_group` sums dollars from: a1 contributes once,
-    via the trade_log loop (its own partial position is skipped, per the
-    no-double-counting rule above); a2 contributes once, via the
-    positions loop (its trade_log row is 'filled', not a candidate
-    status, so it's never in committed_order_ids). Two rows, both in
-    "gtm:2026-12" -> count 2, not 1 (one per source row) and not 4 (not
-    per dollar).
-    """
     db = tmp_path / "p.db"
     _make_book(db)
     _insert_trade_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
@@ -225,10 +175,6 @@ def test_load_open_commitments_group_key_drops_the_trailing_strike_segment(tmp_p
 
 
 def test_load_open_commitments_by_group_counts_counts_rows_not_dollars(tmp_path):
-    """Controller ruling R16: `by_group_counts` is an order COUNT, not a
-    dollar-weighted figure -- three differently-sized rows in the same
-    group must count 3, matching the real book's three GTM strikes
-    (29@0.34 / 41@0.24 / 71@0.14, unequal cost_usd, same group)."""
     db = tmp_path / "p.db"
     _make_book(db)
     _insert_trade_row(db, order_id="a1", question_id="gtm:2026-12:1.2",
@@ -245,7 +191,6 @@ def test_load_open_commitments_by_group_counts_counts_rows_not_dollars(tmp_path)
     assert commitments["by_group_counts"] == {"gtm:2026-12": 3}
 
 
-# ------------------------------------------------------------------ (d) drop_already_committed
 def test_drop_already_committed_drops_on_a_resting_venue_order_only(tmp_path):
     market = _ibkr_market()
     intent = TradeIntent(edge=_edge(), market=market)  # YES: edge_pct=0.15 > 0
@@ -285,8 +230,6 @@ def test_drop_already_committed_keeps_an_uncommitted_intent(tmp_path):
 def test_drop_already_committed_dedups_the_no_leg_on_its_own_con_id(tmp_path):
     market = _ibkr_market()
     intent = TradeIntent(edge=_edge(edge_pct=-0.15, model_prob=0.35), market=market, no_price=0.65)
-    # A resting order on the YES leg must NOT protect the NO leg -- the two
-    # are separate IBKR contracts.
     resting = [Order(
         order_id="V1",
         request=OrderRequest(market_id=market.market_id, side="BUY", leg="YES",
@@ -340,8 +283,7 @@ def test_drop_already_committed_logs_the_reason_at_warning(caplog):
 
 
 def test_drop_already_committed_never_touches_the_resting_orders_it_is_given(tmp_path):
-    """Ground rule 1: dedup only skips placement. It must never mutate or
-    cancel anything it was handed."""
+    """Ground rule 1: dedup only skips placement."""
     market = _ibkr_market()
     intent = TradeIntent(edge=_edge(), market=market)
     resting = [Order(
@@ -357,7 +299,6 @@ def test_drop_already_committed_never_touches_the_resting_orders_it_is_given(tmp
     assert resting[0] == before
 
 
-# ------------------------------------------------------------------ (e) RiskManager.seed_exposure
 def test_seed_exposure_raises_total_exposure_to_the_seeded_value():
     rm = RiskManager(bankroll=100.0)
     assert rm._total_exposure == 0.0
@@ -366,8 +307,6 @@ def test_seed_exposure_raises_total_exposure_to_the_seeded_value():
 
 
 def test_seed_exposure_never_lowers_exposure_already_observed():
-    """max, not assignment: a re-seed must not claw back exposure this
-    process has already added for trades placed since the last seed."""
     rm = RiskManager(bankroll=100.0)
     rm.add_exposure(40.0)
     rm.seed_exposure(10.0)
@@ -381,25 +320,7 @@ def test_seed_exposure_is_idempotent_across_reseeds_of_the_same_value():
     assert rm._total_exposure == pytest.approx(29.64)
 
 
-# ------------------------------------------------------------------ (f) TOCTOU (code review finding 2)
 def test_run_ibkr_paper_reads_the_dedup_snapshot_inside_the_lock():
-    """Code-review finding: the commitments/resting snapshot, the dedup
-    drop, and the exposure seed must all happen strictly AFTER `with
-    acquire_db_lock(...)` acquires the lock. Reading that snapshot BEFORE
-    the lock lets two concurrent runs each observe an empty
-    commitments/resting set, then serialize on the lock and both place the
-    same order a moment apart -- a real duplicate resting GTC order,
-    exactly what this whole task exists to prevent.
-
-    Driving `scripts/run_ibkr_paper.py:main()` end-to-end needs a live
-    IBKR Gateway session (IBKRSettings/IBKRAdapter.connect()), which is
-    out of reach for a unit test and out of scope for this task's
-    "no network/Gateway" constraint. This pins the invariant structurally
-    instead: every call that reads or mutates the dedup/exposure state
-    must appear, in source order, AFTER the `with acquire_db_lock(`
-    statement inside `main()`. A future edit that hoists the snapshot back
-    above the lock (reintroducing the race) fails this test immediately.
-    """
     import inspect
 
     import scripts.run_ibkr_paper as mod

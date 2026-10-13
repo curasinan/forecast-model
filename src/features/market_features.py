@@ -1,10 +1,4 @@
-"""Market feature extractor — signals from Polymarket price/volume data.
-
-Technical indicators on prediction market price history:
-- RSI: Momentum oscillator. >70 = overbought, <30 = oversold
-- Volatility: Std deviation of price returns over a window
-- Volume: Trading activity as proxy for information flow
-"""
+"""Market feature extractor — signals from Polymarket price/volume data."""
 
 from src.features.base import BaseFeatureExtractor
 from src.math.entropy import binary_entropy

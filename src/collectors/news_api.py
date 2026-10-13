@@ -1,16 +1,4 @@
-"""NewsAPI.org collector — structured news search.
-
-NewsAPI free tier ("Developer") only supports the /top-headlines endpoint
-from server-side scripts. The /everything endpoint requires a paid plan
-($449+/month) for server-side usage.
-
-We use /top-headlines with category=technology and keyword filtering,
-which works on the free tier and gives us current tech headlines.
-
-If you have a paid key, set NEWSAPI_PLAN=paid in .env to unlock /everything.
-
-API docs: https://newsapi.org/docs/endpoints
-"""
+"""NewsAPI.org collector — structured news search."""
 
 import logging
 from datetime import datetime

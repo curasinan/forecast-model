@@ -45,12 +45,7 @@ def ensemble_daily_from_open_meteo(
     timezone: str,
     temperature_unit: str = "fahrenheit",
 ) -> pd.DataFrame:
-    """Parse Open-Meteo ensemble JSON into long daily member rows.
-
-    Handles:
-      - daily.temperature_2m_max / _min arrays (preferred)
-      - hourly.temperature_2m* member columns as fallback
-    """
+    """Parse Open-Meteo ensemble JSON into long daily member rows."""
     daily = payload.get("daily") or {}
     dates = daily.get("time") or []
     rows: list[dict[str, Any]] = []
@@ -58,7 +53,6 @@ def ensemble_daily_from_open_meteo(
     max_keys = [k for k in daily if k.startswith("temperature_2m_max")]
 
     if dates and max_keys:
-        # Control / member suffixes: temperature_2m_max, temperature_2m_max_member01, ...
         for i, d in enumerate(dates):
             member_maxes: list[float] = []
             member_mins: list[float] = []

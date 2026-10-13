@@ -1,15 +1,4 @@
-"""Bridge robustness study (audit H4): the ERA5->NOAA bridge refit inside each window.
-
-Covers scripts/study_bridge_window.py. The production hindcast fits the
-bridge on the FULL ERA5/NOAA overlap, so every past test year is scored
-with a bridge that has already seen that year's (and later years')
-labels. The study refits the bridge per test year on months strictly
-before that year and re-scores with the unchanged expanding-window
-machinery; these tests pin that decomposition on synthetic inputs.
-
-Synthetic data + tmp_path only. An autouse guard points CLIMATE_DATA_ROOT
-at a tmp directory so nothing here can resolve to ~/quant_data/climate_data.
-"""
+"""Bridge robustness study (audit H4): the ERA5->NOAA bridge refit inside each window."""
 
 from __future__ import annotations
 
@@ -42,21 +31,11 @@ def _never_the_real_data_root(tmp_path, monkeypatch):
     assert not guard.exists(), "the study resolved (and created) a default data root"
 
 
-# --------------------------------------------------------------------------- #
 # synthetic inputs
-# --------------------------------------------------------------------------- #
 
 
 def _inputs(*, drift_per_year: float, bridge_noise_sd: float = 0.03, seed: int = 0):
-    """SEAS5 members / ERA5 K / NOAA degC for 2000-01 .. 2011-12.
-
-    NOAA = alpha[month] + 0.95 * ERA5 + drift_per_year * (years since 2000)
-    + N(0, bridge_noise_sd): a non-zero drift makes the ERA5->NOAA relation
-    move over time, so a bridge fit on an earlier window genuinely differs
-    from a later one. ERA5 itself is always noisy (keeps the trend-clim
-    baseline non-degenerate); bridge_noise_sd=0 with no drift makes the
-    bridge exactly identified in every window.
-    """
+    """SEAS5 members / ERA5 K / NOAA degC for 2000-01 .. 2011-12."""
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2000-01", "2011-12", freq="MS")
     t = (idx.year - 2000) + (idx.month - 0.5) / 12.0
@@ -97,9 +76,7 @@ def _run(seas5, era5, noaa, *, trend=False):
     )
 
 
-# --------------------------------------------------------------------------- #
 # the brief's Step 1 test
-# --------------------------------------------------------------------------- #
 
 
 def test_drifting_bridge_gives_distinct_window_params_and_both_skill_columns():
@@ -129,9 +106,7 @@ def test_drifting_bridge_gives_distinct_window_params_and_both_skill_columns():
     assert isinstance(study.leaky_verdict, GoLiveVerdict)
 
 
-# --------------------------------------------------------------------------- #
 # the decomposition is exactly the existing machinery, and leak-free
-# --------------------------------------------------------------------------- #
 
 
 def test_honest_year_equals_single_year_scoring_with_the_window_bridge():
@@ -147,7 +122,6 @@ def test_honest_year_equals_single_year_scoring_with_the_window_bridge():
     pd.testing.assert_frame_equal(got, expected.reset_index(drop=True))
     assert study.window_bridges[year].params == wb.params
 
-    # the leak's size in degC: window-bridge minus full-bridge fc_mean_C on the scored rows
     full = build_frame_from_inputs(seas5, era5, noaa)
     scored = (
         (np.floor(frame["target_year_frac"]).astype(int) == year)
@@ -209,9 +183,7 @@ def test_comparison_is_paired_trend_baseline_is_bridge_free():
     assert study.trend is True
 
 
-# --------------------------------------------------------------------------- #
 # CLI: reads a synthetic on-disk root, writes exactly the two --out files
-# --------------------------------------------------------------------------- #
 
 
 def _write_root(root, seas5, era5, noaa, *, operational_trend: bool | None):

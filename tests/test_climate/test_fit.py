@@ -61,7 +61,6 @@ def test_fit_gtm_writes_artifacts_and_scores(tmp_path):
     payload = json.loads(paths["report_json"].read_text(encoding="utf-8"))
     assert payload["n_labelled"] == result.n_labelled
     assert "bridge" in payload and "emos" in payload
-    # Hindcast gate is defined on this summary (may pass or fail; must be structured).
     verdict = evaluate_hindcast_go_live(result.summary, require_live_paper=False)
     assert isinstance(verdict.passed, bool)
     assert "leads" in verdict.metrics

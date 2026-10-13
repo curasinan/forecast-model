@@ -1,14 +1,4 @@
-"""RETIRED (2026-08-16) — live Polymarket CLOB order placement/cancellation.
-
-Extracted from src/trading/order_manager.py (_place_live_order and the
-live branch of cancel_order) at retirement. This path never produced a
-live fill: token ids were always empty upstream, so every live order was
-rejected before signing. Kept for research reference only.
-
-Both functions take an authenticated ``py_clob_client.client.ClobClient``
-(i.e. one that has had ``set_api_creds`` called — see
-legacy/polymarket_onchain/wallet.py).
-"""
+"""RETIRED (2026-08-16) — live Polymarket CLOB order placement/cancellation."""
 
 import logging
 
@@ -16,11 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 def place_live_order(client, token_id: str, price: float, size: float) -> dict:
-    """Sign and post a GTC BUY limit order on Polymarket's CLOB.
-
-    Returns the raw API response dict: ``{"success": bool, "orderID": str,
-    "errorMsg": str, ...}``. Raises on network/signing failure.
-    """
+    """Sign and post a GTC BUY limit order on Polymarket's CLOB."""
     from py_clob_client.clob_types import OrderArgs, OrderType
     from py_clob_client.order_builder.constants import BUY
 

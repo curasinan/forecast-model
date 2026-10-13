@@ -1,21 +1,4 @@
-"""SQLite-backed cache of resolved ForecastEx contract specifications.
-
-Cache invalidation policy:
-  - Every row carries ``fetched_at``; rows older than 24h (CACHE_TTL_HOURS)
-    are stale. ``resolve()`` re-fetches stale/missing rows from the API.
-  - ``invalidate(con_id)`` evicts one row; ``flush_all()`` clears the table
-    and should be called on reconnect events (listings can change while the
-    session is down).
-  - When the API rejects a cached conId, the caller evicts it (``invalidate``)
-    and re-resolves ONCE via ``resolve``; if the fresh row is rejected again
-    the error propagates -- never retry in a loop.
-  - Seeded rows (``seed_from_snapshot``) count as fresh from their snapshot
-    load time, so a freshly seeded universe is usable without a connection.
-
-Never construct a Contract from guessed field values (spec Stage 3.2):
-requests go out by conId only, and rows come exclusively from
-reqContractDetails responses or the verified universe snapshot.
-"""
+"""SQLite-backed cache of resolved ForecastEx contract specifications."""
 
 from __future__ import annotations
 
@@ -82,12 +65,7 @@ class ContractResolver:
 
     # -- cache population --------------------------------------------------
     def seed_from_snapshot(self, path: str | Path) -> int:
-        """Load a universe snapshot (data/ibkr_universe_live.json shape).
-
-        Maps the snapshot's ib_async field names onto cache columns; rows
-        without a conId are skipped. Returns the number of rows seeded.
-        Seeded rows are stamped fresh as of the load time.
-        """
+        """Load a universe snapshot (data/ibkr_universe_live.json shape)."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         now = _utcnow().isoformat()
         seeded = 0
@@ -140,12 +118,7 @@ class ContractResolver:
         return sorted(ids)
 
     def yes_no_pair(self, symbol: str, expiry: str, strike: float) -> tuple[int, int]:
-        """(yes_con_id, no_con_id) for a market, from cached rows.
-
-        ForecastEx lists YES and NO as separate conIds: right='C' is YES,
-        right='P' is NO (verified 2026-08-16). Raises VenueError when the
-        cache does not hold both legs.
-        """
+        """(yes_con_id, no_con_id) for a market, from cached rows."""
         rows = self._conn.execute(
             'SELECT con_id, "right" FROM contracts '
             "WHERE symbol = ? AND expiry = ? AND strike = ? AND sec_type != 'IND'",

@@ -1,9 +1,4 @@
-"""Tests for scripts/check_ibkr_recorder.py (recorder health probe).
-
-Everything runs against tmp_path fixtures -- no Gateway, no ib_async.
-Exit codes are asserted via main()'s return value; alert wiring is
-asserted by monkeypatching the probe module's send_alert reference.
-"""
+"""Tests for scripts/check_ibkr_recorder.py (recorder health probe)."""
 
 from __future__ import annotations
 
@@ -44,10 +39,6 @@ def _write_events(data_root: Path, events: list[dict]) -> Path:
 
 
 def _write_healthy_sync_runs(data_root: Path, age_hours: float = 1.0) -> Path:
-    """A fresh 'ok': true sync-run line -- the sync axis this test file does
-    not exercise must stay healthy so these tests keep pinning ONLY the
-    recorder-heartbeat axis (see tests/test_monitoring/test_health_sink.py
-    for the sync axis and the combined-message behavior)."""
     path = data_root / "paper" / "ibkr_sync_runs.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -59,9 +50,6 @@ def _write_healthy_sync_runs(data_root: Path, age_hours: float = 1.0) -> Path:
 
 
 def _argv(state: Path, events: Path, extra: list[str] | None = None) -> list[str]:
-    # data_root is state's grandparent (state = <data_root>/state/recorder_state.json,
-    # mirroring default_state_path()'s layout) even when state itself was never
-    # written (e.g. the missing-state test) -- Path arithmetic doesn't touch disk.
     data_root = state.parent.parent
     sync_runs = _write_healthy_sync_runs(data_root)
     argv = [
@@ -77,8 +65,7 @@ def _argv(state: Path, events: Path, extra: list[str] | None = None) -> list[str
 
 @pytest.fixture
 def alerts(monkeypatch) -> list[str]:
-    """Record send_alert calls made by the probe module. Answers True like the
-    real send_alert does for a delivered alert."""
+    """Record send_alert calls made by the probe module."""
     calls: list[str] = []
 
     def _record(message, method=None):
@@ -89,9 +76,7 @@ def alerts(monkeypatch) -> list[str]:
     return calls
 
 
-# --------------------------------------------------------------------------- #
 # State file: fresh / stale / missing / corrupt
-# --------------------------------------------------------------------------- #
 
 
 def test_fresh_state_ok(tmp_path, alerts, capsys):
@@ -157,9 +142,7 @@ def test_corrupt_state_is_critical(tmp_path, alerts):
     assert "CRITICAL" in alerts[0]
 
 
-# --------------------------------------------------------------------------- #
 # Events JSONL: unexpected disconnect vs recovery
-# --------------------------------------------------------------------------- #
 
 
 def test_last_event_unexpected_disconnect_is_down(tmp_path, alerts):
@@ -210,9 +193,7 @@ def test_down_outranks_stale(tmp_path, alerts):
     assert "DOWN" in alerts[0]
 
 
-# --------------------------------------------------------------------------- #
 # Alert failure handling + output control
-# --------------------------------------------------------------------------- #
 
 
 def test_send_alert_raising_does_not_mask_exit_code(tmp_path, monkeypatch):
@@ -226,10 +207,6 @@ def test_send_alert_raising_does_not_mask_exit_code(tmp_path, monkeypatch):
 
 
 def test_send_alert_failure_note_never_echoes_the_exception_text(tmp_path, monkeypatch, capsys):
-    """Final-review C-2 belt: without --quiet this note goes to stderr, which
-    run_ibkr_health.ps1 appends to logs/ibkr_health_task.log. An exception
-    from the Telegram path can quote the request URL -- bot token included --
-    so only the exception's class name may be printed."""
     fake_token = "123456789:FAKE-test-token-NOT-A-REAL-SECRET"
 
     def boom(message, method=None):
@@ -294,11 +271,6 @@ def test_gateway_schema_reconnect_clears_down(tmp_path, alerts):
     assert alerts == []
 
 
-# --------------------------------------------------------------------------- #
-# H6: contract-universe snapshot aging (informational only, never a failure axis)
-# --------------------------------------------------------------------------- #
-
-
 def test_ok_message_includes_snapshot_age_days(tmp_path, alerts, capsys):
     state = _write_state(tmp_path, age_minutes=5)
     snapshot = tmp_path / "universe.json"
@@ -327,9 +299,6 @@ def test_snapshot_age_days_is_na_when_file_missing(tmp_path, alerts, capsys):
 
 
 def test_stale_snapshot_does_not_flip_status_or_exit_code(tmp_path, alerts, capsys):
-    """A very old snapshot (well past the recorder's 35-day WARNING threshold)
-    must still report OK/exit 0 -- staleness is surfaced as text, never as a
-    failure axis or a nonzero exit code."""
     state = _write_state(tmp_path, age_minutes=5)
     snapshot = tmp_path / "universe.json"
     snapshot.write_text("{}", encoding="utf-8")

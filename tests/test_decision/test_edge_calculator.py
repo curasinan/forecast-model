@@ -15,10 +15,7 @@ from decision.edge_calculator import (
 
 
 def _make_db(tmp_path: Path, snaps: list[tuple]) -> Path:
-    """Create a throwaway SQLite with a snapshots table and the given rows.
-
-    Each row: (market_id, timestamp, best_bid, best_ask, midpoint, spread)
-    """
+    """Create a throwaway SQLite with a snapshots table and the given rows."""
     db = tmp_path / "synth.db"
     conn = sqlite3.connect(db)
     conn.execute(
@@ -48,8 +45,6 @@ def test_threshold_filter_keeps_only_above_min_edge(tmp_path):
     ])
     preds = pd.DataFrame({
         "market_id": ["a", "b", "c"],
-        # Edges after half-spread: 0.010 (clear above), 0.020 (clear above), 0.001 (below).
-        # Avoid the exact 0.005 boundary because IEEE754 makes 0.015 - 0.01 ≈ 0.004999...
         "predicted_change": [0.020, 0.030, 0.011],
     })
     result = compute_edges(preds, db_path=db)

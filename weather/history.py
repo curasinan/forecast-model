@@ -1,12 +1,4 @@
-"""Parse Open-Meteo Previous Runs payloads into lead-structured daily rows.
-
-Lead-day semantics: hourly ``temperature_2m_previous_dayN`` values over a
-local day D embed model runs initialized up to ``utc(start of local day D+1)
-- 24N hours``. Under the repo lead convention (init -> local noon of D) that
-is ``lead_hours = 24N - 12``, so previous_dayN maps to ``lead_day = N - 1``.
-``previous_day0`` is the stitched latest-run series — pure look-ahead for any
-pre-midnight decision — and is deliberately excluded.
-"""
+"""Parse Open-Meteo Previous Runs payloads into lead-structured daily rows."""
 
 from __future__ import annotations
 
@@ -39,11 +31,7 @@ HISTORY_COLUMNS = [
 
 
 def effective_init_utc(valid_local_date: str, previous_day_n: int, timezone_name: str) -> str:
-    """Conservative (latest-possible) init embedded in previous_dayN for day D.
-
-    Storing the latest possible init makes the no-look-ahead filter strictest.
-    Tz-aware so 23/25-hour DST days cannot shift the result.
-    """
+    """Conservative (latest-possible) init embedded in previous_dayN for day D."""
     d = date.fromisoformat(valid_local_date)
     tz = ZoneInfo(timezone_name)
     next_day_start = datetime(d.year, d.month, d.day, tzinfo=tz) + timedelta(days=1)
@@ -75,12 +63,7 @@ def previous_runs_payload_to_daily(
     timezone_name: str,
     temperature_unit: str,
 ) -> pd.DataFrame:
-    """One row per (valid_local_date, lead_day), forecast_history_daily-shaped.
-
-    Absent or all-null previous_dayN variables (short-horizon models,
-    pre-archive dates) are skipped silently; partial days are kept here with
-    their true n_hours and filtered at training time.
-    """
+    """One row per (valid_local_date, lead_day), forecast_history_daily-shaped."""
     hourly = payload.get("hourly") or {}
     times = hourly.get("time") or []
     fetched = utc_now_iso()

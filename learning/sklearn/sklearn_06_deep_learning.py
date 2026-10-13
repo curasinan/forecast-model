@@ -1,10 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 6: Where Scikit-Learn Ends and Deep Learning Begins
-
-Understanding the boundaries and when to move beyond scikit-learn.
-"""
+"""Scikit-Learn: Zero to Hero, Part 6: Where Scikit-Learn Ends and Deep Learning Begins."""
 
 print("=" * 70)
 print("SCIKIT-LEARN: ZERO TO HERO")
@@ -12,9 +6,7 @@ print("Part 6: Where Scikit-Learn Ends and Deep Learning Begins")
 print("=" * 70)
 
 
-# ============================================================================
 # WHAT SCIKIT-LEARN IS GOOD FOR
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("WHAT SCIKIT-LEARN IS GOOD FOR")
@@ -56,9 +48,7 @@ sklearn_strengths = """
 print(sklearn_strengths)
 
 
-# ============================================================================
 # WHAT SCIKIT-LEARN CANNOT DO
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("WHAT SCIKIT-LEARN CANNOT DO")
@@ -112,9 +102,7 @@ sklearn_limits = """
 print(sklearn_limits)
 
 
-# ============================================================================
 # THE DEEP LEARNING LANDSCAPE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("THE DEEP LEARNING LANDSCAPE")
@@ -155,9 +143,7 @@ When to use deep learning:
 print(deep_learning)
 
 
-# ============================================================================
 # NEURAL NETWORK ARCHITECTURES
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("NEURAL NETWORK ARCHITECTURES (Preview)")
@@ -208,9 +194,7 @@ architectures = """
 print(architectures)
 
 
-# ============================================================================
 # SCIKIT-LEARN's NEURAL NETWORK (MLPClassifier)
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SCIKIT-LEARN's NEURAL NETWORK")
@@ -262,9 +246,7 @@ print(f"Training accuracy: {mlp.score(X_train_scaled, y_train):.4f}")
 print(f"Test accuracy:     {mlp.score(X_test_scaled, y_test):.4f}")
 
 
-# ============================================================================
 # DECISION FLOWCHART: SKLEARN vs DEEP LEARNING
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("DECISION FLOWCHART: SKLEARN vs DEEP LEARNING")
@@ -313,9 +295,7 @@ SIMPLE RULE:
 print(flowchart)
 
 
-# ============================================================================
 # YOUR LEARNING PATH FORWARD
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("YOUR LEARNING PATH FORWARD")
@@ -368,9 +348,7 @@ RECOMMENDED: Do a few sklearn projects first, then branch out.
 print(learning_path)
 
 
-# ============================================================================
 # COMPLETE SKLEARN REFERENCE
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("COMPLETE SKLEARN REFERENCE")

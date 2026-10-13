@@ -1,17 +1,4 @@
-"""Thin OpenAI-compatible chat client for the local vLLM server, on httpx.
-
-No retries (callers decide), no streaming (not needed for text -> structured
-data). Structured output uses the server's ``response_format`` json_schema
-mode; the decoded object is returned as ``LLMReply.parsed``. Reasoning text
-(vLLM's reasoning parser sends it as ``reasoning_content`` in older builds and
-as ``reasoning`` on newer ones, the Spark's included; the client reads the
-first, falling back to the second) is kept separate from ``content`` so
-callers never accidentally parse it. ``LLMReply.finish_reason`` is the server's
-``choices[0].finish_reason`` (a string, or None when absent or null); when
-schema content is not valid JSON the ``LLMOutputError`` names it unless it is
-``stop``, so "cut off at ``length``" is told apart from "wrote invalid JSON".
-Every failure, nested-past-the-decoder bodies included, is an ``LLMError``.
-"""
+"""Thin OpenAI-compatible chat client for the local vLLM server, on httpx."""
 
 from __future__ import annotations
 
@@ -49,26 +36,17 @@ class LLMConfigError(LLMError):
     """LLM_MODEL does not match what the server serves, or LLM_BASE_URL is not a usable URL."""
 
 
-_MISSING = object()  # an absent key, as opposed to one present with a JSON null
+_MISSING = object()
 
 
 def _bad_shape(method: str, path: str, expected: str, got: object) -> LLMError:
-    """The LLMError for an HTTP-200 payload of the wrong shape.
-
-    Names the request and the offending type (``missing`` for an absent key) only:
-    never the base URL, the api key or the payload itself.
-    """
+    """The LLMError for an HTTP-200 payload of the wrong shape."""
     seen = "missing" if got is _MISSING else type(got).__name__
     return LLMError(f"{method} {path}: expected {expected}, got {seen}")
 
 
 def _excerpt(data: object) -> str:
-    """The first 300 characters of ``data`` as JSON, for an error message; never raises.
-
-    ``json.loads`` accepts nesting that ``json.dumps`` then refuses (on Python 3.14.2 /
-    Windows: parsed to about 17k levels, printed to fewer), so printing a body the decoder
-    took can itself raise RecursionError.
-    """
+    """The first 300 characters of ``data`` as JSON, for an error message; never raises."""
     try:
         return json.dumps(data)[:300]
     except RecursionError:
@@ -76,8 +54,7 @@ def _excerpt(data: object) -> str:
 
 
 def _cutoff_note(finish_reason: str | None) -> str:
-    """What an "invalid JSON" error adds about how generation ended: nothing for ``stop`` or
-    for a server that did not say, the explanation for ``length``, the bare reason otherwise."""
+    """What an invalid-JSON error adds about how generation ended."""
     if finish_reason is None or finish_reason == "stop":
         return ""
     if finish_reason == "length":
@@ -86,12 +63,7 @@ def _cutoff_note(finish_reason: str | None) -> str:
 
 
 def _usage_count(value: Any, what: str) -> int:
-    """A token count from a completion's ``usage``: an int or a finite float, truncated.
-
-    A bool is not a count, and NaN, Infinity and 1e400 would otherwise escape ``int()`` as
-    ValueError or OverflowError. ``math.isfinite`` is applied to floats only: it overflows
-    on an int too large for a float, and every int is finite anyway.
-    """
+    """A token count from a completion's ``usage``: an int or a finite float, truncated."""
     is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
     if not is_number or (isinstance(value, float) and not math.isfinite(value)):
         raise _bad_shape("POST", "/chat/completions", f"{what} to be a finite number", value)
@@ -106,8 +78,6 @@ class LLMReply:
     usage: dict[str, int]
     latency_s: float
     model: str
-    # choices[0].finish_reason ("stop", "length", ...); None when the server sent none.
-    # Additive and last: nothing that builds an LLMReply today has to change.
     finish_reason: str | None = None
 
 
@@ -123,17 +93,10 @@ class LocalLLMClient:
                 headers={"Authorization": f"Bearer {settings.api_key.get_secret_value()}"},
                 timeout=timeout,
                 transport=transport,
-                # Never read the proxy environment (HTTP_PROXY, ALL_PROXY, ...): this client
-                # talks only to settings.base_url, usually a loopback tunnel, and a proxy would
-                # receive the prompts and the bearer. (Also ignores SSL_CERT_FILE / DIR.)
                 trust_env=False,
             )
         except httpx.InvalidURL as exc:
-            # Raised while httpx parses base_url. It words the problem ("Invalid port: 'abc'")
-            # without the URL, which may hold credentials; the api key is never part of it.
             raise LLMConfigError(f"LLM_BASE_URL cannot be used: {exc}") from exc
-
-    # -- lifecycle --------------------------------------------------------- #
 
     def close(self) -> None:
         self._http.close()
@@ -143,8 +106,6 @@ class LocalLLMClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
-
-    # -- transport --------------------------------------------------------- #
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -160,8 +121,6 @@ class LocalLLMClient:
         if not isinstance(data, dict):
             raise _bad_shape(method, path, "a JSON object", data)
         return data
-
-    # -- API ------------------------------------------------------------------ #
 
     def models(self) -> list[str]:
         """Ids the server lists under /models."""
@@ -222,15 +181,11 @@ class LocalLLMClient:
             raise _bad_shape("POST", "/chat/completions", "'message' to be an object", message)
         content = message.get("content")
         if content is None:
-            content = ""  # null is legal in the OpenAI shape (e.g. the budget ran out in reasoning)
+            content = ""
         elif not isinstance(content, str):
             raise _bad_shape(
                 "POST", "/chat/completions", "'content' to be a string or null", content
             )
-        # The reasoning text is ``reasoning_content`` in older vLLM builds and on OpenAI-style
-        # servers but ``reasoning`` on newer ones, the Spark's among them (captured 2026-10-03).
-        # reasoning_content wins when it is not null, else reasoning; the one chosen must be
-        # a string or null, and is never dropped silently.
         reasoning_key = (
             "reasoning_content" if message.get("reasoning_content") is not None else "reasoning"
         )
@@ -247,14 +202,13 @@ class LocalLLMClient:
         usage: dict[str, int] = {}
         for key, value in usage_raw.items():
             if value is None or isinstance(value, dict):
-                continue  # detail blocks (prompt_tokens_details, ...), not counts
+                continue
             usage[key] = _usage_count(value, "each 'usage' count")
         details = usage_raw.get("completion_tokens_details")
         if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
             usage["reasoning_tokens"] = _usage_count(
                 details["reasoning_tokens"], "'reasoning_tokens'"
             )
-        # An absent key and a null are both "the server did not say"; anything else must be text.
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None and not isinstance(finish_reason, str):
             raise _bad_shape(

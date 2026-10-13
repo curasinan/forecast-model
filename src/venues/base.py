@@ -1,5 +1,4 @@
-"""The venue port. Strategy, edge, sizing, and execution code depends on
-this interface and never on a concrete adapter."""
+"""The venue port."""
 
 from __future__ import annotations
 
@@ -30,14 +29,7 @@ class VenueReadOnlyError(VenueError):
 
 
 class VenueAdapter(abc.ABC):
-    """One trading venue, seen through venue-neutral types.
-
-    Adapters default to read-only. Only a deliberately configured writer
-    process (see the client-id map in src/venues/ibkr/clients.py) may
-    construct a writable adapter, and no code path in this repository
-    enables live order transmission — that is a manual, deliberate act by
-    the account holder after paper validation.
-    """
+    """One trading venue, seen through venue-neutral types."""
 
     name: str = "abstract"
 
@@ -68,8 +60,7 @@ class VenueAdapter(abc.ABC):
     def get_quotes(self, market_ids: Sequence[MarketId]) -> list[Quote]: ...
 
     def stream_quotes(self, market_ids: Sequence[MarketId]) -> Iterator[Quote]:
-        """Default streaming: repeated snapshot sweeps. Adapters with a real
-        push feed override this."""
+        """Default streaming: repeated snapshot sweeps."""
         while True:
             yield from self.get_quotes(market_ids)
 
@@ -98,8 +89,7 @@ class VenueAdapter(abc.ABC):
     def cancel_order(self, order_id: str) -> bool: ...
 
     def get_order(self, order_id: str) -> Order | None:
-        """Look up one order by the venue's native id (open or recently done).
-        Default: unsupported -> None. Adapters with order history override."""
+        """Look up one order by the venue's native id (open or recently done)."""
         return None
 
     # -- economics ---------------------------------------------------------

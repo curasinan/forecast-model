@@ -19,7 +19,6 @@ def test_finalization_guard():
     recent = (today - timedelta(days=1)).isoformat()
     old = (today - timedelta(days=5)).isoformat()
     assert is_finalized(old) is True
-    # Yesterday may or may not be finalized depending on UTC hour; usable needs 72h
     assert usable_for_training(old, finalized=True) is True
     assert usable_for_training(recent, finalized=True) is False
     assert usable_for_training(old, finalized=False) is False
@@ -45,12 +44,6 @@ def test_open_meteo_allows_customer_key(monkeypatch):
 
 
 def test_weather_data_root_not_none(tmp_path):
-    # M11 (Task 3.8): this used to call resolve_weather_data_root() with no
-    # override, which resolves to the REAL ~/quant_data/polymarket_weather
-    # default and mkdir's it on whatever machine runs the suite -- exactly
-    # the "never touch ~/quant_data" trap. `override` is priority 1 (see
-    # weather/paths.py::resolve_weather_data_root), so tmp_path keeps this
-    # test's only filesystem touch inside pytest's own tmp dir.
     root = resolve_weather_data_root(str(tmp_path))
     assert root.exists()
     # warn helper on fake onedrive path
@@ -61,10 +54,6 @@ def test_weather_data_root_not_none(tmp_path):
 
 
 def test_weather_data_root_default_is_quant_data_home(tmp_path, monkeypatch):
-    """Default (since the 2026-09-28 docs/paths rewrite) is
-    ~/quant_data/polymarket_weather -- matching climate/paths.py and
-    src/venues/ibkr/settings.py's resolved_data_root. Never %LOCALAPPDATA%;
-    see docs/MIGRATION_CHECKPOINT.md section 3 for why (packaged-app trap)."""
     from pathlib import Path
 
     from src.config import settings
@@ -80,9 +69,6 @@ def test_weather_data_root_default_is_quant_data_home(tmp_path, monkeypatch):
 
 
 def test_weather_data_root_warns_on_stale_localappdata_data(tmp_path, monkeypatch, caplog):
-    """Old %LOCALAPPDATA% data must never be auto-moved -- only a WARNING
-    naming both the old and new paths, when the old dir exists and the new
-    default is still empty."""
     from pathlib import Path
 
     from src.config import settings

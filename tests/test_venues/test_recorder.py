@@ -1,7 +1,4 @@
-"""QuoteRecorder unit tests: row mapping, batching math, parquet and state
-writing. No gateway, no network: tickers are SimpleNamespace fakes and the
-data root points at tmp_path.
-"""
+"""QuoteRecorder unit tests: row mapping, batching math, parquet and state writing."""
 
 from __future__ import annotations
 
@@ -249,9 +246,6 @@ class TestRecordOnce:
 
 
 class TestUniverseSnapshotAging:
-    """H6: an aging snapshot is the only universe source (no live
-    re-discovery), so seeding from a stale one must be loud, not silent."""
-
     def test_stale_snapshot_emits_warning_on_seed(self, tmp_path, caplog):
         settings = _settings(tmp_path)
         snapshot_path = _write_snapshot(tmp_path, {"1001": _opt_contract(1001, "C")})

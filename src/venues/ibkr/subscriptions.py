@@ -1,27 +1,4 @@
-"""Market-data subscription-line manager (migration spec Stage 5.2).
-
-The IBKR account has a fixed pool of streaming market-data lines
-(``settings.max_data_lines``, default 100) shared across client ids. This
-module is pure line accounting: it decides *what* to (un)subscribe and paces
-*how fast* new subscriptions may be opened. It never talks to the venue --
-the adapter/recorder call ``ib.reqMktData`` / ``ib.cancelMktData`` based on the
-``Decision`` values returned here. Hence no ``ib_async`` import.
-
-Two independent concerns:
-
-  * Capacity. Only ``max_lines`` lines may be active at once. When a request
-    arrives at capacity, the lowest-priority, least-recently-touched active
-    line whose priority is strictly below the requester's is evicted to make
-    room. If every active line is at least as important as the requester, the
-    request is rejected with :class:`LineBudgetExceeded` -- never dropped
-    silently (spec: no silent subscribe failures).
-
-  * Rate. New subscriptions are paced by a blocking token bucket
-    (:meth:`SubscriptionManager.acquire_slot`) so callers cannot open lines
-    faster than ``subscribe_rate_per_sec`` (default ``max_lines / 2`` per
-    second). ``clock`` and ``sleeper`` are injectable for deterministic tests,
-    exactly as :class:`~src.venues.ibkr.pacing.HistoricalPacer` does.
-"""
+"""Market-data subscription-line manager (migration spec Stage 5.2)."""
 
 from __future__ import annotations
 
@@ -40,13 +17,7 @@ class LineBudgetExceeded(RuntimeError):
 
 @dataclass(frozen=True)
 class Decision:
-    """What the adapter should do about a :meth:`SubscriptionManager.request`.
-
-    ``action`` is ``"subscribe"`` (open a line for ``market_id``; if ``evict``
-    is set, cancel that line first so the net line count is unchanged) or
-    ``"noop"`` (``market_id`` is already active -- its recency/priority were
-    refreshed and no venue call is needed).
-    """
+    """What the adapter should do about a :meth:`SubscriptionManager.request`."""
 
     action: str
     market_id: Hashable
@@ -62,14 +33,7 @@ class _Line:
 
 
 class _TokenBucket:
-    """Blocking token bucket of depth one; refills at ``rate`` tokens/sec.
-
-    Depth one means no burst beyond a single slot: successive acquisitions are
-    spaced at least ``1 / rate`` seconds apart, which is the tightest possible
-    guarantee that the subscribe rate is never exceeded. ``acquire`` blocks
-    (sleeping outside the lock, like ``HistoricalPacer``) and the injected
-    sleeper must advance the injected clock or it re-checks forever.
-    """
+    """Blocking token bucket of depth one; refills at ``rate`` tokens/sec."""
 
     _CAPACITY = 1.0
 
@@ -111,12 +75,7 @@ class _TokenBucket:
 
 
 class SubscriptionManager:
-    """Line-budget + subscribe-rate manager for streaming market data.
-
-    Pure and venue-library-free: it tracks which ``market_id`` lines are active
-    and returns :class:`Decision` objects telling the caller what to
-    (un)subscribe. It never opens or cancels a line itself.
-    """
+    """Line-budget + subscribe-rate manager for streaming market data."""
 
     def __init__(
         self,
@@ -151,12 +110,7 @@ class SubscriptionManager:
     # -- capacity accounting ------------------------------------------------
 
     def request(self, market_id: Hashable, priority: int = 0) -> Decision:
-        """Decide how to satisfy a subscription request for ``market_id``.
-
-        Returns a :class:`Decision`. Raises :class:`LineBudgetExceeded` when at
-        capacity and no active line has a strictly lower priority than
-        ``priority`` (the request is never silently dropped).
-        """
+        """Decide how to satisfy a subscription request for ``market_id``."""
         with self._lock:
             existing = self._lines.get(market_id)
             if existing is not None:
@@ -245,8 +199,7 @@ class SubscriptionManager:
         return self._seq
 
     def _pick_victim(self, priority: int) -> Hashable | None:
-        """Lowest-priority, then least-recently-touched, active line whose
-        priority is strictly below ``priority``. None if nothing qualifies."""
+        """Lowest-priority, least-recently-touched active line below ``priority``, or None."""
         victim: Hashable | None = None
         best: tuple[int, int] | None = None  # (priority, seq); smaller wins
         for market_id, line in self._lines.items():

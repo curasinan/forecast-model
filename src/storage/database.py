@@ -1,7 +1,4 @@
-"""SQLite storage layer for questions, evidence, predictions, and market snapshots.
-
-Zero configuration, ships with Python. SQL for analysis.
-"""
+"""SQLite storage layer for questions, evidence, predictions, and market snapshots."""
 
 import json
 import sqlite3

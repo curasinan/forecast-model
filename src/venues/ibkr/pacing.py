@@ -1,15 +1,4 @@
-"""Client-side pacing for IBKR historical-data requests.
-
-IBKR enforces these limits server-side and a violation can lock the session
-out, so the limiter blocks (sleeps) until a request is safe -- it never
-drops a request and never raises. Rules (migration spec Stage 5.1):
-
-  1. No identical request (same full fingerprint) within 15 seconds.
-  2. At most 6 requests per (contract_key, exchange, tick_type) in any
-     2-second window.
-  3. At most 60 historical requests in any rolling 10-minute window, where
-     tick_type == "BID_ASK" counts as 2 toward the 60.
-"""
+"""Client-side pacing for IBKR historical-data requests."""
 
 from __future__ import annotations
 
@@ -32,12 +21,7 @@ BID_ASK_WEIGHT = 2
 
 @dataclass(frozen=True)
 class RequestKey:
-    """Identity of one historical-data request for pacing purposes.
-
-    ``request_fingerprint`` must encode the full request (contract,
-    exchange, tick type, duration, bar size, end time, ...) so that equal
-    fingerprints mean an identical request.
-    """
+    """Identity of one historical-data request for pacing purposes."""
 
     contract_key: str
     exchange: str
@@ -54,12 +38,7 @@ class RequestKey:
 
 
 class HistoricalPacer:
-    """Blocking, thread-safe rate limiter for historical requests.
-
-    ``clock`` and ``sleeper`` are injectable for deterministic tests; the
-    injected sleeper must advance the injected clock or ``acquire`` will
-    re-check forever (by design: it never drops and never raises).
-    """
+    """Blocking, thread-safe rate limiter for historical requests."""
 
     def __init__(
         self,

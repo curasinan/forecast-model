@@ -1,9 +1,4 @@
-"""Tests for the pre-registered prospective evaluation harness.
-
-Covers: contemporaneous-price join, disagreement/winner logic, contamination
-guards, the n>=40 refusal, status-mode blinding, and the Wilson interval.
-Synthetic DB only.
-"""
+"""Tests for the pre-registered prospective evaluation harness."""
 
 from __future__ import annotations
 
@@ -80,9 +75,7 @@ def _add_score(db, mid, hours_from_t0, probability, recognized=0,
     conn.close()
 
 
-# --------------------------------------------------------------------------- #
 # Contemporaneous-price join
-# --------------------------------------------------------------------------- #
 
 
 def test_nearest_snapshot_join_direction_agnostic(tmp_path):
@@ -111,9 +104,7 @@ def test_earliest_score_selected(tmp_path):
     assert rows[0]["llm_probability"] == pytest.approx(0.20)
 
 
-# --------------------------------------------------------------------------- #
 # Disagreement + winner logic
-# --------------------------------------------------------------------------- #
 
 
 def test_disagreement_and_winner(tmp_path):
@@ -152,9 +143,7 @@ def test_disagreement_and_winner(tmp_path):
     assert stats["llm_win_rate"] == pytest.approx(0.5)
 
 
-# --------------------------------------------------------------------------- #
 # Contamination guards
-# --------------------------------------------------------------------------- #
 
 
 def test_recognized_outcome_scores_dropped_before_earliest_pick(tmp_path):
@@ -186,9 +175,7 @@ def test_scored_after_final_snapshot_excluded_unless_skipped(tmp_path):
     assert len(rows) == 1
 
 
-# --------------------------------------------------------------------------- #
 # n >= 40 refusal
-# --------------------------------------------------------------------------- #
 
 
 def test_verdict_refuses_below_gate(tmp_path, monkeypatch, caplog):
@@ -235,13 +222,10 @@ def test_verdict_runs_at_gate(tmp_path, monkeypatch):
     payload = _json.loads(fake_json.read_text(encoding="utf-8"))
     assert payload["verdict"] in ("politics_open", "politics_closed")
     assert payload["preregistered_config"]["win_rate_gate"] == 0.55
-    # p=0.80 vs price=0.50, half resolve YES -> win rate 0.5 < 0.55 -> closed.
     assert payload["verdict"] == "politics_closed"
 
 
-# --------------------------------------------------------------------------- #
 # Status-mode blinding
-# --------------------------------------------------------------------------- #
 
 
 FORBIDDEN_IN_STATUS = ("win", "edge", "closer", "rate", "%")
@@ -269,9 +253,7 @@ def test_status_output_is_blinded(tmp_path, monkeypatch, caplog):
         assert token not in output, f"blinding violated: {token!r} in status output"
 
 
-# --------------------------------------------------------------------------- #
 # Wilson interval
-# --------------------------------------------------------------------------- #
 
 
 def test_wilson_interval_known_value():

@@ -1,14 +1,4 @@
-"""Rich CLI Dashboard — live view of the prediction system.
-
-Displays:
-- Edge detection table: question | our prob | market | edge | EV | Kelly | VPIN
-- Predictor breakdown per question
-- Monte Carlo confidence intervals
-- Calibration stats and historical accuracy
-- Market scanner (entropy-ranked opportunities)
-
-Uses Rich's Live display for auto-refreshing output.
-"""
+"""Rich CLI Dashboard — live view of the prediction system."""
 
 import asyncio
 import logging

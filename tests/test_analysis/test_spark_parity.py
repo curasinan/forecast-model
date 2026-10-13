@@ -1,9 +1,4 @@
-"""analysis/spark_parity.py: mirror checks, identity, scorer, compare.
-
-Design: docs/plans/2026-09-30-spark-research-split-design.md section 5.
-No network, no real data: the spark_root fixture (conftest) builds a
-synthetic quant-data root in tmp_path.
-"""
+"""analysis/spark_parity.py: mirror checks, identity, scorer, compare."""
 
 from __future__ import annotations
 
@@ -18,9 +13,7 @@ import pytest
 import analysis.spark_parity as sp
 from climate.storage import ledger_path
 
-# --------------------------------------------------------------------------- #
 # check_parquet / check_sqlite
-# --------------------------------------------------------------------------- #
 
 
 def test_check_parquet_accepts_a_complete_file(spark_root):
@@ -57,8 +50,6 @@ def _tree_listing(root):
 
 
 def test_check_sqlite_survives_a_hash_in_the_path_and_creates_nothing(tmp_path):
-    # An unescaped '#' ends the SQLite URI path, so the old probe opened (and
-    # created) a stray file named "a" next to the folder and reported a false ok.
     folder = tmp_path / "a#b"
     folder.mkdir()
     db = folder / "paper.db"
@@ -77,9 +68,7 @@ def test_check_sqlite_rejects_an_empty_file(tmp_path):
     assert sp.check_sqlite(empty) == "empty file (0 bytes)"
 
 
-# --------------------------------------------------------------------------- #
 # verify_mirror
-# --------------------------------------------------------------------------- #
 
 
 def test_verify_mirror_clean_root_has_no_failures(spark_root):
@@ -96,8 +85,6 @@ def test_verify_mirror_lists_every_broken_file(spark_root):
 
 
 def test_verify_mirror_reports_a_non_object_model_instead_of_aborting(spark_root):
-    # json.loads("[]") succeeds and EmosModel.from_dict then raises AttributeError,
-    # which the old narrow catch let escape and abort the whole scan.
     spark_root.model.write_text("[]", encoding="utf-8")
     failures = sp.verify_mirror(spark_root.root)
     assert len(failures) == 1
@@ -129,9 +116,7 @@ def test_verify_mirror_checks_optional_databases_when_present(spark_root):
     assert any("contracts_cache.db" in f for f in failures)
 
 
-# --------------------------------------------------------------------------- #
 # snapshot_identity
-# --------------------------------------------------------------------------- #
 
 
 def test_snapshot_identity_describes_the_files(spark_root):
@@ -216,11 +201,7 @@ def test_verify_mirror_requires_the_cds_inputs(spark_root):
 def test_inputs_sha256_lists_every_input_present_or_not(spark_root):
     hashes = sp.inputs_sha256(spark_root.root)
     assert set(hashes) == {"/".join(p) for p in sp.INPUT_FILES}
-    # the key-set check above is derived from the constant, so it would pass even
-    # with the ledger dropped from it: pin the entry the scorer cannot do without
     assert (sp.CLIMATE_DIR, *sp.LEDGER_REL) in sp.INPUT_FILES
-    # score_snapshot_from_root reads the diagnostics through this same constant, so
-    # what is hashed into the identity is what the scorer reads: pin it to the owner's path
     assert sp.DIAG_REL == ("reports", "gtm_emos_diagnostics.json")
     expected = hashlib.sha256(spark_root.model.read_bytes()).hexdigest()
     assert hashes["climate_data/models/gtm_emos.json"] == expected
@@ -229,8 +210,6 @@ def test_inputs_sha256_lists_every_input_present_or_not(spark_root):
 
 
 def test_ledger_rel_is_the_owners_path():
-    # LEDGER_REL is the one hand-written path constant (the others are imported
-    # from climate.reduce / climate.fit): pin it to climate.storage's own path.
     assert sp.LEDGER_REL == ledger_path(Path("x")).relative_to(Path("x")).parts
 
 
@@ -245,7 +224,6 @@ def test_code_identity_reports_the_commit_and_survives_a_non_repo(spark_root, tm
 def test_operational_manifest_lists_files_and_tracks_changes(spark_root):
     manifest = sp.operational_manifest(spark_root.root)
     assert set(manifest) == {"/".join(p) for p in sp.MANIFEST_FILES}
-    # derived from the constant too: pin the ledger, which a refit must never touch
     assert (sp.CLIMATE_DIR, *sp.LEDGER_REL) in sp.MANIFEST_FILES
     entry = manifest["climate_data/models/gtm_emos.json"]
     assert set(entry) == {"sha256", "size", "mtime_ns"}
@@ -258,9 +236,7 @@ def test_operational_manifest_lists_files_and_tracks_changes(spark_root):
     assert {k for k in manifest if manifest[k] != changed[k]} == {"climate_data/models/gtm_emos.json"}
 
 
-# --------------------------------------------------------------------------- #
 # compare_json
-# --------------------------------------------------------------------------- #
 
 
 def test_compare_identical_documents_ok():
@@ -293,8 +269,6 @@ def test_compare_nan_equals_nan_but_none_does_not():
     res = sp.compare_json({"v": None}, {"v": float("nan")})
     assert not res.ok
     assert res.mismatches[0].startswith("v:")
-    # a NaN or an infinity against anything else must fail loudly: without the
-    # guard both |a-b| and the scale go NaN/inf and ``nan > nan`` is False
     nan, inf = float("nan"), float("inf")
     assert not sp.compare_json({"v": nan}, {"v": 1.0}).ok
     assert not sp.compare_json({"v": 1.0}, {"v": nan}).ok
@@ -320,10 +294,7 @@ def test_compare_ignore_skips_a_dotted_subtree():
 def test_compare_bool_and_int_are_distinct_but_int_and_float_are_numbers():
     assert not sp.compare_json({"t": True}, {"t": 1}).ok
     assert sp.compare_json({"t": 1}, {"t": 1.0}).ok
-    # int against float still goes through the tolerance (only int-int is exact)
     assert sp.compare_json({"t": 1}, {"t": 1.0 + 1e-12}).ok
-    # two ints are exact (design 5.3): at the gate's tolerances an id off by 3
-    # (or by 1, 5, 8 at 8e8) must fail, never hide inside rtol * scale
     gate = {"rtol": 1e-8, "atol": 1e-10}
     res = sp.compare_json({"i": 812345678}, {"i": 812345681}, **gate)
     assert not res.ok
@@ -377,9 +348,7 @@ def test_subtree_of_a_payload_that_is_not_an_object_is_absent(payload):
         sp.subtree(payload, "identity")
 
 
-# --------------------------------------------------------------------------- #
 # machine_info / score_snapshot
-# --------------------------------------------------------------------------- #
 
 
 def test_machine_info_reports_platform_versions_and_dirtiness():
@@ -394,7 +363,6 @@ def test_score_snapshot_strips_the_clock_marks_the_probe_and_never_writes(
     spark_root, universe_json, dec_2026_frame, emos_identity_model, climate_default_root,
     monkeypatch,
 ):
-    # delegating spy: the real run_paper still runs, the kwargs it was handed are kept
     real_run_paper = sp.run_paper
     calls = []
 
@@ -419,17 +387,12 @@ def test_score_snapshot_strips_the_clock_marks_the_probe_and_never_writes(
     assert payload["signals"][0]["target_month"] == "2026-12"
     assert payload["identity"]["snapshot"]["sweep_count"] == 1
     assert payload["identity"]["machine"]["python"] == platform.python_version()
-    assert payload["go_live"]["passed"] is False  # live-paper gate required: never a verdict
-    # The line above holds even with the gate broken: an empty summary fails before the
-    # live-paper branch is reached (climate/paper_criteria.py), so pin the gate inputs
-    # the probe hands to run_paper instead.
+    assert payload["go_live"]["passed"] is False
     (gate_kwargs,) = calls
     assert gate_kwargs["paper_days"] == 0
     assert gate_kwargs["resolved_months"] == 0
     assert gate_kwargs["require_live_paper"] is True
     assert not (spark_root.root / "climate_data" / "paper").exists()
-    # score_snapshot takes no root: an unrooted write_paper_payload / append_paper_history
-    # would resolve through the default climate root, which conftest points at a tmp dir
     assert not (climate_default_root / "paper").exists()
     json.dumps(payload, default=str)  # serialisable the way the entrypoint serialises
 
@@ -450,7 +413,6 @@ def test_score_snapshot_refuses_a_missing_universe_file(
 def test_score_snapshot_from_root_wires_model_identity_frame_and_bridge(
     spark_root, universe_json, dec_2026_frame, monkeypatch
 ):
-    # build_training_frame needs real SEAS5/ERA5/NOAA inputs; stub it and check the wiring.
     dec_2026_frame.attrs["bridge_json"] = '{"alpha": 1.5, "beta": 0.9}'
     monkeypatch.setattr(sp, "build_training_frame", lambda root: dec_2026_frame)
     payload = sp.score_snapshot_from_root(spark_root.root, universe_json=universe_json)
@@ -464,8 +426,6 @@ def test_score_snapshot_from_root_wires_model_identity_frame_and_bridge(
 def test_score_snapshot_refuses_an_identity_without_a_usable_code_sha(
     spark_root, universe_json, dec_2026_frame, emos_identity_model
 ):
-    # Two machines that both fail to read git would both report "unknown" and
-    # compare equal, so the identity block would witness nothing (ruling R-J).
     valid = sp.snapshot_identity(spark_root.root)
     for unusable in ("unknown", None):
         with pytest.raises(RuntimeError, match="code_sha"):
@@ -481,8 +441,6 @@ def test_score_snapshot_refuses_an_identity_without_a_usable_code_sha(
 def test_score_snapshot_refuses_a_sweep_the_identity_does_not_name(
     spark_root, universe_json, dec_2026_frame, emos_identity_model
 ):
-    # The identity and the scorer list the sweep folder separately: if the root moved
-    # between the two, the identity would vouch for bytes that were not scored (R-M).
     valid = sp.snapshot_identity(spark_root.root)
 
     def score(identity):
@@ -498,10 +456,8 @@ def test_score_snapshot_refuses_a_sweep_the_identity_does_not_name(
     with pytest.raises(RuntimeError) as excinfo:
         score(moved)
     assert "2026-09-28T22:08:22Z" in str(excinfo.value)  # the sweep run_paper scored
-    assert "2026-09-27T01:01:01Z" in str(excinfo.value)  # the sweep the identity names
-    # an identity that names no sweep has nothing to vouch for
+    assert "2026-09-27T01:01:01Z" in str(excinfo.value)
     with pytest.raises(RuntimeError, match="newest_sweep"):
         score({**valid, "newest_sweep": None})
-    # and neither does one whose path is not a recorder path (the sweep regex misses)
     with pytest.raises(RuntimeError, match="newest_sweep"):
         score({**valid, "newest_sweep": "ibkr_ticks/quotes/not-a-sweep.parquet"})

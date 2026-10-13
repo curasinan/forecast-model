@@ -1,31 +1,4 @@
-"""Monte Carlo simulation engine for probability estimation and risk analysis.
-
-Instead of trusting a single point estimate ("our model says 62%"), Monte Carlo
-simulates thousands of possible outcomes accounting for estimation uncertainty.
-
-Key outputs:
-    - Probability distribution (not just a point estimate)
-    - Confidence intervals (5th to 95th percentile)
-    - Edge distribution (how often do we actually have an edge?)
-    - Worst-case analysis (what happens if we're wrong?)
-
-This feeds directly into empirical Kelly sizing: instead of betting based on
-our best guess, we size positions based on the DISTRIBUTION of possible edges.
-
-The math:
-    1. Model our probability estimate as a Beta(alpha, beta) distribution
-       - Beta is the natural distribution for probabilities (bounded [0,1])
-       - alpha, beta parameters encode our mean estimate and confidence
-    2. Sample N times from this distribution
-    3. For each sample, calculate edge vs market, EV, and Kelly fraction
-    4. Use the DISTRIBUTION of Kelly fractions to size conservatively
-
-Why Beta distribution?
-    - Bounded on [0, 1] — perfect for probabilities
-    - Flexible shape: can be uniform, bell-curved, or skewed
-    - Conjugate prior for Bernoulli outcomes (mathematically elegant)
-    - Mean = alpha / (alpha + beta), Variance = alpha*beta / ((a+b)^2 * (a+b+1))
-"""
+"""Monte Carlo simulation engine for probability estimation and risk analysis."""
 
 from dataclasses import dataclass
 
@@ -104,30 +77,7 @@ def probability_to_beta_params(
     probability: float,
     confidence: float,
 ) -> tuple[float, float]:
-    """Convert a probability estimate + confidence into Beta distribution parameters.
-
-    The confidence controls how "concentrated" the distribution is around
-    the probability estimate. Higher confidence = tighter distribution.
-
-    Args:
-        probability: Point estimate of probability (0-1)
-        confidence: How confident we are in this estimate (0-1)
-            0.1 = very uncertain (wide distribution)
-            0.5 = moderate confidence
-            0.9 = very confident (tight distribution)
-
-    Returns:
-        (alpha, beta) parameters for the Beta distribution.
-
-    Math:
-        concentration = f(confidence) controls the "peakedness"
-        alpha = probability * concentration
-        beta = (1 - probability) * concentration
-        Mean of Beta = alpha/(alpha+beta) = probability (exactly our estimate)
-    """
-    # Map confidence to concentration parameter
-    # Low confidence -> low concentration (2-5) -> wide distribution
-    # High confidence -> high concentration (50-200) -> tight distribution
+    """Convert a probability estimate + confidence into Beta distribution parameters."""
     min_concentration = 2.0
     max_concentration = 200.0
 
@@ -153,20 +103,7 @@ def simulate_probability(
     n_simulations: int = 10_000,
     seed: int | None = None,
 ) -> MonteCarloResult:
-    """Simulate probability distribution accounting for estimation uncertainty.
-
-    Instead of saying "our model estimates 62%", this produces:
-    "our estimate is 62% +/- 8%, with 90% CI [48%, 75%]"
-
-    Args:
-        base_probability: Our point estimate (0-1)
-        confidence: How confident we are (0-1). Lower = wider distribution.
-        n_simulations: Number of Monte Carlo samples
-        seed: Random seed for reproducibility
-
-    Returns:
-        MonteCarloResult with full distribution statistics.
-    """
+    """Simulate probability distribution accounting for estimation uncertainty."""
     rng = np.random.default_rng(seed)
 
     alpha, beta_param = probability_to_beta_params(base_probability, confidence)
@@ -200,22 +137,7 @@ def simulate_edge(
     n_simulations: int = 10_000,
     seed: int | None = None,
 ) -> EdgeDistribution:
-    """Simulate the distribution of edges between our model and the market.
-
-    This is the core of empirical Kelly: instead of computing Kelly from
-    a single edge estimate, we compute Kelly for EACH simulated probability
-    and look at the distribution.
-
-    Args:
-        model_probability: Our model's point estimate
-        model_confidence: Confidence in the estimate (0-1)
-        market_price: Current market YES price
-        n_simulations: Number of simulations
-        seed: Random seed
-
-    Returns:
-        EdgeDistribution with edge, EV, and Kelly statistics.
-    """
+    """Simulate the distribution of edges between our model and the market."""
     # Simulate our probability uncertainty
     mc_result = simulate_probability(
         base_probability=model_probability,
@@ -229,10 +151,8 @@ def simulate_edge(
     # For each simulated probability, calculate edge vs market
     edge_samples = prob_samples - market_price
 
-    # EV for each simulation: EV = p * (1 - market_price) - (1 - p) * market_price
     ev_samples = prob_samples * (1.0 - market_price) - (1.0 - prob_samples) * market_price
 
-    # Kelly for each simulation: f = (b*p - q) / b where b = (1/market_price) - 1
     if market_price > 0.01 and market_price < 0.99:
         b = (1.0 / market_price) - 1.0
         kelly_samples = (b * prob_samples - (1.0 - prob_samples)) / b
@@ -273,27 +193,9 @@ def simulate_bankroll_paths(
     initial_bankroll: float = 1000.0,
     seed: int | None = None,
 ) -> dict:
-    """Simulate bankroll evolution over multiple bets.
-
-    Shows what happens to your bankroll if you repeatedly bet with a given
-    edge and Kelly fraction. Useful for understanding the real-world impact
-    of position sizing.
-
-    Args:
-        edge: Expected edge per bet (model_prob - market_price)
-        kelly_fraction: Fraction of bankroll to bet each time
-        n_bets: Number of sequential bets to simulate
-        n_paths: Number of independent bankroll paths
-        initial_bankroll: Starting capital
-        seed: Random seed
-
-    Returns:
-        Dict with bankroll statistics at each step.
-    """
+    """Simulate bankroll evolution over multiple bets."""
     rng = np.random.default_rng(seed)
 
-    # True win probability = market_price + edge (approximately)
-    # For simplicity, assume market_price ~ 0.5 (adjustable)
     win_prob = 0.5 + edge
 
     # Simulate outcomes: 1 = win, 0 = loss
@@ -304,8 +206,6 @@ def simulate_bankroll_paths(
 
     for t in range(n_bets):
         bet_size = bankrolls[:, t] * kelly_fraction
-        # Win: gain bet_size * (payout - 1), Loss: lose bet_size
-        # Simplified: win doubles the bet, loss loses it
         gains = np.where(outcomes[:, t], bet_size, -bet_size)
         bankrolls[:, t + 1] = np.maximum(0.0, bankrolls[:, t] + gains)
 
@@ -325,10 +225,7 @@ def simulate_bankroll_paths(
 
 
 def _max_drawdowns(bankrolls: np.ndarray) -> np.ndarray:
-    """Calculate maximum drawdown for each bankroll path.
-
-    Drawdown = (peak - current) / peak
-    """
+    """Calculate maximum drawdown for each bankroll path."""
     n_paths = bankrolls.shape[0]
     max_dd = np.zeros(n_paths)
 

@@ -1,12 +1,4 @@
-"""Fetch Wunderground / weather.com daily high/low labels for Polymarket Global.
-
-Sparse label source only — not a high-frequency feature feed.
-Enforces finalization guards before usable_for_training=1.
-
-Important: WU history pages are JS SPAs; naive HTML regex matches garbage
-(e.g. font names like MaxKUBGEe → 2). We pull hourly observations from the
-public weather.com historical API used by the WU site, then take max/min.
-"""
+"""Fetch Wunderground / weather.com daily high/low labels for Polymarket Global."""
 
 from __future__ import annotations
 
@@ -35,7 +27,6 @@ __all__ = ["MIN_FINALIZATION_HOURS", "is_finalized", "usable_for_training"]
 WU_PUBLIC_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
 API_KEY_RE = re.compile(r"apiKey=([a-f0-9]{32})", re.IGNORECASE)
 
-# Last-resort HTML patterns — require temperature-ish context, not bare "Max".
 MAX_TEMP_RE = re.compile(
     r"(?:High|Max(?:imum)?)\s*(?:Temp(?:erature)?)?\s*[:=]?\s*(-?\d{1,3})\s*°?\s*F\b",
     re.IGNORECASE,
@@ -69,10 +60,7 @@ def extract_api_key(html: str | None) -> str:
 
 
 def resolve_location_id(icao: str, api_key: str, timeout: float = 30.0) -> str:
-    """Map ICAO → weather.com v1 location id (e.g. KLGA:9:US).
-
-    The v1 historical endpoint expects ``{ICAO}:9:{CC}``, not placeId hashes.
-    """
+    """Map ICAO → weather.com v1 location id (e.g. KLGA:9:US)."""
     url = "https://api.weather.com/v3/location/point"
     params = {
         "apiKey": api_key,
@@ -197,8 +185,6 @@ def upsert_label(
                     station_icao, valid_local_date, metric,
                 )
                 return
-        # PK includes label_source; drop prior rows for same day so a bad HTML
-        # parse (source=wunderground) cannot coexist with the API label.
         conn.execute(
             """
             DELETE FROM resolution_labels

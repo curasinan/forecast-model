@@ -1,10 +1,4 @@
-"""
-Scikit-Learn: Zero to Hero
-==========================
-Part 3: Model Evaluation and Metrics
-
-Accuracy isn't everything. Learn how to properly evaluate your models.
-"""
+"""Scikit-Learn: Zero to Hero, Part 3: Model Evaluation and Metrics."""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,9 +13,7 @@ print("Part 3: Model Evaluation and Metrics")
 print("=" * 70)
 
 
-# ============================================================================
 # WHY ACCURACY ISN'T ENOUGH
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("WHY ACCURACY ISN'T ENOUGH")
@@ -59,9 +51,7 @@ model.fit(X_train, y_train)
 y_pred = model.predict(X_test)
 
 
-# ============================================================================
 # CONFUSION MATRIX: The Foundation
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("CONFUSION MATRIX: THE FOUNDATION")
@@ -99,9 +89,7 @@ print(f"  [[TN={cm[0,0]:3d}, FP={cm[0,1]:3d}]")
 print(f"   [FN={cm[1,0]:3d}, TP={cm[1,1]:3d}]]")
 
 
-# ============================================================================
 # KEY METRICS FOR CLASSIFICATION
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("KEY METRICS FOR CLASSIFICATION")
@@ -146,9 +134,7 @@ print("\n5. CLASSIFICATION REPORT (All metrics at once):")
 print(classification_report(y_test, y_pred))
 
 
-# ============================================================================
 # PRECISION vs RECALL TRADEOFF
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("PRECISION vs RECALL TRADEOFF")
@@ -183,9 +169,7 @@ Example scenarios:
 print(tradeoff)
 
 
-# ============================================================================
 # ROC CURVE AND AUC
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("ROC CURVE AND AUC")
@@ -229,9 +213,7 @@ plt.close()
 print("✓ Saved ROC curve to 'roc_curve.png'")
 
 
-# ============================================================================
 # METRICS FOR REGRESSION
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("METRICS FOR REGRESSION")
@@ -283,9 +265,7 @@ r2 = r2_score(y_test_r, y_pred_r)
 print(f"   R²: {r2:.4f}")
 
 
-# ============================================================================
 # CHOOSING THE RIGHT METRIC
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("CHOOSING THE RIGHT METRIC")
@@ -323,9 +303,7 @@ choosing = """
 print(choosing)
 
 
-# ============================================================================
 # MULTI-CLASS METRICS
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("MULTI-CLASS METRICS")
@@ -368,9 +346,7 @@ print("\nMulti-class classification report:")
 print(classification_report(y_test_i, y_pred_i, target_names=iris.target_names))
 
 
-# ============================================================================
 # SUMMARY: METRICS CHEAT SHEET
-# ============================================================================
 
 print("\n" + "=" * 70)
 print("SUMMARY: METRICS CHEAT SHEET")

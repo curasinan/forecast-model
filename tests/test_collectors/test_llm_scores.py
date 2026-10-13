@@ -1,7 +1,4 @@
-"""Tests for collect_llm_scores: payload validation, divergence math, resumability.
-
-Synthetic only — no live Anthropic or Gamma calls.
-"""
+"""Tests for collect_llm_scores: payload validation, divergence math, resumability."""
 
 from __future__ import annotations
 
@@ -28,9 +25,7 @@ GOOD = {
 }
 
 
-# --------------------------------------------------------------------------- #
 # Payload validation
-# --------------------------------------------------------------------------- #
 
 
 def test_valid_payload_normalized():
@@ -86,9 +81,7 @@ def test_recognized_outcome_true_coerced():
     assert out["recognized_outcome"] == 1
 
 
-# --------------------------------------------------------------------------- #
 # Prompt builder never receives market data (constraint by construction)
-# --------------------------------------------------------------------------- #
 
 
 def test_user_prompt_contains_only_question_fields():
@@ -100,9 +93,7 @@ def test_user_prompt_contains_only_question_fields():
         assert forbidden not in prompt.lower()
 
 
-# --------------------------------------------------------------------------- #
 # Base-rate divergence
-# --------------------------------------------------------------------------- #
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -177,9 +168,7 @@ def test_divergence_empty_input(tmp_path):
     assert df.empty
 
 
-# --------------------------------------------------------------------------- #
 # Resumability window semantics (raw query behavior)
-# --------------------------------------------------------------------------- #
 
 
 def test_recent_scores_block_rescoring_but_retrospective_does_not(tmp_path):
@@ -188,9 +177,6 @@ def test_recent_scores_block_rescoring_but_retrospective_does_not(tmp_path):
     now = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
     cutoff = (now - timedelta(days=7)).isoformat()
 
-    # m1 scored now (recent, prospective) -> blocked.
-    # m5 scored now but retrospective -> NOT blocked.
-    # add m6 scored 10 days ago -> NOT blocked.
     conn.execute(
         "INSERT INTO llm_scores (market_id, scored_at, model_name, probability, "
         "confidence, reasoning, recognized_outcome, category, search_keywords, "

@@ -1,24 +1,4 @@
-"""Compare two parity payloads (or any two JSON files) within a tolerance.
-
-    python scripts/spark/compare_json.py left.json right.json \
-        [--rtol 1e-9] [--atol 1e-12] [--ignore identity.machine ...] \
-        [--differ identity.machine ...]
-
-Exit 0 on parity, 1 on any mismatch (each one printed with its path).
-
-``--differ PATH`` (repeatable) is the opposite of ``--ignore``: it fails unless BOTH
-payloads hold the subtree at the dotted PATH and the two subtrees are not equal (plain
-JSON equality, no tolerance). It is judged on the raw payloads, so the gate's
-``--ignore identity.machine --differ identity.machine`` keeps the machine blocks out of
-the numbers yet still refuses two copies of one machine's payload, which would
-otherwise pass as cross-machine parity.
-
-Output order: the numeric summary line first, then every MISMATCH, then one ``machines:``
-line naming both ``identity.machine`` blocks (when either exists) and a WARNING per
-payload that says ``git_dirty=true`` (a warning, never a failure), then the verdict
-(``PARITY OK``, or one ``PARITY FAILED`` line per reason) last.
-Design: docs/plans/2026-09-30-spark-research-split-design.md section 5.3 and R16.
-"""
+"""Compare two parity payloads (or any two JSON files) within a tolerance."""
 
 from __future__ import annotations
 
@@ -37,11 +17,7 @@ MACHINE_PATH = "identity.machine"
 
 
 def _plain_json(value: object) -> str:
-    """Canonical text of a JSON value: equal text means equal data, with no tolerance.
-
-    Keys are sorted, so order does not matter; ``1`` and ``1.0`` differ, and NaN
-    equals NaN (which Python's ``==`` would not say of two parsed NaN objects).
-    """
+    """Canonical text of a JSON value: equal text means equal data, with no tolerance."""
     return json.dumps(value, sort_keys=True)
 
 
@@ -79,11 +55,7 @@ def _describe_machine(block: object) -> str:
 
 
 def _print_machine_lines(left: object, right: object) -> None:
-    """One line naming both machines, then a WARNING per side whose tree was dirty.
-
-    ``git_dirty`` sits in the machine block, which the gate ignores, so without this the
-    operator would have to grep for it. A warning only: it never changes the exit code.
-    """
+    """One line naming both machines, then a WARNING per side whose tree was dirty."""
     blocks = {"left": _machine_block(left), "right": _machine_block(right)}
     if any(isinstance(block, dict) for block in blocks.values()):
         print(

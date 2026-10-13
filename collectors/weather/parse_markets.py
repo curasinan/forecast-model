@@ -57,7 +57,6 @@ GLOBAL_CLIMATE_RE = re.compile(
     r"\bglobal temperature\b|\btemperature anomaly\b|\bglobal warming\b",
     re.IGNORECASE,
 )
-# 1–3 digit temps only (ISO years like 2026 are excluded by digit cap + date scrub).
 BUCKET_RANGE_RE = re.compile(
     r"(-?\d{1,3}(?:\.\d+)?)\s*(?:–|-|to)\s*(-?\d{1,3}(?:\.\d+)?)\s*°?\s*([FC])?\b",
     re.IGNORECASE,
@@ -86,7 +85,6 @@ MONTHS = {
     "dec": 12,
 }
 
-# Heuristic city → preferred Global ICAO when URL missing (always prefer URL).
 CITY_HINTS: dict[str, str] = {
     "new york": "KLGA",
     "nyc": "KLGA",
@@ -201,11 +199,7 @@ def parse_valid_date(
     description: str,
     end_date: str | None = None,
 ) -> str | None:
-    """Parse local valid date from question/rules.
-
-    Live Polymarket titles often omit the year (``on July 22?``). When that
-    happens, prefer the year from ``end_date`` (market close), else UTC now.
-    """
+    """Parse local valid date from question/rules."""
     for text in (question, description):
         m = DATE_RE.search(text or "")
         if m:
@@ -227,15 +221,12 @@ def parse_valid_date(
         if m:
             day = int(m.group(1))
             month = MONTHS[m.group(2)[:3].lower()]
-            # If end_date month is earlier than question month, year may be
-            # previous (rare for daily markets); keep end_date year.
             return _coerce_valid_date(fallback_year, month, day)
         m = DATE_MD_RE_ALT.search(text)
         if m:
             month = MONTHS[m.group(1)[:3].lower()]
             day = int(m.group(2))
             return _coerce_valid_date(fallback_year, month, day)
-    # Last resort: calendar date of end_date (noon-UTC closes map to event day).
     if end_date:
         try:
             dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
@@ -286,8 +277,6 @@ def _parse_bucket_from_text(text: str) -> tuple[float | None, float | None, str]
         if lo > hi:
             lo, hi = hi, lo
         if abs(lo) <= 150 and abs(hi) <= 150:
-            # Polymarket whole-degree bins: treat hi as inclusive whole degree,
-            # so continuous upper edge is hi + 1 for truncation space.
             return lo, hi + 1.0, f"{int(lo)}-{int(hi)}"
 
     m = BUCKET_OR_HIGHER_RE.search(scrubbed)
@@ -316,11 +305,7 @@ def parse_bucket_bounds(
     question: str,
     group_item_title: str | None = None,
 ) -> tuple[float | None, float | None, str]:
-    """Parse temperature bucket from question / outcome title.
-
-    Returns (lo, hi_exclusive_or_None_for_open, label).
-    Open-ended higher: hi=None; open-ended lower: lo=None.
-    """
+    """Parse temperature bucket from question / outcome title."""
     for text in (group_item_title, question):
         parsed = _parse_bucket_from_text(text or "")
         if parsed is not None:
@@ -467,7 +452,6 @@ def fetch_gamma_weather_events(limit: int = 50, timeout: float = 30.0) -> list[d
     except Exception as exc:  # noqa: BLE001
         log.warning("Gamma weather tag fetch failed: %s", exc)
 
-    # Fallback: search endpoint / markets text filter is unreliable; return [].
     return []
 
 

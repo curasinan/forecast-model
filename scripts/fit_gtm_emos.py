@@ -1,20 +1,4 @@
-"""Fit CLI: GTM EMOS + expanding-window diagnostics.
-
-A fit overwrites models/gtm_emos.json and reports/gtm_emos_diagnostics.{md,json} under the
-root it runs on, so that root is always named on the command line:
-
-    --root <path>   fit that root: a snapshot or a mirror, for a comparison refit
-    --live          fit the default root of climate.paths.data_root (CLIMATE_DATA_ROOT, else
-                    ~/quant_data/climate_data): the operational refit, which replaces the
-                    model the paper runtime reads
-
-With neither, or with an empty --root (which data_root would read as the default root),
-nothing is fitted: the script prints the files it would have overwritten and exits 2.
-
-Usage:
-    python scripts/fit_gtm_emos.py --trend --live
-    python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data
-"""
+"""Fit CLI: GTM EMOS + expanding-window diagnostics."""
 
 from __future__ import annotations
 
@@ -51,12 +35,7 @@ def setup_logging() -> None:
 
 
 def _default_root() -> Path:
-    """The root ``data_root()`` falls back to with no override, without creating it.
-
-    ``data_root`` makes the directories it returns and a refusal must leave nothing behind,
-    so its two fallbacks are repeated here; tests/test_climate/test_fit_cli.py holds the
-    two together.
-    """
+    """The root ``data_root()`` falls back to with no override, without creating it."""
     if os.environ.get(ENV_VAR, "").strip():
         return Path(os.environ[ENV_VAR]).expanduser().resolve()
     return Path.home() / "quant_data" / "climate_data"
@@ -101,8 +80,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--last-test-year", type=int, default=None)
     args = parser.parse_args(argv)
 
-    # No root named, no fit. A blank --root (an unset shell variable) counts as unnamed:
-    # data_root() reads it as no override and would resolve the default root.
     if not (args.root or "").strip() and not args.live:
         print(_refusal(_default_root()), file=sys.stderr)
         return 2

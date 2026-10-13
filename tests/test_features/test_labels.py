@@ -1,17 +1,4 @@
-"""Verification tests for ``features.labels``.
-
-M11 (Task 3.8, test hygiene): these used to read the real (gitignored)
-``data/polymarket.db`` and ``config/market_clusters.json``, keyed to
-specific real market ids (MegaETH "1731274", Hillary Clinton 2028
-"559677", ...) and a hand-picked "dense coverage" timestamp that only held
-because of what the live DB happened to contain on the day these tests
-were written. Every ``db``/``cfg``/``dense_T`` fixture below is now
-synthetic and session-scoped instead: five markets with deterministic,
-hourly snapshots spanning the full lookback/horizon window this module
-needs, built from the real writer's DDL (``collectors/
-collect_snapshots.py`` for ``snapshots``; the ``markets`` columns are the
-ones this module and ``features.market_features`` actually read).
-"""
+"""Verification tests for ``features.labels``."""
 
 from __future__ import annotations
 
@@ -43,22 +30,11 @@ SECOND_T = DENSE_T - timedelta(hours=10)  # a second timestamp, still densely co
 MARKET_IDS: tuple[str, ...] = tuple(f"label-market-{i}" for i in range(5))
 
 
-# --------------------------------------------------------------------------- #
 # Fixtures
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture(scope="session")
 def db(tmp_path_factory) -> Path:
-    """Synthetic sqlite DB: ``snapshots`` schema copied verbatim from
-    ``collectors/collect_snapshots.py::init_db``; ``markets`` carries the
-    columns this module (status, resolution) and
-    ``features.market_features`` (end_date) actually read. Five markets,
-    each with hourly snapshots from FIRST_TS to LAST_TS -- dense enough
-    that every lookback (up to 72h back) and every default horizon (up to
-    24h forward) from DENSE_T/SECOND_T resolves to a real value, never a
-    null from missing coverage.
-    """
     path = tmp_path_factory.mktemp("labels_db") / "synthetic.db"
     conn = sqlite3.connect(path)
     try:
@@ -125,9 +101,6 @@ def db(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def cfg(tmp_path_factory) -> Path:
-    """Synthetic (empty) cluster config -- build_training_dataset needs a
-    valid path, but no test in this module depends on actual membership;
-    that behavior is covered by test_correlation_features.py."""
     path = tmp_path_factory.mktemp("labels_cfg") / "clusters.json"
     path.write_text("{}", encoding="utf-8")
     return path
@@ -135,14 +108,10 @@ def cfg(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def dense_T() -> datetime:
-    """A timestamp with dense synthetic coverage: snapshots within ±30 min,
-    plus snapshots at T+1h/+6h/+24h (see the ``db`` fixture)."""
     return DENSE_T
 
 
-# --------------------------------------------------------------------------- #
 # generate_outcome_labels
-# --------------------------------------------------------------------------- #
 
 
 def test_normalize_resolution_yes_no_variants():
@@ -158,16 +127,11 @@ def test_normalize_resolution_unparseable_returns_none():
 
 
 def test_outcome_labels_empty_when_no_resolved_markets(db):
-    # None of the synthetic markets are status='resolved_or_removed' (see
-    # the `db` fixture, which inserts them all 'active') -- deterministically
-    # exercises the empty-result path, rather than relying on incidental
-    # real-DB state "at the time these tests were written".
     df = generate_outcome_labels(list(MARKET_IDS[:3]), db)
     assert list(df.columns) == ["market_id", "outcome"]
 
 
 def test_outcome_labels_synthetic_db(tmp_path):
-    # Build a tiny throwaway DB to exercise the resolution-normalization path.
     db = tmp_path / "synth.db"
     conn = sqlite3.connect(db)
     conn.execute("""
@@ -201,9 +165,7 @@ def test_outcome_labels_empty_input():
     assert list(df.columns) == ["market_id", "outcome"]
 
 
-# --------------------------------------------------------------------------- #
 # generate_price_movement_labels
-# --------------------------------------------------------------------------- #
 
 
 def test_price_movement_smoke(db, dense_T):
@@ -235,7 +197,6 @@ def test_direction_tolerance_around_threshold(tmp_path):
         )
     """)
     T = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
-    # Two snapshots: at T (mid=0.500), at T+1h (mid=0.503) => Δ=0.003 -> direction=0
     conn.execute(
         "INSERT INTO snapshots(market_id, timestamp, midpoint) VALUES (?, ?, ?)",
         ("m", T.isoformat(), 0.500),
@@ -249,7 +210,6 @@ def test_direction_tolerance_around_threshold(tmp_path):
         "INSERT INTO snapshots(market_id, timestamp, midpoint) VALUES (?, ?, ?)",
         ("m", (T.replace(hour=18)).isoformat(), 0.510),
     )
-    # At T+24h, mid=0.490 => Δ=-0.010 -> direction=-1 (clearly past tolerance)
     conn.execute(
         "INSERT INTO snapshots(market_id, timestamp, midpoint) VALUES (?, ?, ?)",
         ("m", (datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc)).isoformat(), 0.490),
@@ -289,9 +249,7 @@ def test_price_movement_empty_inputs(db, dense_T):
     assert df2.empty
 
 
-# --------------------------------------------------------------------------- #
 # Internal helpers
-# --------------------------------------------------------------------------- #
 
 
 def test_pivot_labels_to_wide_column_naming():
@@ -322,9 +280,7 @@ def test_feature_columns_excludes_identifiers_and_labels():
         assert excluded not in feats
 
 
-# --------------------------------------------------------------------------- #
 # build_training_dataset
-# --------------------------------------------------------------------------- #
 
 
 def test_build_training_dataset_shape_and_columns(db, cfg, dense_T):
@@ -334,10 +290,6 @@ def test_build_training_dataset_shape_and_columns(db, cfg, dense_T):
 
     # All input rows should pass the >50% null filter for these markets.
     assert len(df) == len(ids) * len(ts)
-    # 2 identifiers + (len(MARKET_KEYS) - 1) market features (minus market_id)
-    # + (len(CORR_KEYS) - 1) correlation features (minus market_id)
-    # + 1 (price_at_t)
-    # + 3 horizons × 3 columns each (price_at_t_plus, price_change, direction)
     expected_cols = (
         2  # market_id, timestamp
         + (len(MARKET_KEYS) - 1)
@@ -355,9 +307,6 @@ def test_build_training_dataset_shape_and_columns(db, cfg, dense_T):
 
 
 def test_null_fraction_filter_drops_rows(db, cfg, dense_T):
-    """Markets that don't exist in the DB at all should produce all-null
-    features and be filtered out by the >50% null rule.
-    """
     ids = [MARKET_IDS[0], "ghost_market_does_not_exist"]
     df = build_training_dataset(ids, [dense_T], db_path=db, cluster_config_path=cfg)
     # MARKET_IDS[0] keeps its row; the ghost row drops.

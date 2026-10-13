@@ -1,18 +1,4 @@
-"""Backtesting — would our edge signals have made money?
-
-Simulates historical P&L by replaying stored prediction snapshots
-against known resolutions.
-
-For each resolved question:
-1. Look up our prediction + market price at the time
-2. If edge > threshold, simulate a $1 bet in the edge direction
-3. Track cumulative P&L, win rate, max drawdown
-
-Usage:
-    python scripts/backtest.py
-    python scripts/backtest.py --threshold 0.10
-    python scripts/backtest.py --predictor ensemble
-"""
+"""Backtesting — would our edge signals have made money?"""
 
 import sys
 from pathlib import Path

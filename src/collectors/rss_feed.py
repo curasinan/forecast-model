@@ -1,8 +1,4 @@
-"""RSS feed collector — free, no API key required.
-
-Fetches from Google News RSS, Hacker News, and major tech blogs.
-This is the first collector built because it has zero dependencies on external APIs.
-"""
+"""RSS feed collector — free, no API key required."""
 
 import logging
 from datetime import datetime

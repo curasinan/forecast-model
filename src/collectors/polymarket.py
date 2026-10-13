@@ -1,15 +1,4 @@
-"""Polymarket CLOB API collector — fetches live market data.
-
-Polymarket uses a Central Limit Order Book (CLOB) on Polygon.
-The Gamma API provides a higher-level REST interface for market discovery.
-
-Key endpoints:
-    Gamma API: GET /markets — search/list markets
-    CLOB API: GET /prices-history — historical price data
-
-Market price IS the crowd's posterior probability.
-P(YES) + P(NO) = $1.00 by construction (minting/merging invariant).
-"""
+"""Polymarket CLOB API collector — fetches live market data."""
 
 import logging
 from datetime import datetime
@@ -37,11 +26,7 @@ class PolymarketCollector(BaseCollector):
         self.clob_base = settings.polymarket_api_base
 
     async def collect(self, question: Question, max_results: int = 5) -> list[EvidenceItem]:
-        """Collect market-as-evidence: current prices, volume, recent movement.
-
-        The market price itself is evidence — it represents the crowd's
-        aggregated belief about the probability.
-        """
+        """Collect market-as-evidence: current prices, volume, recent movement."""
         items: list[EvidenceItem] = []
 
         if question.market.market_id:

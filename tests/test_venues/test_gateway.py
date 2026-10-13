@@ -1,8 +1,4 @@
-"""GatewaySession unit tests: active heartbeat, backoff bounds, hooks,
-event sinks, expected-window classification, JSONL sink. No gateway, no
-network, no ib_async import: the connection is a FakeIB behind a fake
-connector, and time is a fake clock advanced by a fake sleeper.
-"""
+"""GatewaySession unit tests; no gateway, no network, no ib_async import."""
 
 from __future__ import annotations
 
@@ -218,9 +214,6 @@ class TestEnsureConnected:
         assert len(connector.calls) == 1  # config error killed the loop, no retry
 
     def test_client_id_in_use_error_propagates_not_retried(self):
-        # A clientId collision means a second process already owns this
-        # role -- a config error, not a transient outage -- so it must
-        # kill the process instead of being retried forever (audit M5).
         connector = FakeConnector(ClientIdInUseError("client id 2 in use"), FakeIB())
         session, _, sleeper = make_session(connector)
         with pytest.raises(ClientIdInUseError, match="client id 2 in use"):
@@ -288,8 +281,6 @@ class TestEvents:
         by_kind = {e.kind: e for e in events}
         assert by_kind["heartbeat_miss"].downtime_seconds is None
         assert by_kind["disconnect"].downtime_seconds is None
-        # The outage clock starts at the disconnect; only the two backoff
-        # sleeps advanced the fake clock before the reconnect landed.
         assert by_kind["reconnect"].downtime_seconds == pytest.approx(
             sum(sleeper.sleeps), abs=0.01
         )
@@ -327,9 +318,6 @@ class TestEvents:
         assert all(e.expected for e in events)
 
     def test_gave_up_window_emitted_once_when_outage_outlives_window(self):
-        # Outage starts at 08:14 inside 06:45-08:15; nine failed attempts
-        # accumulate >= 146s of backoff sleep even at minimum jitter, so the
-        # local clock is guaranteed past 08:16 while still down.
         failures = [ConnectionRefusedError("refused")] * 9
         connector = FakeConnector(ib1 := FakeIB(), *failures, FakeIB())
         session, _, _ = make_session(connector, local_start=_local(8, 14))

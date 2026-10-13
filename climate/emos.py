@@ -1,33 +1,4 @@
-"""Gaussian EMOS for the GTM lane (NOAA monthly global anomaly, SEAS5 ensemble).
-
-Works on the training frame produced by ``climate.dataset.build_training_frame``
-(one row per (init_date, lead_month)) and only touches these columns::
-
-    fc_mean_C, fc_sd_C   ensemble mean / sd on the NOAA degC scale (bridged)
-    y_C                  NOAA first-print anomaly for the target month (NaN if unknown)
-    lead_month           1..6
-    target_year_frac     decimal year of the target month (mid-month, e.g. 2010.042)
-    month_of_year        1..12
-
-Model (per lead, Gneiting et al. 2005 non-homogeneous Gaussian regression)::
-
-    y ~ N(mu, sigma^2)
-    mu      = a + b * fc_mean_C  [+ c_t * (target_year_frac - TREND_ORIGIN)]
-    sigma^2 = c + d * fc_sd_C^2,     c = softplus(raw_c) > 0,  d = raw_d^2 >= 0
-
-fit by minimising the mean closed-form Gaussian CRPS with an analytic gradient.
-
-Honest benchmarks live here too (monthly climatology and per-month trend
-climatology fit on training years only) plus leakage-free expanding-window
-evaluation: the model and both baselines are refit for each test year on rows
-whose target month lies strictly before that year.
-
-Caveat recorded for the operator: NOAA publishes month M's anomaly in the first
-half of M+1, so a truly real-time fit would additionally lack the last one or
-two labelled months before each forecast.  The per-year expanding window below
-follows the task contract (target month strictly before the test year) and
-therefore overstates the label set by at most that lag.
-"""
+"""Gaussian EMOS for the GTM lane (NOAA monthly global anomaly, SEAS5 ensemble)."""
 
 from __future__ import annotations
 
@@ -61,9 +32,7 @@ FRAME_COLUMNS = (
 
 _SQRT_PI = math.sqrt(math.pi)
 
-# --------------------------------------------------------------------------- #
 # Scoring utilities
-# --------------------------------------------------------------------------- #
 
 
 def _as_float(*arrays) -> tuple[np.ndarray, ...]:
@@ -71,10 +40,7 @@ def _as_float(*arrays) -> tuple[np.ndarray, ...]:
 
 
 def crps_gaussian(y, mu, sigma) -> np.ndarray:
-    """Closed-form CRPS of N(mu, sigma^2) against outcome y (vectorised, broadcasting).
-
-    CRPS = sigma * [ z (2 Phi(z) - 1) + 2 phi(z) - 1/sqrt(pi) ],  z = (y - mu) / sigma.
-    """
+    """Closed-form CRPS of N(mu, sigma^2) against outcome y (vectorised, broadcasting)."""
     y, mu, sigma = np.broadcast_arrays(*_as_float(y, mu, sigma))
     sigma = np.maximum(sigma, SIGMA_FLOOR)
     z = (y - mu) / sigma
@@ -88,10 +54,7 @@ def pit(y, mu, sigma) -> np.ndarray:
 
 
 def pit_histogram(pit_values, bins: int = 10) -> pd.DataFrame:
-    """Equal-width PIT histogram on [0, 1]; NaNs dropped.
-
-    Columns: lo, hi, count, frac, expected_frac (= 1/bins).
-    """
+    """Equal-width PIT histogram on [0, 1]; NaNs dropped."""
     p = np.asarray(pit_values, dtype=float).ravel()
     p = p[np.isfinite(p)]
     edges = np.linspace(0.0, 1.0, bins + 1)
@@ -110,10 +73,7 @@ def pit_histogram(pit_values, bins: int = 10) -> pd.DataFrame:
 
 
 def interval_coverage(y, mu, sigma, levels: Iterable[float] = (0.5, 0.9)) -> dict[float, float]:
-    """Empirical coverage of central predictive intervals at the given levels.
-
-    Returns {level: fraction of finite rows with |y - mu| <= z_{(1+level)/2} * sigma}.
-    """
+    """Empirical coverage of central predictive intervals at the given levels."""
     y, mu, sigma = np.broadcast_arrays(*_as_float(y, mu, sigma))
     ok = np.isfinite(y) & np.isfinite(mu) & np.isfinite(sigma)
     out: dict[float, float] = {}
@@ -128,10 +88,7 @@ def interval_coverage(y, mu, sigma, levels: Iterable[float] = (0.5, 0.9)) -> dic
 
 
 def crps_skill_score(crps_model, crps_baseline) -> float:
-    """1 - mean(CRPS_model) / mean(CRPS_baseline); 1 = perfect, 0 = no better, <0 worse.
-
-    Arrays are averaged over rows where BOTH are finite so the comparison is paired.
-    """
+    """1 - mean(CRPS_model) / mean(CRPS_baseline); 1 = perfect, 0 = no better, <0 worse."""
     m, b = _as_float(crps_model, crps_baseline)
     m, b = np.broadcast_arrays(m, b)
     ok = np.isfinite(m) & np.isfinite(b)
@@ -143,9 +100,7 @@ def crps_skill_score(crps_model, crps_baseline) -> float:
     return 1.0 - float(np.mean(m[ok])) / denom
 
 
-# --------------------------------------------------------------------------- #
 # Frame helpers
-# --------------------------------------------------------------------------- #
 
 
 def _require_columns(frame: pd.DataFrame, cols: Iterable[str]) -> None:
@@ -161,10 +116,7 @@ def target_year(frame: pd.DataFrame) -> np.ndarray:
 
 
 def _unique_targets(frame: pd.DataFrame) -> pd.DataFrame:
-    """One row per target month (the frame repeats each target across leads).
-
-    Keeps rows with finite y_C; dedupes on (target year, month_of_year).
-    """
+    """One row per target month (the frame repeats each target across leads)."""
     _require_columns(frame, ("y_C", "target_year_frac", "month_of_year"))
     y = np.asarray(frame["y_C"], dtype=float)
     ok = np.isfinite(y)
@@ -181,9 +133,7 @@ def _unique_targets(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-# --------------------------------------------------------------------------- #
 # Gaussian EMOS
-# --------------------------------------------------------------------------- #
 
 
 def _softplus(x: np.ndarray | float) -> np.ndarray | float:
@@ -209,10 +159,7 @@ def _emos_objective(
     t: np.ndarray,
     trend: bool,
 ) -> tuple[float, np.ndarray]:
-    """Mean Gaussian CRPS and its gradient w.r.t. theta = (a, b, raw_c, raw_d[, c_t]).
-
-    dCRPS/dmu = 1 - 2 Phi(z);  dCRPS/dsigma = 2 phi(z) - 1/sqrt(pi).
-    """
+    """Mean Gaussian CRPS and its gradient w.r.t. theta = (a, b, raw_c, raw_d[, c_t])."""
     a, b, raw_c, raw_d = theta[0], theta[1], theta[2], theta[3]
     c_t = theta[4] if trend else 0.0
     c = _softplus(raw_c)
@@ -266,14 +213,7 @@ class LeadParams:
 
 
 class EmosModel:
-    """Per-lead Gaussian EMOS fit by minimum CRPS.
-
-    Usage::
-
-        model = EmosModel().fit(train_frame, leads=range(1, 7), trend=False)
-        pred = model.predict(test_frame)          # DataFrame(mu, sigma), index = frame.index
-        js = model.to_json(); EmosModel.from_json(js)
-    """
+    """Per-lead Gaussian EMOS fit by minimum CRPS."""
 
     VERSION = 1
 
@@ -323,7 +263,6 @@ class EmosModel:
 
     def _fit_lead(self, lead: int, x, s, y, t) -> LeadParams:
         s2 = s * s
-        # Initial values: OLS for (a, b); split residual variance between c and d.
         design = np.column_stack([np.ones_like(x), x] + ([t] if self.trend else []))
         beta, *_ = np.linalg.lstsq(design, y, rcond=None)
         resid_var = float(np.var(y - design @ beta, ddof=min(len(beta), len(y) - 1)))
@@ -349,8 +288,6 @@ class EmosModel:
         )
         best_x, best_f, converged = res.x, float(res.fun), bool(res.success)
         if not converged:
-            # Derivative-free polish from the L-BFGS-B endpoint (robust to the
-            # d = raw_d^2 kink and to badly scaled data); keep whichever is lower.
             res2 = minimize(
                 lambda th: _emos_objective(th, *args)[0],
                 best_x,
@@ -446,18 +383,12 @@ class EmosModel:
         return cls.from_dict(json.loads(text))
 
 
-# --------------------------------------------------------------------------- #
 # Baselines
-# --------------------------------------------------------------------------- #
 
 
 @dataclass
 class MonthlyClimatology:
-    """Per-month-of-year Gaussian N(mean, sd) of y_C over the training targets.
-
-    Months with fewer than two training targets fall back to the pooled
-    (all-month) mean / sd so predict() never returns NaN for a known month.
-    """
+    """Per-month-of-year Gaussian N(mean, sd) of y_C over the training targets."""
 
     mu_by_month: dict[int, float] = field(default_factory=dict)
     sd_by_month: dict[int, float] = field(default_factory=dict)
@@ -490,13 +421,7 @@ class MonthlyClimatology:
 
 @dataclass
 class TrendClimatology:
-    """Per-month-of-year linear trend in target_year_frac + residual sd (training only).
-
-    y_C(month m, t) ~ N(alpha_m + beta_m (t - origin), resid_sd_m^2).  Months with
-    fewer than three training targets fall back to a pooled model with one shared
-    slope and month intercepts.  This is the fair benchmark for a warming series:
-    plain climatology is systematically cold and is easy to beat.
-    """
+    """Per-month-of-year linear trend in target_year_frac + residual sd (training only)."""
 
     origin: float = TREND_ORIGIN
     alpha_by_month: dict[int, float] = field(default_factory=dict)
@@ -564,17 +489,11 @@ def trend_climatology_baseline(train: pd.DataFrame, frame: pd.DataFrame):
     return TrendClimatology().fit(train).predict(frame)
 
 
-# --------------------------------------------------------------------------- #
 # Validation helpers
-# --------------------------------------------------------------------------- #
 
 
 def time_split(frame: pd.DataFrame, train_through_year: int) -> tuple[pd.Series, pd.Series]:
-    """Boolean masks (train, test) by TARGET year: train <= year < test.
-
-    Splitting on the target month (not the init date) keeps every test-year
-    label out of the training set even for long leads that straddle New Year.
-    """
+    """Boolean masks (train, test) by TARGET year: train <= year < test."""
     years = target_year(frame)
     train = pd.Series(years <= int(train_through_year), index=frame.index)
     test = pd.Series(years > int(train_through_year), index=frame.index)
@@ -589,15 +508,7 @@ def expanding_window_predictions(
     leads: Iterable[int] = range(1, 7),
     min_train_targets: int = 24,
 ) -> pd.DataFrame:
-    """Per-row out-of-sample predictions for every test year in [first, last].
-
-    For each test year Y the EMOS model and both baselines are refit on rows whose
-    target month is strictly before Y (target_year < Y) and evaluated on rows with
-    target_year == Y.  Returned columns: the frame's index as ``row``, test_year,
-    lead_month, month_of_year, y_C, mu/sigma/crps for ``emos``, ``clim`` and
-    ``trend`` (NaN where a lead was unfit or y_C missing).  Years whose training
-    set has fewer than ``min_train_targets`` labelled target months are skipped.
-    """
+    """Per-row out-of-sample predictions for every test year in [first, last]."""
     _require_columns(frame, FRAME_COLUMNS)
     leads = [int(lead) for lead in leads]
     years = target_year(frame)
@@ -661,12 +572,7 @@ def expanding_window_scores(
     leads: Iterable[int] = range(1, 7),
     min_train_targets: int = 24,
 ) -> pd.DataFrame:
-    """Per (test_year, lead_month) mean CRPS of EMOS vs both baselines, out of sample.
-
-    Columns: test_year, lead_month, n, crps_emos, crps_clim, crps_trend,
-    skill_vs_clim, skill_vs_trend, cover50_emos, cover90_emos.  Rows without a
-    label (y_C NaN) are excluded from every average; ``n`` counts scored rows.
-    """
+    """Per (test_year, lead_month) mean CRPS of EMOS vs both baselines, out of sample."""
     rows = expanding_window_predictions(
         frame, first_test_year, last_test_year, trend=trend, leads=leads,
         min_train_targets=min_train_targets,

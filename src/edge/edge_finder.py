@@ -1,10 +1,4 @@
-"""Edge detection — where our model disagrees with the market.
-
-Edge = model_probability - market_implied_probability
-
-The entire game is estimating probability more accurately than the market.
-When we find a gap, we quantify it with EV and Kelly sizing.
-"""
+"""Edge detection — where our model disagrees with the market."""
 
 from src.math.expected_value import best_trade
 from src.math.kelly import half_kelly, kelly_for_no
@@ -19,19 +13,7 @@ def find_edge(
     min_edge: float = 0.05,
     vpin_flag: bool = False,
 ) -> EdgeSignal:
-    """Compare our model probability against market odds.
-
-    Args:
-        question_id: Question identifier
-        model_prob: Our model's estimated probability of YES (0-1)
-        market_price_yes: Current YES token price on Polymarket (0-1)
-        confidence: Our confidence in the model estimate (0-1)
-        min_edge: Minimum edge to consider significant
-        vpin_flag: Whether VPIN indicates informed trading
-
-    Returns:
-        EdgeSignal with edge quantification.
-    """
+    """Compare our model probability against market odds."""
     edge_pct = model_prob - market_price_yes
 
     # Calculate EV for the best direction
@@ -45,7 +27,6 @@ def find_edge(
     else:
         kelly = 0.0
 
-    # Reduce Kelly if VPIN is elevated (informed traders may know something we don't)
     if vpin_flag:
         kelly *= 0.5
 

@@ -1,16 +1,4 @@
-"""Quarter-Kelly position sizing using the validated model's hit-rate and
-win/loss ratio drawn from ``model/results/metrics_6h_v2.json`` (FULL sim block
-— 30-trade sample beats the 15-trade confident-only slice for noise reasons).
-
-Binary Kelly formula:
-    f* = max(0, p - (1 - p) / b)
-where ``p`` is the probability of winning and ``b = avg_win / avg_loss`` is
-the expected payoff ratio. Final ``position_dollars = bankroll * f* * 0.25``,
-then clipped at the 5%-of-bankroll cap and the $5 floor.
-
-TODO(after >=100 live trades): upgrade to continuous Kelly. Current sim
-sample size (15–30 trades) is too small for the continuous form to be stable.
-"""
+"""Quarter-Kelly position sizing from the validated model's hit-rate and win/loss ratio."""
 
 from __future__ import annotations
 
@@ -34,9 +22,7 @@ DEFAULT_B_CEILING = 10.0                   # b > this is suspicious; cap as defe
 log = logging.getLogger("decision.position_sizer")
 
 
-# --------------------------------------------------------------------------- #
 # Public API
-# --------------------------------------------------------------------------- #
 
 
 class KellyInputs(NamedTuple):
@@ -55,20 +41,7 @@ def size_positions(
     max_single_position_pct: float = DEFAULT_MAX_SINGLE_POSITION_PCT,
     min_position_dollars: float = DEFAULT_MIN_POSITION_DOLLARS,
 ) -> pd.DataFrame:
-    """Add ``kelly_fraction`` + ``position_dollars`` columns to ``edges_df``.
-
-    Non-tradeable rows pass through with both new columns set to 0.
-    Rows whose computed ``position_dollars`` would fall below
-    ``min_position_dollars`` get their ``tradeable`` flag flipped to False
-    and ``position_dollars`` set to 0 (avoids operational overhead on tiny
-    trades).
-
-    Raises
-    ------
-    RuntimeError
-        If the metrics file is missing or doesn't contain the required
-        Kelly inputs under ``profit_simulation.full``.
-    """
+    """Add ``kelly_fraction`` + ``position_dollars`` columns to ``edges_df``."""
     result = edges_df.copy()
     result["kelly_fraction"] = 0.0
     result["position_dollars"] = 0.0
@@ -100,7 +73,6 @@ def size_positions(
         fraction, quarter,
     )
 
-    # Compute the raw dollar amount only on rows that survived the edge filter.
     tradeable_mask = result["tradeable"].astype(bool)
     raw = quarter * bankroll
     capped = min(raw, max_single_position_pct * bankroll)
@@ -127,9 +99,7 @@ def size_positions(
     return result
 
 
-# --------------------------------------------------------------------------- #
 # Internals
-# --------------------------------------------------------------------------- #
 
 
 def _kelly_fraction(p: float, b: float) -> float:

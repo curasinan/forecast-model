@@ -4,7 +4,7 @@
 # Runs in Git Bash on the Zenbook, from any checkout of this repo:
 #   bash scripts/spark/deploy.sh [--no-restart] [--dry-run]
 #
-# Steps (design: docs/plans/2026-10-05-spark-runtime-move-design.md section 5):
+# Steps:
 #   1. git push spark-rt main. The runtime clone (/home/trading/forecast-model) has
 #      receive.denyCurrentBranch=updateInstead, so the push updates its checked-out main in
 #      place; it is refused while a tracked file there has uncommitted changes.
@@ -34,8 +34,6 @@
 # the failing step's own.
 set -euo pipefail
 
-# Git Bash rewrites arguments that look like POSIX paths before a Windows program (ssh.exe)
-# sees them; the remote commands below are full of such paths.
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 DRY_RUN=0
@@ -81,10 +79,6 @@ WAIT_CMD='f='"$HEARTBEAT"'; i=0; while [ "$i" -lt 132 ]; do age=$(( $(date +%s) 
 RESTART_CMD='sudo -n /usr/bin/systemctl restart ibkr-recorder.service'
 STATUS_CMD='git -C '"$CLONE"' log --oneline -1; for u in '"$UNITS"'; do echo "$u: $(systemctl is-active "$u")"; done'
 
-# Ask the Spark whether the recorder runs; sets $state. systemctl is-active answers with exit
-# 0 ("active") or exit 3 (every other state it can name), so those two statuses are answers
-# and nothing else is: a dead ssh (255, no output) is not "not running", and a deploy that
-# cannot tell must stop rather than skip the restart in silence.
 query_state() {
   local rc=0
   state=$("$SSH" "$REMOTE" "$STATE_CMD" | tr -d '\r') || rc=$?

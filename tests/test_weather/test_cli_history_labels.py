@@ -124,7 +124,6 @@ def test_upsert_coexists_with_asos_and_other_sources(tmp_path):
     conn.commit()
     conn.close()
     upsert_cli_history_labels("KLGA", parse_cli_records([_record()], "KLGA"), db_path=db)
-    # Distinct label_source in the PK: both survive, priority resolved at training.
     stored = sorted(_rows(db))
     assert stored == [(83.0, "wunderground_api", 1, 1), (84.0, CLI_HISTORY_SOURCE, 1, 1)]
 

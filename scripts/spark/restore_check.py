@@ -1,38 +1,4 @@
-"""Restore a copy of the operational files into a scratch root and verify it.
-
-    python scripts/spark/restore_check.py --from /srv/quant_data_backups/20261020 --scratch /tmp/restore
-    python scripts/spark/restore_check.py --from ~/quant_data --scratch ~/restore_scratch   # a mirror
-
-A copy is a day directory written by monitoring/backup_paper_book.py (it
-carries manifest.json) or a whole quant-data root (it carries none; what the
-source holds when the check starts is then the reference). The operational
-files are copied into the scratch root, and the restored files are verified:
-
-  * every file the reference lists is there, with the listed sha256 and size;
-  * the paper book is present and passes SQLite's integrity check and has its tables;
-  * every .parquet file reads, every .json file parses, every .jsonl line parses.
-
-A hot journal. A stop that lands in the middle of a SQLite transaction leaves the
-book torn (pages of the new state written, others not) with its rollback journal,
-ibkr_paper.db-journal, beside it: the journal is hot. SQLite makes the book whole
-again by rolling the journal back, and only a connection that may write does so: a
-read-only open stops on "attempt to write a readonly database", so a check that only
-reads would fail exactly the book the journal exists for. The restore therefore
-carries a -journal, -wal and -shm lying beside the SOURCE book into the scratch
-beside the restored one (each only if the source has it, none required), opens the
-restored copy read-write once, which rolls a hot journal back (or replays a WAL), and
-only then runs the read-only integrity check. The sha256 and size are compared before
-that, on the book as copied. For a backup day directory, whose book the backup wrote
-with SQLite's backup API with nothing beside it, the manifest's record still decides;
-a whole root has no manifest, its reference is the source itself, and it is the
-roll-back followed by the check that makes the result mean something. A torn book
-without its journal is judged as it lies, and usually fails. The roll-back happens in
-the scratch: the source is never opened read-write.
-
-The source is only read. The scratch root must not exist or must be empty.
-Exit 0 all good, 1 at least one failure (each printed), 2 copy invalid/unreadable
-or scratch not empty or not a directory.
-"""
+"""Restore a copy of the operational files into a scratch root and verify it."""
 
 from __future__ import annotations
 
@@ -57,11 +23,7 @@ from analysis.spark_parity import (  # noqa: E402
 from monitoring.backup_paper_book import MANIFEST_NAME, file_record  # noqa: E402
 
 REQUIRED_TABLES = ("positions", "trade_log")
-# The paper book by name, not "the first entry of MANIFEST_FILES": the requirement below must
-# stay on the book if that tuple is ever reordered.
 PAPER_DB_KEY = "/".join((TICKS_DIR, *PAPER_DB_REL))
-# What SQLite keeps beside a book: the rollback journal of a transaction that was cut off, and
-# the write-ahead log with its index. Carried along when the source holds them.
 BOOK_SIDE_SUFFIXES = ("-journal", "-wal", "-shm")
 
 
@@ -98,9 +60,6 @@ def _carry_side_files(src: Path, restored: Path) -> None:
 
 def _check_book(path: Path) -> str | None:
     try:
-        # One read-write open first (of the scratch copy): the first read of a connection that
-        # may write rolls back a hot journal beside the book and replays a WAL, which the
-        # read-only connection below cannot do.
         with closing(sqlite3.connect(path)) as conn:
             conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as conn:
@@ -181,8 +140,6 @@ def restore_and_verify(copy: Path, scratch: Path, failures: list[str] | None = N
                             f"({actual['size']} bytes restored, {expected['size']} expected)")
             continue
         if key == PAPER_DB_KEY:
-            # After the comparison above, which is of the book as copied: the open that checks
-            # the book rolls a hot journal back, and that changes the file.
             _carry_side_files(src, restored)
         problem = _check_content(key, restored)
         if problem:

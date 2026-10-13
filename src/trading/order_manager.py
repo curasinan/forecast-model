@@ -1,28 +1,4 @@
-"""Order manager -- converts edge signals into venue-neutral orders.
-
-Translates an EdgeSignal + risk-adjusted size into a TradeOrder:
-- BUY YES leg when edge > 0 (our probability above the market's)
-- BUY NO leg  when edge < 0 (our probability below the market's)
-
-and places it through a `VenueAdapter`. Two execution paths:
-
-- **simulated** (default whenever the adapter is read-only): immediate,
-  optimistic fill at the limit price against a local simulated bankroll.
-  No venue call is made.
-- **venue**: `venue.place_order(OrderRequest)`; the venue's own acceptance
-  and fill reporting drive the order status (`sync_with_venue`). The IBKR
-  adapter only transmits on a PAPER account; live transmission is enabled
-  manually by the account holder, never by code in this repository.
-
-Venue facts that shape this module (docs/venue_semantics.md): at IBKR the
-YES and NO legs are SEPARATE contracts, so a NO order targets
-`Market.no_id`; the NO price is whatever the NO leg is quoted at (passed in
-as `no_price`), falling back to the venue's FeeModel complement rule --
-never the Polymarket `1 - yes` identity. Quantities respect
-`Market.size_increment` (1 whole contract at IBKR) and limit prices respect
-`Market.tick_size` (0.01 at ForecastEx; an off-tick price is cancelled by
-the venue with error 110).
-"""
+"""Order manager -- converts edge signals into venue-neutral orders."""
 
 from __future__ import annotations
 
@@ -42,11 +18,6 @@ from src.venues.base import VenueAdapter, VenueError
 
 logger = logging.getLogger(__name__)
 
-#: Venues whose market is ONE contract with both outcomes on it, so a NO
-#: order legitimately targets ``market.market_id`` when ``no_id`` is unset.
-#: An explicit ALLOWLIST (final-review bundle B-2), so an unknown or future
-#: venue fails CLOSED (empty leg -> rejected) instead of buying its YES leg
-#: at the NO price. Add a venue here only after verifying its contract model.
 _NO_LEG_IS_MARKET_ID_VENUES = frozenset({POLYMARKET})
 
 
@@ -70,7 +41,7 @@ class TradeOrder:
 
     order_id: str
     question_id: str
-    market_id: str  # str(MarketId) of the LEG being bought (YES or NO contract)
+    market_id: str
     side: OrderSide
     outcome: str  # "YES" or "NO"
     price: float  # Limit price (0-1)
@@ -83,7 +54,7 @@ class TradeOrder:
     venue_order_id: str = ""  # The venue's native order id once placed
     filled_size: float = 0.0
     reason: str = ""
-    perm_id: str = ""  # Venue permId from the ack (IBKR); "" if none/unassigned yet
+    perm_id: str = ""
 
     @property
     def clob_order_id(self) -> str:  # backwards-compatible alias
@@ -91,12 +62,7 @@ class TradeOrder:
 
 
 def snap_to_tick(price: float, tick: float) -> float:
-    """Largest multiple of ``tick`` at or below ``price``, floored at one tick.
-
-    Decimal, not float arithmetic: 0.35 as a binary float is 0.3499999...,
-    and an off-tick price is not merely rounded by the venue -- ForecastEx
-    cancels the order (error 110). A positive price never snaps to zero.
-    """
+    """Largest multiple of ``tick`` at or below ``price``, floored at one tick."""
     d_price, d_tick = Decimal(str(price)), Decimal(str(tick))
     steps = (d_price / d_tick).to_integral_value(rounding=ROUND_FLOOR)
     snapped = steps * d_tick
@@ -110,24 +76,7 @@ def edge_to_order(
     fee_model: FeeModel | None = None,
     no_price: float | None = None,
 ) -> TradeOrder:
-    """Convert an EdgeSignal + approved size into a TradeOrder.
-
-    edge > 0: BUY the YES leg at the YES price (`edge.market_prob`).
-    edge < 0: BUY the NO leg at `no_price` (its own quote) if given, else at
-    the venue's complement price (`fee_model.no_price_from_yes`), else the
-    Polymarket identity `1 - yes` (research fallback only).
-
-    The limit price is snapped DOWN to `market.tick_size` when the venue
-    publishes one. A mid-derived price like 0.345 is not a valid ForecastEx
-    price (minTick 0.01) and the venue cancels the order outright with error
-    110 -- verified on the paper account 2026-08-25. Rounding DOWN (never up)
-    on a BUY keeps the paid price at or below the intended one, so the edge
-    can only improve.
-
-    Size is `size_usd / price`, rounded DOWN to `market.size_increment`
-    when the venue trades whole units; cost is recomputed from the rounded
-    size so the ledger never overstates exposure.
-    """
+    """Convert an EdgeSignal + approved size into a TradeOrder."""
     yes_price = edge.market_prob
     if edge.edge_pct > 0:
         price = yes_price
@@ -150,19 +99,6 @@ def edge_to_order(
         elif market is not None and market.market_id.venue in _NO_LEG_IS_MARKET_ID_VENUES:
             leg_id = str(market.market_id)  # single-contract venues (Polymarket)
         else:
-            # M8 (Task 3.8): IBKR publishes YES/NO as separate conIds, so a
-            # market missing its no_id has no resolvable NO contract at
-            # all -- falling back to market_id here would silently BUY THE
-            # YES LEG at the NO price. The same holds for ANY venue not on
-            # the explicit single-contract allowlist above (final-review
-            # bundle B-2: this used to be `venue != IBKR`, which failed
-            # OPEN for every venue added later). Empty leg_id makes place_order's
-            # "no market id for the leg" rejection fire instead (I-1, fix
-            # round 1: checked before BOTH the simulate and venue paths, so
-            # this fires whether or not the run is simulated). Belt-and-
-            # buckle with run_ibkr_paper.py's dedup, which already drops
-            # no_id=None NO intents before evaluation (Task 1.7) -- this is
-            # the primary fence, not just backup.
             leg_id = ""
         reason = (
             f"Model={edge.model_prob:.0%} < Market={yes_price:.0%}, "
@@ -218,8 +154,6 @@ class OrderManager:
         sim_bankroll: float = 1000.0,
     ):
         self._venue = venue
-        # Read-only adapters can never transmit, so they always simulate;
-        # a writable adapter simulates only if explicitly asked to.
         self._simulate = True if venue.read_only else bool(simulate)
         self._sim = SimulatedFillEngine(sim_bankroll)
         self._orders: list[TradeOrder] = []
@@ -252,14 +186,6 @@ class OrderManager:
     # -- placement ---------------------------------------------------------
     def place_order(self, order: TradeOrder) -> bool:
         """Place (or simulate) an order. Returns True if accepted/simulated."""
-        # I-1 (Task 3.8 fix round 1): checked BEFORE the simulate/venue
-        # branch so both paths reject an unresolved leg identically. This
-        # used to live only in _place_venue_order, so simulate=True (or any
-        # read-only venue, which always simulates) routed an IBKR NO intent
-        # with no_id=None straight to _simulate_order -- which never
-        # inspects market_id -- and recorded a fabricated SIMULATED fill on
-        # a leg (market_id="") that doesn't exist (M8's edge_to_order guard
-        # is the fence; this is what must actually stop the order).
         if not order.market_id:
             order.status = OrderStatus.REJECTED
             order.reason += " | no market id for the leg"
@@ -292,8 +218,6 @@ class OrderManager:
         return False
 
     def _place_venue_order(self, order: TradeOrder) -> bool:
-        # market_id is guaranteed non-empty here -- place_order rejects an
-        # empty leg before routing to either this or _simulate_order (I-1).
         from src.domain.ids import MarketId  # local import keeps module header light
 
         request = OrderRequest(
@@ -303,7 +227,7 @@ class OrderManager:
             quantity=order.size,
             order_type="LMT",
             limit_price=order.price,
-            tif="GTC",  # explicit tif is REQUIRED at IBKR (error 10349 otherwise)
+            tif="GTC",
         )
         try:
             ack = self._venue.place_order(request)
@@ -331,13 +255,7 @@ class OrderManager:
 
     # -- tracking ----------------------------------------------------------
     def sync_with_venue(self) -> int:
-        """Refresh PLACED orders from the venue. Returns number updated.
-
-        Uses `venue.get_order` (order history) when the adapter supports it;
-        otherwise only open-order presence is known and fills cannot be
-        confirmed -- such orders stay PLACED with a warning (fail loudly,
-        never assume a fill).
-        """
+        """Refresh PLACED orders from the venue. Returns number updated."""
         if self._simulate:
             return 0
         updated = 0
@@ -369,34 +287,7 @@ class OrderManager:
         return updated
 
     def backfill_perm_ids(self) -> list[TradeOrder]:
-        """Fill in a permId the venue had not yet assigned at ack time.
-
-        Final-review finding I-1: the IBKR adapter reads ``trade.order.
-        permId`` after a fixed 1s wait, so a slow Gateway acks an order with
-        permId 0/None, stored as ``""``. Durable reconciliation joins on
-        permId only, so such an order would sit outside fill capture
-        forever. This re-reads the venue's resting orders once
-        (``get_all_open_orders()``, whose ``venue_meta["perm_id"]`` is
-        populated by then) and adopts the permId of THIS run's order.
-
-        READ-ONLY at the venue: one open-order fetch, never a placement,
-        cancellation or modification. Never guesses:
-
-        - only still-open orders with a venue order id and NO permId are
-          candidates -- a permId already on file is never overwritten;
-        - a venue order must match on venue order id AND leg contract
-          (IBKR order ids are per-client, so an id alone could name another
-          client's order);
-        - zero or several distinct non-zero permIds for that (id, contract)
-          leave the order untouched (logged) -- the next reconcile then
-          counts it loudly (``ReconcileReport.skipped_missing_perm_id``).
-
-        Returns the orders whose ``perm_id`` was filled in, for the caller
-        to persist. No-op (and no venue call) when simulating, when nothing
-        is missing, or when the venue has no cross-client open-order read.
-        Best-effort: a re-read that raises is logged (class name only) and
-        backfills nothing rather than crashing the post-placement sync.
-        """
+        """Fill in a permId the venue had not yet assigned at ack time."""
         if self._simulate:
             return []
         missing = [o for o in self.open_orders if o.venue_order_id and not o.perm_id]
@@ -413,10 +304,6 @@ class OrderManager:
         try:
             venue_orders = fetch()
         except Exception as exc:  # noqa: BLE001 - best-effort; see below
-            # Callers run this AFTER placing (run_ibkr_paper -> executor.sync),
-            # so raising would crash the run and lose its run-ledger line.
-            # The gap is not hidden: the next reconcile counts the empty
-            # permId (skipped_missing_perm_id) and reports the run ok:false.
             logger.error(
                 "[%s] permId backfill re-read failed (%s); %d order(s) keep an empty "
                 "perm_id -- the next reconcile will flag them",

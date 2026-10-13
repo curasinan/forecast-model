@@ -7,9 +7,9 @@ class Prediction(BaseModel):
     """A single probability estimate from one predictor."""
 
     question_id: str
-    predictor_name: str  # "bayesian", "classical_ml", "claude_llm", "ensemble"
+    predictor_name: str
     probability: float  # 0.0 to 1.0 (probability of YES)
-    confidence: float = 0.5  # 0.0 to 1.0 (predictor's confidence in its own estimate)
+    confidence: float = 0.5
     reasoning: str = ""  # Human-readable explanation
     created_at: datetime = Field(default_factory=datetime.now)
     evidence_count: int = 0
@@ -21,11 +21,11 @@ class EdgeSignal(BaseModel):
     question_id: str
     model_prob: float  # Our model's probability
     market_prob: float  # Polymarket's implied probability (YES price)
-    edge_pct: float  # model_prob - market_prob (positive = we think YES is underpriced)
-    expected_value: float  # EV of buying YES at market price given our probability
+    edge_pct: float
+    expected_value: float
     kelly_fraction: float  # Optimal fraction of bankroll to allocate
     confidence: float = 0.5
-    vpin_flag: bool = False  # True if VPIN is elevated (informed trading detected)
+    vpin_flag: bool = False
     created_at: datetime = Field(default_factory=datetime.now)
 
     @property

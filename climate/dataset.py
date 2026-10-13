@@ -1,45 +1,4 @@
-"""Training frame for the GTM climate lane: one row per (init_date, lead_month).
-
-Joins three on-disk series under ``climate.paths.data_root()``:
-
-  * ``forecasts/seas5_global_mean.parquet``  (init_date, lead_month, member,
-    t2m_global_K) -> aggregated to ensemble mean / sd (ddof=1) / size;
-  * ``reference/era5_global_mean.parquet``   (month, t2m_global_K);
-  * ``labels/labels_ledger.parquet`` series ``gtm`` (NOAA monthly anomaly,
-    degC vs 1901-2000), first-print rows via ``climate.storage.latest_values``.
-
-The ERA5 -> NOAA :class:`climate.bridge.Bridge` (12 monthly intercepts +
-one slope) is fitted on the ERA5/NOAA overlap unless one is supplied, and
-the ensemble mean/sd are pushed through it to ``fc_mean_C`` / ``fc_sd_C``
-(degC on the NOAA scale). The fitted bridge is attached as
-``frame.attrs["bridge"]`` (and ``frame.attrs["bridge_json"]``).
-
-Lead convention (EMPIRICAL, verified on the real archive 2026-08-23)
---------------------------------------------------------------------
-CDS documents SEAS5 ``leadtime_month=1`` as the initialisation month
-itself (the forecast initialised on 1 Jan covers January at lead 1,
-February at lead 2, ...). Verified against ERA5 over 1993-2025 using
-the stored global means (396 init months, 25/51 members):
-
-    hypothesis A  target = init + (lead-1)   lead-1 corr(ens_mean, ERA5) = 0.9986  RMSE 0.163 K
-    hypothesis B  target = init + lead       lead-1 corr(ens_mean, ERA5) = 0.8717  RMSE 0.726 K
-
-  deseasonalised (month-of-year anomalies) the gap persists:
-    A: corr 0.978 / RMSE 0.065 K     B: corr 0.931 / RMSE 0.107 K
-
-  and A wins at every lead 1..6 (raw corr 0.9962-0.9986 vs 0.865-0.884).
-So ``target_month(init, lead) = init + (lead - 1) months`` is hard-coded
-(:data:`LEAD1_OFFSET_MONTHS` = 0). ``tests/test_climate/test_dataset_bridge.py``
-pins the mapping helper to this convention.
-
-Schema (contract with the EMOS / evaluation agents)
----------------------------------------------------
-init_date (datetime64), lead_month (int), target_month ('YYYY-MM'),
-target_year_frac (float, mid-month: Jan 2010 -> 2010.042), month_of_year
-(int 1-12, of the TARGET month), ens_mean_K, ens_sd_K (ddof=1),
-n_members, era5_K (NaN if missing), y_C (NOAA gtm, NaN if missing),
-fc_mean_C, fc_sd_C.
-"""
+"""Training frame for the GTM climate lane: one row per (init_date, lead_month)."""
 
 from __future__ import annotations
 
@@ -55,7 +14,6 @@ from climate.storage import latest_values
 
 GTM_SERIES = "gtm"
 
-#: SEAS5 leadtime_month=1 is the initialisation month (see module docstring).
 LEAD1_OFFSET_MONTHS = 0
 
 FRAME_COLUMNS = [
@@ -74,15 +32,8 @@ FRAME_COLUMNS = [
 ]
 
 
-# ------------------------------------------------------------------ small helpers
-
-
 def target_month(init_date, lead_month) -> pd.Series | str:
-    """'YYYY-MM' of the month a (init_date, lead_month) forecast verifies on.
-
-    ``target = init + (lead_month - 1 + LEAD1_OFFSET_MONTHS)`` months.
-    Scalar in -> str out; array-likes -> Series of str.
-    """
+    """'YYYY-MM' of the month a (init_date, lead_month) forecast verifies on."""
     scalar = np.ndim(init_date) == 0 and np.ndim(lead_month) == 0
     init = pd.DatetimeIndex(pd.to_datetime(np.atleast_1d(init_date)))
     lead = np.atleast_1d(np.asarray(lead_month, dtype=int))
@@ -116,9 +67,6 @@ def month_of_year(target_month_ym) -> pd.Series | int:
     if scalar:
         return int(m[0])
     return pd.Series(m, dtype=int)
-
-
-# ---------------------------------------------------------------------- loaders
 
 
 def load_seas5(root: Path) -> pd.DataFrame:
@@ -163,9 +111,6 @@ def aggregate_members(seas5: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-# ------------------------------------------------------------------- assembly
-
-
 def fit_bridge(era5_K: pd.Series, noaa_C: pd.Series) -> Bridge:
     """Fit the ERA5 -> NOAA bridge on the overlap of the two series."""
     return Bridge().fit(era5_K, noaa_C)
@@ -177,11 +122,7 @@ def build_frame_from_inputs(
     noaa_C: pd.Series,
     bridge: Bridge | None = None,
 ) -> pd.DataFrame:
-    """Assemble the training frame from in-memory inputs (no disk access).
-
-    ``seas5``: member-level rows (init_date, lead_month, member, t2m_global_K);
-    ``era5_K`` / ``noaa_C``: Series indexed by month ('YYYY-MM' or datetime).
-    """
+    """Assemble the training frame from in-memory inputs (no disk access)."""
     era5_K = pd.Series(np.asarray(era5_K, dtype=float), index=to_year_month_index(era5_K.index))
     noaa_C = pd.Series(np.asarray(noaa_C, dtype=float), index=to_year_month_index(noaa_C.index))
     era5_K = era5_K[~era5_K.index.duplicated(keep="first")]
@@ -213,14 +154,7 @@ def build_frame_from_inputs(
 
 
 def build_training_frame(root: str | Path | None = None, bridge: Bridge | None = None) -> pd.DataFrame:
-    """Load SEAS5 / ERA5 / NOAA gtm from ``root`` and build the training frame.
-
-    ``root`` defaults to :func:`climate.paths.data_root`. If ``bridge`` is
-    None it is fitted on the ERA5/NOAA overlap and exposed via
-    ``frame.attrs["bridge"]``. Rows whose target month has no ERA5 / NOAA
-    value yet (future months) carry NaN in ``era5_K`` / ``y_C`` but still
-    get ``fc_mean_C`` / ``fc_sd_C``.
-    """
+    """Load SEAS5 / ERA5 / NOAA gtm from ``root`` and build the training frame."""
     root = data_root(root)
     seas5 = load_seas5(root)
     era5_K = load_era5(root)

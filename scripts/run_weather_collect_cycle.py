@@ -1,7 +1,4 @@
-"""One weather collection cycle: discover live markets → forecasts → obs.
-
-Scheduling entrypoint (Cursor track). Does not run EMOS backfill.
-"""
+"""One weather collection cycle: discover live markets → forecasts → obs."""
 
 from __future__ import annotations
 

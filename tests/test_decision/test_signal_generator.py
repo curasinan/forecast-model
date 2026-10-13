@@ -1,8 +1,4 @@
-"""End-to-end orchestration test for ``decision.signal_generator``.
-
-Uses a synthetic SQLite DB and a mocked model artifact to test the
-full pipeline without touching the real model file.
-"""
+"""End-to-end orchestration test for ``decision.signal_generator``."""
 
 from __future__ import annotations
 
@@ -28,8 +24,6 @@ class DummyModel:
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         self.last_X = X
-        # We can't see market_ids from inside the model; return a fixed value.
-        # The orchestration test only verifies wiring shape, not specific predictions.
         return np.full(len(X), 0.0)
 
 
@@ -56,7 +50,6 @@ def _seed_db(db: Path, market_ids: list[str], earliest_iso: str, latest_iso: str
             "INSERT INTO markets(id, question, status, end_date) VALUES (?, ?, 'active', ?)",
             (mid, f"Will Trump win the election in {mid}?", "2027-01-01T00:00:00Z"),
         )
-        # Need enough snapshots (>=50) for load_political_market_ids to pick it up.
         for i in range(60):
             ts = f"2026-05-{(i % 28) + 1:02d}T{(i % 24):02d}:00:00+00:00"
             conn.execute(
@@ -109,9 +102,7 @@ def _write_model_artifact(tmp_path: Path, feature_cols: list[str]) -> Path:
 
 
 def test_end_to_end_returns_typed_dataframe(tmp_path):
-    """generate_signals end-to-end on a 2-market synth DB. Predictions all 0
-    → no edges trigger → result has zero approved rows but correct columns.
-    """
+    """generate_signals end-to-end on a 2-market synth DB."""
     db = tmp_path / "synth.db"
     market_ids = ["mkt1", "mkt2"]
     _seed_db(db, market_ids, "2026-05-01T00:00:00+00:00", "2026-05-26T00:00:00+00:00")
@@ -119,7 +110,6 @@ def test_end_to_end_returns_typed_dataframe(tmp_path):
     metrics_path = _write_metrics_full(tmp_path)
     clusters_path = _write_cluster_config(tmp_path, {"iran": ["mkt1"]})
     risk_path = _write_risk_config(tmp_path)
-    # Stable features: should match what compute_features_batch emits + cluster cols
     artifact_path = _write_model_artifact(tmp_path, [
         "momentum_24h", "momentum_72h", "price_now", "time_to_resolution",
     ])

@@ -1,22 +1,4 @@
-"""Trading executor -- ties edge signals to execution through a VenueAdapter.
-
-Flow per intent:
-1. Re-price the edge with the VENUE's fee and carry models over the
-   expected holding period (days to scheduled resolution): net EV and a
-   fee/carry-aware half-Kelly replace the frictionless numbers that came
-   out of the research pipeline.
-2. Risk checks (RiskManager) on the re-priced edge.
-3. Build the order (edge_to_order) for the right LEG (YES/NO contract).
-4. Optional human approval.
-5. Place via OrderManager (simulated, or through the venue on PAPER).
-6. Record the trade (PositionTracker) and exposure (RiskManager).
-
-Depends only on `VenueAdapter` -- no venue library, no venue identifiers.
-Modes: "dry_run" (always simulate), "approve" (ask per trade), "auto".
-Whether orders reach the venue at all is decided by the adapter
-(read-only adapters always simulate) and the `simulate` flag; the IBKR
-adapter refuses to transmit unless it is connected to a PAPER account.
-"""
+"""Trading executor -- ties edge signals to execution through a VenueAdapter."""
 
 from __future__ import annotations
 
@@ -40,23 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _group_key(question_id: str) -> str:
-    """The correlated-print group for a question_id (H5 cap, Task 3.6).
-
-    SINGLE-SOURCE-OF-TRUTH: this expression, `question_id.rsplit(":",
-    1)[0]`, is IDENTICAL to `src.trading.reconcile._group_key` -- an
-    executor-side group and a DB-seeded group (`load_open_commitments`'s
-    `by_group` keys) must name the same print, or `seed_group_exposure`
-    and `RiskManager.add_exposure(..., group_key=...)` would silently
-    talk past each other. Do not change this expression here without
-    changing it there too.
-
-    Scoped to `gtm:*` ids only, per the Task 3.6 brief's Q5 decision
-    (only the GTM strike ladder is grouped today): any other question_id
-    -- a legacy Polymarket id, or a future non-GTM lane -- gets
-    group_key="", which `RiskManager.check_trade`/`add_exposure` both
-    treat as "no group" (uncapped by group, byte-identical to before this
-    cap existed).
-    """
+    """The correlated-print group for a question_id (H5 cap)."""
     if not question_id.startswith("gtm:"):
         return ""
     return question_id.rsplit(":", 1)[0]
@@ -107,20 +73,7 @@ class ExecutionReport:
     decisions: list[TradeDecision] = field(default_factory=list)
 
     def summary(self) -> str:
-        """This run's own analyze/propose/approve/execute/reject counts
-        and per-decision lines. Deliberately does NOT render per-group
-        committed-book totals (H5, Task 3.6) -- an `ExecutionReport` only
-        ever sees `self.decisions`, i.e. THIS run's own evaluations, and a
-        block computed purely from that can never show a DB-seeded
-        commitment a dedup pass correctly kept out of this run's decisions
-        altogether (controller ruling R16, finding I-1): the three resting
-        gtm:2026-12 orders ($29.64) are dropped by `drop_already_committed`
-        before the executor ever evaluates them, so a from-decisions-only
-        block can never print them, and a partially-seeded group would
-        under-report what is actually committed. See
-        `render_group_commitments` for the correct, ledger-backed block,
-        and `group_order_counts` for this run's own contribution to it.
-        """
+        """This run's own analyze/propose/approve/execute/reject counts and per-decision lines."""
         mode = "SIMULATED" if self.simulated else f"VENUE:{self.venue}"
         lines = [
             f"=== Execution Report ({self.timestamp:%Y-%m-%d %H:%M}) [{mode}] ===",
@@ -143,17 +96,7 @@ class ExecutionReport:
         return "\n".join(lines)
 
     def group_order_counts(self) -> dict[str, int]:
-        """This run's OWN order count per correlated group (H5, Task 3.6).
-
-        Only THIS run's executed decisions -- never the DB-seeded book (a
-        prior run's or the venue's already-resting orders never appear in
-        `self.decisions` at all, since `drop_already_committed` drops them
-        before the executor evaluates anything). A caller wanting the full
-        committed-book count adds `load_open_commitments(db)
-        ["by_group_counts"]` to this (controller ruling R16): see
-        `render_group_commitments`. Ungrouped decisions (`group_key ==
-        ""`) are omitted -- there is nothing "correlated" to count there.
-        """
+        """This run's OWN order count per correlated group (H5)."""
         counts: dict[str, int] = {}
         for d in self.decisions:
             if not d.executed or d.order is None:
@@ -166,38 +109,7 @@ class ExecutionReport:
 
 
 def render_group_commitments(group_exposure: dict[str, float], group_counts: dict[str, int]) -> str:
-    """Render the per-correlated-group COMMITTED BOOK block for a run's
-    printed report (H5, Task 3.6; controller ruling R16 fix for finding
-    I-1: the original block summed only this run's own placements, which
-    can never show a DB-seeded commitment dedup correctly kept out of this
-    run altogether, and under-reports a partially-seeded group).
-
-    A pure function fed two explicit dicts, deliberately NOT a method on
-    `ExecutionReport` and NOT importing `RiskManager` or
-    `src.trading.reconcile` here: `ExecutionReport` only ever sees this
-    run's own decisions, and `RiskManager`/`reconcile` are the two other
-    places that between them hold what this needs (the live group ledger,
-    and the DB-seeded order counts) -- gluing them here would mean
-    `executor.py` importing `reconcile.py`, which is unnecessary coupling
-    when the caller (`scripts/run_ibkr_paper.py`) already imports both and
-    can hand over plain dicts.
-
-    Args:
-        group_exposure: `RiskManager.group_exposure()` -- the live ledger,
-            i.e. whatever `seed_group_exposure` restored from the DB's
-            open book (a prior process's or the venue's resting
-            commitments) MAX'd against whatever THIS run's own
-            `add_exposure(..., group_key=...)` calls added on top. This is
-            the actual committed dollar figure -- seed AND this run
-            together, not this run alone.
-        group_counts: order count per group, ALREADY merged by the caller
-            -- typically `load_open_commitments(db)["by_group_counts"]`
-            (the DB-seeded count) plus `report.group_order_counts()`
-            (this run's own count) added together per key.
-
-    Returns "" (no block at all) when `group_exposure` is empty -- nothing
-    correlated to report.
-    """
+    """Render the per-correlated-group COMMITTED BOOK block for a run's printed report."""
     if not group_exposure:
         return ""
     lines = ["Correlated groups (committed book per print -- DB-seeded + this run):"]
@@ -217,14 +129,7 @@ def _days_until(ts: datetime | None) -> int | None:
 
 
 class TradingExecutor:
-    """Orchestrates intent -> risk -> order -> venue -> ledger.
-
-    Usage:
-        venue = IBKRAdapter(settings, role="live_trading", read_only=False)
-        venue.connect()                      # must be a PAPER account
-        executor = TradingExecutor(venue=venue, bankroll=1000.0)
-        report = executor.execute_intents(intents, mode="approve")
-    """
+    """Orchestrates intent -> risk -> order -> venue -> ledger."""
 
     def __init__(
         self,
@@ -278,11 +183,7 @@ class TradingExecutor:
 
     # -- main entry points -------------------------------------------------
     def execute(self, results: Iterable, mode: str = "approve") -> ExecutionReport:
-        """Back-compat entry for the research pipeline (ResearchResult objects).
-
-        Maps each result to a TradeIntent on a Polymarket-identified market.
-        Research-only venue -> always simulated.
-        """
+        """Back-compat entry for the research pipeline (ResearchResult objects)."""
         intents: list[TradeIntent] = []
         for r in results:
             if not getattr(r, "has_edge", False):
@@ -336,7 +237,7 @@ class TradingExecutor:
 
             if mode == "approve":
                 approved = self._prompt_approval(decision)
-            else:  # "auto" or "dry_run" -- dry_run is enforced via simulate, not here
+            else:
                 approved = True
             if not approved:
                 decision.reason = "User rejected"
@@ -363,22 +264,6 @@ class TradingExecutor:
         edge = intent.edge
         title = intent.title or intent.market.title or edge.question_id
 
-        # L1 (Task 3.8): re-source this initial gate from the configured
-        # RiskLimits.min_edge_pct instead of EdgeSignal.has_edge's hardcoded
-        # 0.05 -- `has_edge` itself stays (research-pipeline callers such as
-        # `execute()`/agent/researcher.py still use it), but the executor's
-        # OWN gate must agree with whatever threshold `check_trade` below is
-        # configured with, or a caller-supplied min_edge_pct is silently
-        # overridden by this earlier check.
-        #
-        # Strict `>`, NOT `>=` (fix round 1, finding C-1 / controller ruling
-        # R18): the brief's literal ">=" conflicted with its own "keeps
-        # behavior identical" clause -- has_edge used strict `>`, so an
-        # edge_pct landing EXACTLY on the default 0.05 floor (reachable,
-        # e.g. 0.10 - 0.05 == 0.05 in IEEE-754) was rejected before this
-        # gate existed and must stay rejected now. Do NOT change this to
-        # match check_trade's own edge-threshold check a few lines below,
-        # which is intentionally still `>=` and untouched by this gate.
         min_edge_pct = self._risk_manager.limits.min_edge_pct
         if not (abs(edge.edge_pct) > min_edge_pct and edge.expected_value > 0):
             return TradeDecision(
@@ -394,7 +279,7 @@ class TradingExecutor:
         if days is None:
             days = _days_until(intent.market.expiry)
         if days is None:
-            days = 30  # conservative default when the venue gives no timing
+            days = 30
         holding_days = float(days)
 
         # Re-price with the venue's economics over the holding period.
@@ -408,8 +293,6 @@ class TradingExecutor:
         else:
             net_ev = expected_value_no(p, yes_price, **kwargs)
             kelly = kelly_for_no(p, yes_price, **kwargs)
-        # Same haircuts the research edge finder applies (half-Kelly, VPIN,
-        # confidence) -- but on the fee/carry-aware fraction.
         kelly *= 0.5
         if edge.vpin_flag:
             kelly *= 0.5
@@ -486,20 +369,7 @@ class TradingExecutor:
         return ok
 
     def sync(self) -> int:
-        """Pull fill/cancel status from the venue for placed orders; record fills.
-
-        Also backfills any permId the venue had not yet assigned when this
-        run's orders were acked (final-review finding I-1, see
-        ``OrderManager.backfill_perm_ids``). It lives here rather than in
-        ``scripts/run_ibkr_paper.py`` because this is already the one step
-        that re-reads venue truth for this run's placed orders and persists
-        it, and the executor is the layer holding both halves -- the
-        in-memory orders and the book -- so the entrypoint needs no new
-        plumbing, and any future caller of ``sync`` gets it too. Read-only
-        at the venue; a simulated executor makes no venue call at all.
-        Returns the number of orders whose fill/cancel status changed (the
-        backfill count is logged, not added in).
-        """
+        """Pull fill/cancel status from the venue for placed orders; record fills."""
         updated = self._order_manager.sync_with_venue()
         for order in self._order_manager.filled_orders:
             self._position_tracker.record_trade(order)  # INSERT OR REPLACE keeps it idempotent

@@ -1,14 +1,4 @@
-"""GitHub Activity collector — repo signals for tech event predictions.
-
-GitHub activity is a strong leading indicator for tech events:
-- Spike in commits to a release branch = product launch imminent
-- New release tags = product shipped
-- Issue activity / milestones = progress tracking
-- Stars/forks acceleration = growing interest
-
-Uses GitHub REST API v3. Free tier: 60 req/hr unauthenticated,
-5,000 req/hr with a personal access token.
-"""
+"""GitHub Activity collector — repo signals for tech event predictions."""
 
 import logging
 from datetime import datetime, timedelta
@@ -24,8 +14,6 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 
-# Map keywords to relevant GitHub repos for tech event tracking
-# Format: {keyword_fragment: [("owner/repo", "description")]}
 REPO_MAP: dict[str, list[tuple[str, str]]] = {
     "gpt": [("openai/openai-python", "OpenAI Python SDK")],
     "openai": [("openai/openai-python", "OpenAI Python SDK")],

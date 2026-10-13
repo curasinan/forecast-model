@@ -47,9 +47,6 @@ def _edges_df(rows: list[tuple[str, float, bool]]) -> pd.DataFrame:
     ])
 
 
-# --- Kelly math ----------------------------------------------------------- #
-
-
 def test_kelly_fraction_basic():
     # p=0.5, b=5 → f* = 0.5 - 0.5/5 = 0.4
     assert _kelly_fraction(0.5, 5.0) == pytest.approx(0.4)
@@ -63,9 +60,6 @@ def test_kelly_fraction_clipped_negative():
 def test_kelly_fraction_zero_b():
     # Defensive: b=0 should not divide by zero
     assert _kelly_fraction(0.6, 0.0) == 0.0
-
-
-# --- _load_kelly_inputs --------------------------------------------------- #
 
 
 def test_load_kelly_inputs_happy_path(tmp_path):
@@ -98,13 +92,8 @@ def test_load_kelly_inputs_missing_keys(tmp_path):
         _load_kelly_inputs(bad)
 
 
-# --- size_positions ------------------------------------------------------- #
-
-
 def test_sizing_applies_kelly_and_quarter_multiplier(tmp_path):
     mp = _write_metrics(tmp_path, p=0.5, avg_buy=-0.005, avg_sell=0.020)
-    # b = 0.020 / 0.005 = 4 → f* = 0.5 - 0.5/4 = 0.375 → quarter = 0.09375
-    # On $1000 bankroll → $93.75 raw, capped at 5% = $50.
     edges = _edges_df([("m1", 0.01, True)])
     sized = size_positions(edges, bankroll=1000.0, metrics_path=mp)
     assert sized.loc[0, "kelly_fraction"] == pytest.approx(0.375)
@@ -115,8 +104,6 @@ def test_sizing_applies_kelly_and_quarter_multiplier(tmp_path):
 
 def test_sizing_respects_5pct_cap(tmp_path):
     mp = _write_metrics(tmp_path, p=0.6, avg_buy=-0.005, avg_sell=0.050)
-    # b = 10 → f* = 0.6 - 0.4/10 = 0.56 → quarter = 0.14 → 14% of bankroll
-    # Cap is 5%, so position should be exactly 5% regardless.
     edges = _edges_df([("m1", 0.01, True)])
     sized = size_positions(edges, bankroll=1000.0, metrics_path=mp)
     assert sized.loc[0, "position_dollars"] == pytest.approx(50.0)
