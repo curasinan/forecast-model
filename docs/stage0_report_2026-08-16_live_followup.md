@@ -13,14 +13,14 @@ Managed accounts: ['U0000000']
 Server version: 178
 Account modes (by prefix): {'U0000000': 'live'}
   U0000000  AccountType = INDIVIDUAL 
-  U0000000  AccruedCash = 0.00 USD
-  U0000000  AvailableFunds = 20.88 USD
-  U0000000  NetLiquidation = 20.88 USD
-  U0000000  TotalCashValue = 20.88 USD
+  U0000000  AccruedCash = [redacted]
+  U0000000  AvailableFunds = [redacted]
+  U0000000  NetLiquidation = [redacted]
+  U0000000  TotalCashValue = [redacted]
 
 NOTE: the servicing IBKR legal entity is not exposed via the API.
 Confirm it in Client Portal (Settings -> Account Settings) and
-record it in docs/venue_semantics.md. Turkey-resident accounts are
+record it in docs/venue_semantics.md. Non-US-resident accounts are
 typically held by a non-US entity; product availability follows the
 entity, which is exactly what the probes below measure.
 

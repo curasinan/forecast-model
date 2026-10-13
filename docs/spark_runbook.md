@@ -5,7 +5,7 @@
 > mirror. Section 7 describes the Spark as the runtime and takes over at the
 > cutover (`docs/spark_runtime_cutover_<date>.md`, when it exists).
 
-Design: `docs/plans/2026-09-30-spark-research-split-design.md`. Parity evidence:
+Parity evidence:
 the newest `docs/spark_parity_*.md` with its `_zenbook.json` / `_spark.json`
 payloads. This page is the operator's view.
 
@@ -16,7 +16,7 @@ repo root. It defines `SSH` and `SCP` (the Windows OpenSSH `ssh.exe` and
 
 ## 1. What the Spark is, and is not
 
-The Spark (`spark-8f47`, aarch64, 128 GB unified memory) runs the research
+The Spark (aarch64, 128 GB unified memory) runs the research
 half of this repo and the local vLLM model. It is NOT a trading machine:
 
 | Role | clientId | Machine |
@@ -350,7 +350,7 @@ role, if it ever comes, goes over Tailscale first (operator decision
 (`docs/spark_runtime_cutover_<date>.md`) exists, the Zenbook runs the runtime,
 `docs/ibkr_runbook.md` describes it, and sections 1 to 3 above are the rules
 in force. From the cutover on, this section replaces them wherever they
-disagree. Design: `docs/plans/2026-10-05-spark-runtime-move-design.md`.
+disagree.
 
 Git Bash commands assume `source scripts/spark/env.sh`, as everywhere on this
 page. A shell script is always started through `bash` (the checkout carries no

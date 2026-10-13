@@ -1,4 +1,4 @@
-# Climate contract resolution-oracle research (full agent reports)
+# Climate contract resolution-oracle research (full reports)
 
 Verbatim research reports, 2026-08-18. Sources are the venue's own
 T&C PDFs at data.forecastex.com/regulatory/ plus the ForecastEx LLC
@@ -10,7 +10,7 @@ evidence trail.
 
 ---
 
-## Agent report 1
+## Report 1
 
 I have everything needed. Compiling the structured report.
 
@@ -71,7 +71,7 @@ I have everything needed. Compiling the structured report.
 - **No third-party source disagreements found**, but note the T&C-vs-rulebook numbering quirk: the T&Cs cite "Rule 413" for early resolution, while the Feb-2026 rulebook's Rule 413 is titled "Contract Modifications" (early-resolution power sits in Rule 413(b)); Rule 414 is "Accelerated Settlement."
 - `forecastex.com/contract-specifications/` returned 404; the authoritative documents live at `data.forecastex.com/regulatory/{CODE}TermsandConditions.pdf`. I could not locate a public index page listing ACD/MACD/GCE, so I cannot rule out that a newer T&C version supersedes these files (the MACD PDF metadata shows creation date 2026-07-30, i.e., current).
 - Nothing in any document defines behavior for an **exact strike tie**; strict-inequality reading is from question wording only.
-- Local copies of all four T&C PDFs and the rulebook are saved under `C:\Users\asus\.claude\projects\C--Users-asus-OneDrive-Desktop-new-work\700f328e-16ae-4360-847b-6cac0df3349e\tool-results\` (USCE `webfetch-1787004213327-v3vur2.pdf`, ACD `webfetch-1787004214472-rc65dz.pdf`, GCE `webfetch-1787004245580-mov5zs.pdf`, MACD `webfetch-1787004247162-1d8p52.pdf`, rulebook `webfetch-1787004317479-5pes4h.pdf`, extracted text `rulebook_extract.txt` / `rulebook_squashed.txt`).
+- Local copies of all four T&C PDFs and the rulebook are kept outside the repository.
 
 Sources:
 - [ACD Contract Terms and Conditions](https://data.forecastex.com/regulatory/ACDTermsandConditions.pdf)
@@ -88,7 +88,7 @@ Sources:
 
 ---
 
-## Agent report 2
+## Report 2
 
 All load-bearing sources are now verified from the venue's own rule text. Here is the structured report.
 
@@ -102,7 +102,7 @@ All load-bearing sources are now verified from the venue's own rule text. Here i
 - Rulebook (v. Feb 17, 2026): https://data.forecastex.com/regulatory/ForecastEx_LLC_Rulebook.pdf
 - NOAA underlying (hyperlinks extracted from the T&C PDFs' link annotations): release schedule https://www.ncei.noaa.gov/access/monitoring/dyk/monthly-releases ; GT report https://www.ncei.noaa.gov/access/monitoring/monthly-report/global/202313 ; GTM/GTTA/GTTM tool https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/globe/tavg/land_ocean/1/0/1850-2025
 
-Local copies of the four T&C PDFs, rulebook, and two CFTC filings: `C:\Users\asus\.claude\projects\C--Users-asus-OneDrive-Desktop-new-work\700f328e-16ae-4360-847b-6cac0df3349e\tool-results\` (files `webfetch-1787004217861-243dhu.pdf` = GT, `...219229-sqxxo8.pdf` = GTM, `...277999-p6u0y9.pdf` = GTTA, `...279614-lexh56.pdf` = GTTM, `...370798-qbqq1o.pdf` = Rulebook).
+Local copies of the four T&C PDFs, the rulebook and two CFTC filings are kept outside the repository.
 
 ## ANSWER TO THE AUDIT'S CRITICAL QUESTION
 
@@ -160,7 +160,7 @@ Sources: [GT T&C](https://data.forecastex.com/regulatory/GTTermsandConditions.pd
 
 ---
 
-## Agent report 3
+## Report 3
 
 All verification complete. I have the venue's own T&C PDFs, the rulebook, and the live IBKR ForecastTrader rules endpoint that links each listed product to its governing document. Final report:
 

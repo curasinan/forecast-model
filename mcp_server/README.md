@@ -9,7 +9,8 @@ climate scripts, not these PM tools.
 pip install -e ".[mcp,trading]"
 ```
 
-Cursor loads [`.cursor/mcp.json`](../.cursor/mcp.json).
+Any MCP client can launch it over stdio: `python -m mcp_server`, with the repo root as
+working directory and on `PYTHONPATH`.
 
 ## What still runs
 

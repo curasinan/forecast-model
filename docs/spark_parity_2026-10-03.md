@@ -1,7 +1,5 @@
 # Spark parity report -- 2026-10-03
 
-Design: `docs/plans/2026-09-30-spark-research-split-design.md` (section 5).
-Plan: `docs/plans/2026-10-01-spark-research-split.md`.
 Every block below is pasted verbatim from the command that produced it,
 except that remote URLs and hardware UUIDs are never pasted.
 

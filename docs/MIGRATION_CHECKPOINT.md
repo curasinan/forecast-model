@@ -1,7 +1,7 @@
 # Migration Checkpoint -- Polymarket -> IBKR ForecastEx
 
-**Checkpoint date: 2026-08-25 (migration COMPLETE).** Purpose: let any future session (new model,
-fresh context, resumed after a break) pick up exactly here. Read this first,
+**Checkpoint date: 2026-08-25 (migration COMPLETE).** Purpose: record the state of the
+migration so that work can be picked up exactly here. Read this first,
 then `docs/venue_semantics.md` (verified venue facts) and
 `docs/feature_migration_audit.md` (per-feature verdicts). The original spec
 is the 8-stage migration specification supplied by the account holder; the
@@ -332,7 +332,7 @@ account holder; no commit in this repo enables it.
 - RC* symbols are Regional CPI, not rainfall; ForecastEx lists NO daily
   weather products -- the weather track's EMOS engine has no direct target.
 - **`%LOCALAPPDATA%` is a trap under a packaged (MSIX) app** (found
-  2026-08-25). Claude Code runs inside the packaged Claude app, which gets a
+  2026-08-25). A process started inside a packaged desktop app gets a
   per-app virtualised view of AppData: the SAME path resolved to two
   different stores depending on whether the writer ran inside the container
   or outside it (Task Scheduler). Symptom: the recorder heartbeat looked
@@ -420,7 +420,7 @@ facts, `ea6bcfc` tick snapping, `7e73535`/`d07b7f6` backfill run + ledger,
 `def51b5` Stage-5 probe, `ad58918` Stage 5/8 finish, `ef4e31f` executor
 rewiring, `1ff5f52` GTM model, `d976323` Polymarket runtime gate, `597d96f`
 backfills, `7f6d532` climate package, `99ace7a` oracles.
-Untracked and intentionally NOT part of the migration: `.agents/`,
+Untracked and intentionally NOT part of the migration:
 `bist_brief/*`, `archive (1).zip`, `logs/`.
 
 ## 7. Open user actions (priority order)
@@ -443,7 +443,7 @@ registered, retired Polymarket tasks unregistered (`backup_db` kept on
 purpose), Stage 0 live + paper gates, CDS licences + backfills, executor
 rewiring, hourly-gap backfill, first paper orders.
 
-## 8. What to do next session
+## 8. What to do next
 
 Nothing is half-built. The useful moves, in order:
 
@@ -465,12 +465,12 @@ Nothing is half-built. The useful moves, in order:
 ## 9. History rewrite and rename (2026-10-02)
 
 The repository was renamed `forecast-model` and its history rewritten once.
-Commit messages lost their tool co-author trailers, and the two real IBKR
+The two real IBKR
 account identifiers were replaced everywhere by placeholders: `U0000000`
 is the live account and `DU0000000` the paper account (the rule that a
 DU/DF prefix means paper is unchanged). Every commit hash therefore
-changed. Hashes cited in this file, in `docs/migration_report.md` and in
-`docs/plans/` are the PRE-rewrite hashes;
+changed. Hashes cited in this file and in `docs/migration_report.md` are the
+PRE-rewrite hashes;
 `docs/history_rewrite_2026-10-02_sha_map.txt` maps each old hash to its new
 one. The real account identifiers live only in the operator's local,
 untracked `docs/local/` notes.
@@ -489,14 +489,12 @@ the pricing/ordering path by `tests/test_architecture/test_llm_boundary.py`.
 ## 11. Runtime move to the Spark (2026-10)
 
 **Status: built, not cut over.** The Zenbook is still the runtime; everything
-in sections 0 to 8 and in section 10 stands. What exists: the design
-(`docs/plans/2026-10-05-spark-runtime-move-design.md`), the plan
-(`docs/plans/2026-10-05-spark-runtime-move.md`), and the build in the
+in sections 0 to 8 and in section 10 stands. What exists is the build in the
 repository: systemd units under `deploy/spark/` (among them the owner rule
 that admits only `trading` to the Gateway port), a marker file that tells a
 mirror from the live root, a daily backup with a restore check, and the
 deploy, pull, mirror and rollback scripts under `scripts/spark/`. What will
-exist once Tasks 0 and 11 are done: the spike report
+exist once the Spark is set up: the spike report
 (`docs/spark_runtime_spike_<date>.md`), a Linux user `trading` on the Spark
 with a runtime clone and the units installed, and the external heartbeat
 checks. The operator's view is `docs/spark_runbook.md` section 7. This

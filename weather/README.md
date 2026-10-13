@@ -21,19 +21,12 @@ For this trading bot, set one of:
 
 SQLite + OneDrive sync corrupts databases. Weather data defaults to:
 
-- Windows: `%LOCALAPPDATA%\polymarket_weather`
+- Default: `~/quant_data/polymarket_weather`
 - Override: `WEATHER_DATA_ROOT=C:\data\polymarket_weather`
 
 ### Snapshot liquidity
 
 `get_snapshot_candidates` applies a lower liquidity/volume floor for temperature questions (`WEATHER_MIN_LIQUIDITY`, `WEATHER_MIN_VOLUME`).
-
-## Work split
-
-| Track | Owner | Scope |
-|---|---|---|
-| Historical EMOS backfill (Previous/Single Runs + IEM history + fit) | Claude Code | training data / fitted params |
-| Live markets + CLOB quotes + serve-path parity | Cursor | discover, `xmodel_prevruns_v1` features, paper wire-up |
 
 ## Commands
 
@@ -67,7 +60,7 @@ python scripts/run_weather_paper.py --require-live-quote --allow-noncommercial -
 python -m collectors.weather.collect_weather_snapshots --limit 100
 ```
 
-### Live market ops (Cursor track)
+### Live market ops
 
 1. `refresh_markets` needs Gamma reachability. If `ConnectTimeout`, use VPN/network
    fix — local `polymarket.db` may be stale (no new daily city markets).
@@ -171,13 +164,13 @@ series — pure look-ahead — and is never ingested. Training joins apply
 - Wunderground is a sparse resolution oracle (Global); NWS CLI is the US oracle.
 - Labels need `finalized=1` and ≥72h age before `usable_for_training=1`.
 
-## MCP (Cursor agents)
+## MCP
 
 Live/recent fetch & analysis tools for agents: see [`mcp_server/README.md`](../mcp_server/README.md).
 
 ```bash
 pip install -e ".[mcp,trading]"
-python -m mcp_server   # stdio; Cursor loads .cursor/mcp.json
+python -m mcp_server   # stdio
 ```
 
 Typical agent flow: `status` → `wx_discover_markets` → `wx_get_quote` / `wx_snapshot_books` → `wx_paper_signals`.

@@ -20,7 +20,7 @@ Account modes (by prefix): {'DU0000000': 'paper'}
 
 NOTE: the servicing IBKR legal entity is not exposed via the API.
 Confirm it in Client Portal (Settings -> Account Settings) and
-record it in docs/venue_semantics.md. Turkey-resident accounts are
+record it in docs/venue_semantics.md. Non-US-resident accounts are
 typically held by a non-US entity; product availability follows the
 entity, which is exactly what the probes below measure.
 
