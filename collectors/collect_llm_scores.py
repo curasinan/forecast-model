@@ -1,27 +1,4 @@
-"""LLM market scoring — independent probability estimates for political markets.
-
-For every fresh, active political market this collector asks Claude
-(``claude-sonnet-4-6``) for an independent probability that the market
-resolves YES, a category classification, and 2-4 news-search keywords.
-
-CRITICAL DESIGN CONSTRAINT: the prompt receives ONLY the market's question
-text, description/resolution criteria, and end date. It never sees the
-market price, odds, volume, or any other Polymarket trading data — the whole
-point is to measure whether a price-blinded estimate carries signal the
-price lacks. The prompt-builder function only accepts those three fields,
-so the constraint holds by construction.
-
-Runs:
-    python -m collectors.collect_llm_scores [--limit N] [--force]
-    python -m collectors.collect_llm_scores --retrospective   # one-time pilot
-
-The retrospective pilot scores already-resolved markets with the identical
-prompt and immediately reports an edge check vs the 48h-before market price.
-Its output is CONTAMINATED (the model may know these outcomes from training)
-and is labeled as directional-only everywhere it appears.
-
-Env: ANTHROPIC_API_KEY (loaded from .env via python-dotenv). Never logged.
-"""
+"""LLM market scoring — independent probability estimates for political markets."""
 
 from __future__ import annotations
 
@@ -38,6 +15,8 @@ from typing import Any, Iterable
 
 import requests
 from dotenv import load_dotenv
+
+from src.utils.prompts import load_prompt
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "polymarket.db"
@@ -67,9 +46,7 @@ GAMMA_MARKET_URL = "https://gamma-api.polymarket.com/markets/{}"
 log = logging.getLogger("collect_llm_scores")
 
 
-# --------------------------------------------------------------------------- #
 # Logging
-# --------------------------------------------------------------------------- #
 
 
 def setup_logging() -> None:
@@ -90,9 +67,7 @@ def setup_logging() -> None:
     log.addHandler(console)
 
 
-# --------------------------------------------------------------------------- #
 # Schema
-# --------------------------------------------------------------------------- #
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -127,47 +102,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-# --------------------------------------------------------------------------- #
 # Prompt
-# --------------------------------------------------------------------------- #
 
-# Stable system prompt — keep byte-identical across calls so prompt caching
-# can engage (volatile market text goes in the user turn).
-SYSTEM_PROMPT = """You are a careful superforecaster estimating probabilities \
-for prediction-market questions about politics and geopolitics.
-
-You are NOT given the market's trading price, odds, volume, or any other \
-market data — only the question text itself. Do not attempt to guess or \
-anchor on what the market price might be. Reason independently from:
-- historical base rates for this type of event
-- publicly known context as of your training data
-- structural factors (deadlines, institutional procedure, incentives)
-
-Definitions for the category field (choose exactly one):
-- legislation: a bill/law passing a legislature by a date
-- executive_action: an executive order, announcement, or unilateral government action
-- nomination_confirmation: a nominee being confirmed/appointed to a post
-- diplomatic_summit: a meeting, summit, or negotiation occurring
-- election_incumbent: an election where an incumbent seeks re-election
-- election_open: an election with no incumbent running
-- judicial: a court ruling or judicial outcome
-- government_operations: shutdowns, budgets, debt ceilings, procedural operations
-- leadership_stability: a leader remaining in / leaving office outside elections
-- other: anything that fits none of the above
-
-Also produce 2-4 short news-search keywords (proper nouns and specific terms
-from the question, not generic words like "politics" or "will").
-
-Respond with a single JSON object:
-{
-  "probability": <float 0-1, probability the market resolves YES>,
-  "confidence": "low" | "medium" | "high",
-  "reasoning": "<two sentences maximum>",
-  "recognized_outcome": <true if you believe you already know this market's \
-actual resolution from your training data, else false>,
-  "category": "<one of the ten categories>",
-  "search_keywords": ["<2-4 keywords>"]
-}"""
+SYSTEM_PROMPT_NAME = "llm_scores_system"
 
 OUTPUT_SCHEMA: dict = {
     "type": "object",
@@ -198,9 +135,7 @@ def build_user_prompt(question: str, description: str | None, end_date: str | No
     return "\n\n".join(parts)
 
 
-# --------------------------------------------------------------------------- #
 # Response validation
-# --------------------------------------------------------------------------- #
 
 
 def _validate_score_payload(raw: Any) -> dict | None:
@@ -256,9 +191,7 @@ def _validate_score_payload(raw: Any) -> dict | None:
     }
 
 
-# --------------------------------------------------------------------------- #
 # Market context (description lazy-fetch)
-# --------------------------------------------------------------------------- #
 
 
 def _fetch_description(session: requests.Session, market_id: str) -> str | None:
@@ -298,9 +231,7 @@ def get_market_context(
     return question, description, end_date
 
 
-# --------------------------------------------------------------------------- #
 # Candidate selection
-# --------------------------------------------------------------------------- #
 
 
 def load_prospective_candidates(
@@ -353,9 +284,7 @@ def load_retrospective_candidates(db_path: Path | str) -> list[str]:
     return load_candidate_market_ids(db_path)
 
 
-# --------------------------------------------------------------------------- #
 # Scoring loop
-# --------------------------------------------------------------------------- #
 
 
 class UsageTotals:
@@ -389,11 +318,7 @@ def score_market(
     totals: UsageTotals,
     use_structured: bool,
 ) -> tuple[dict | None, bool]:
-    """One API call. Returns (validated_payload | None, structured_ok).
-
-    ``structured_ok`` turns False when the API rejects output_config so the
-    caller can fall back to prompt-JSON for the remainder of the run.
-    """
+    """One API call. Returns (validated_payload | None, structured_ok)."""
     import anthropic
 
     kwargs: dict = dict(
@@ -401,7 +326,7 @@ def score_market(
         max_tokens=MAX_OUTPUT_TOKENS,
         system=[{
             "type": "text",
-            "text": SYSTEM_PROMPT,
+            "text": load_prompt(SYSTEM_PROMPT_NAME),
             "cache_control": {"type": "ephemeral"},
         }],
         messages=[{
@@ -511,9 +436,7 @@ def run_scoring(
     }
 
 
-# --------------------------------------------------------------------------- #
 # Base-rate divergence helper (Component 2)
-# --------------------------------------------------------------------------- #
 
 
 def get_base_rate_divergence(
@@ -521,11 +444,7 @@ def get_base_rate_divergence(
     db_path: Path | str = DB_PATH,
     base_rates_path: Path | str = BASE_RATES_PATH,
 ):
-    """DataFrame: market_id, category, base_rate, current_midpoint, divergence.
-
-    divergence = current_midpoint - base_rate; null when the category has no
-    base rate, the market has no LLM score, or no snapshot midpoint exists.
-    """
+    """DataFrame: market_id, category, base_rate, current_midpoint, divergence."""
     import pandas as pd
 
     ids = [str(m) for m in market_ids]
@@ -582,9 +501,7 @@ def get_base_rate_divergence(
     return pd.DataFrame(rows, columns=cols)
 
 
-# --------------------------------------------------------------------------- #
 # Retrospective pilot edge check
-# --------------------------------------------------------------------------- #
 
 PILOT_LABEL = (
     "CONTAMINATED PILOT — the model may have seen these outcomes in training; "
@@ -667,9 +584,7 @@ def run_pilot_edge_check(db_path: Path | str = DB_PATH) -> dict:
     return result
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
 
 
 def main(argv: list[str] | None = None) -> int:

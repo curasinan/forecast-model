@@ -1,15 +1,4 @@
-"""Level 3 Predictor: Claude as a structured reasoning engine.
-
-This is where Claude receives the full evidence bundle and outputs a
-calibrated probability with chain-of-thought reasoning.
-
-Key design choice: Claude gets structured input (evidence + features + market data)
-and must return structured JSON output (probability + confidence + reasoning).
-The system prompt emphasizes CALIBRATION — when Claude says 70%, events like
-that should happen ~70% of the time.
-
-Uses Anthropic's Python SDK with the Messages API.
-"""
+"""Level 3 Predictor: Claude as a structured reasoning engine."""
 
 import json
 import logging
@@ -21,36 +10,11 @@ from src.models.evidence import EvidenceBundle
 from src.models.prediction import Prediction
 from src.models.question import Question
 from src.predictors.base import BasePredictor
+from src.utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a calibrated prediction analyst for tech industry events.
-
-Your job:
-1. Analyze evidence FOR and AGAINST the event happening.
-2. Consider base rates for similar events (e.g., how often do AI labs hit announced timelines?).
-3. Weigh source credibility — Reuters matters more than a random blog.
-4. Output a CALIBRATED probability (0.0 to 1.0) for YES.
-5. Explain your reasoning step by step.
-
-CALIBRATION RULES:
-- When you say 70%, events like that should actually happen about 70% of the time.
-- Avoid extremes (below 0.05 or above 0.95) unless evidence is overwhelming.
-- If evidence is sparse or contradictory, stay closer to 0.50 (maximum uncertainty).
-- The market price represents the crowd's current estimate. You should deviate from it
-  only when you have specific evidence-based reasons to do so.
-
-RESPONSE FORMAT (strict JSON):
-{
-    "probability": <float 0.0-1.0>,
-    "confidence": <float 0.0-1.0>,
-    "reasoning": "<your step-by-step analysis>",
-    "evidence_for": ["<key point 1>", "<key point 2>"],
-    "evidence_against": ["<key point 1>", "<key point 2>"],
-    "base_rate_estimate": "<your estimate of how often similar events happen>"
-}
-
-Respond ONLY with valid JSON. No markdown, no code blocks, just the JSON object."""
+SYSTEM_PROMPT_NAME = "llm_predictor_system"
 
 
 class LLMPredictor(BasePredictor):
@@ -179,12 +143,13 @@ Remember: only deviate from the market price if you have specific evidence-based
             )
 
         user_prompt = self._build_prompt(question, bundle, features)
+        system_prompt = load_prompt(SYSTEM_PROMPT_NAME)
 
         try:
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=1024,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             )
 
