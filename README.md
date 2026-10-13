@@ -280,13 +280,25 @@ backup under a dedicated `trading` user. `scripts/spark/` holds the tooling:
 | `deploy.sh` | Pushes `main` to the runtime clone and restarts the recorder between two sweeps |
 | `push_snapshot.sh`, `pull_snapshot.sh` | Copy a frozen data root to the box, or its live root back. Run inside WSL |
 | `mirror_live.sh` | Refreshes the research copy from the live root, on the box |
-| `research_run.sh` | Runs a research job under a memory ceiling |
+| `research_run.sh` | Runs a research job under a host-memory ceiling; `--gpu-budget` sets its GPU budget |
 | `rollback.sh` | Moves the runtime back to the Windows machine |
 | `session_check.py`, `cutover_check.py`, `restore_check.py`, `verify_mirror.py` | Checks around a cutover |
+| `cgroup_cuda_check.py` | Checks whether the memory ceiling covers GPU memory |
 
 A data root that carries the marker file `.mirror-of-spark` is a copy, and
 the code refuses to write live state into it. The full procedure is in
 [`docs/spark_runbook.md`](docs/spark_runbook.md).
+
+**GPU memory.** The ceiling that `research_run.sh` sets bounds host memory
+only: on the box it was measured on, CUDA allocations are not charged to the
+job's cgroup. The GPU side is bounded inside the job instead.
+`--gpu-budget 20G` hands the job `RESEARCH_GPU_BUDGET_GIB=20`, and
+`apply_gpu_budget()` in `analysis/gpu_budget.py` caps PyTorch's allocator at
+that figure. A job may ask for less, never for more, and without the flag
+the variable is removed from the job's environment. Every file in the
+repository that imports torch has to call `apply_gpu_budget()` before its
+first CUDA allocation; `tests/test_architecture/test_gpu_budget_guard.py`
+fails for one that does not.
 
 ## Weather track
 
@@ -334,6 +346,32 @@ system prompts from `prompts/llm_predictor_system.txt` and
 `prompts/llm_scores_system.txt`. The directory is gitignored; write your own
 files there, or point `LLM_PROMPTS_DIR` at another directory. A missing file
 raises an error that names the path.
+
+### Comparing local models
+
+`scripts/llm_eval.py` compares models served by vLLM on one set of
+gold-labelled extraction cases (`data/llm_eval_cases.json`), all under the
+same serving protocol. For each candidate it reports the share of replies
+that are valid JSON for their schema, field accuracy against the gold values,
+tokens per second, and the memory the model takes. It runs on the Linux box
+that serves the models.
+
+```bash
+# Free memory with no model loaded.
+python scripts/llm_eval.py baseline --out baseline.json
+
+# One candidate: every case, three times by default.
+python scripts/llm_eval.py run --label NAME --model MODEL --container CONTAINER \
+    --baseline baseline.json --out NAME.json
+
+# The comparison.
+python scripts/llm_eval.py report A.json B.json --out report.txt
+```
+
+`baseline` refuses while a model server still answers. `run` refuses a
+container that is not running and healthy, that is served outside the
+protocol, or that does not serve the named model. `report` refuses results
+that ran different cases, repeats, protocol or request settings.
 
 ## Tests and lint
 
