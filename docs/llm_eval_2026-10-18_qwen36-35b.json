@@ -1,0 +1,1529 @@
+{
+  "probe": "llm_eval",
+  "version": 1,
+  "utc_started": "2026-10-18T20:17:33Z",
+  "utc_finished": "2026-10-18T20:34:51Z",
+  "host": "spark",
+  "label": "qwen36-35b",
+  "model": "Qwen3.6-35B-A3B-NVFP4",
+  "base_url": "http://127.0.0.1:8001/v1",
+  "container": "eval-qwen36-35b",
+  "image": {
+    "reference": "vllm/vllm-openai:v0.31.0@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
+    "id": "sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3"
+  },
+  "serve_args": [
+    "vllm",
+    "serve",
+    "--model",
+    "/model",
+    "--served-model-name",
+    "Qwen3.6-35B-A3B-NVFP4",
+    "--tensor-parallel-size",
+    "1",
+    "--kv-cache-memory=4294967296",
+    "--gpu-memory-utilization",
+    "0.80",
+    "--max-num-seqs",
+    "8",
+    "--max-model-len",
+    "32768",
+    "--max-num-batched-tokens",
+    "8192",
+    "--enable-auto-tool-choice",
+    "--tool-call-parser",
+    "qwen3_coder",
+    "--reasoning-parser",
+    "qwen3",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8001"
+  ],
+  "protocol": {
+    "kv_cache_bytes": 4294967296,
+    "max_model_len": 32768
+  },
+  "git": {
+    "sha": "4409d278efe52e4e913c507f7804cdfc891a7648",
+    "dirty": false
+  },
+  "cases": {
+    "path": "forecast-model/data/llm_eval_cases.json",
+    "sha256": "43aab7eb91641f692e5f237c6c428162cf78030f994e4967cbd93b991acd646f",
+    "count": 22
+  },
+  "repeats": 3,
+  "settings": {
+    "max_tokens": 8192,
+    "reasoning_effort": "low",
+    "temperature": null
+  },
+  "memory": {
+    "held_bytes": 34794205184,
+    "page_cache_growth_bytes": -29729165312,
+    "unevictable_growth_bytes": 32768,
+    "hot_files_bytes": 0,
+    "footprint_bytes": 34794205184,
+    "baseline_available_bytes": 117167259648,
+    "snapshots": {
+      "loaded": {
+        "MemAvailable": 82563600384,
+        "MemFree": 4479623168,
+        "Cached": 76791500800,
+        "Mlocked": 23937024,
+        "Unevictable": 32231424
+      },
+      "after_cases": {
+        "MemAvailable": 82373054464,
+        "MemFree": 4286345216,
+        "Cached": 76800356352,
+        "Mlocked": 23937024,
+        "Unevictable": 32231424
+      }
+    },
+    "hot_dirs": {},
+    "nvidia_smi_apps_mib": 31453,
+    "vllm_log": {
+      "weights_gib": 20.37,
+      "kv_available_gib": null,
+      "kv_tokens": 170738.0
+    }
+  },
+  "summary": {
+    "calls": 66,
+    "errors": 0,
+    "json_rate": 1.0,
+    "valid_json_rate": 1.0,
+    "field_accuracy": 1.0,
+    "exact_case_rate": 1.0,
+    "tok_s_median": 77.50916334141647,
+    "tok_s_aggregate": 77.55229195447566,
+    "latency_median_s": 15.430755403504008,
+    "latency_p90_s": 21.25408367702039,
+    "reasoning_tokens_median": 1169.5,
+    "finish_reasons": {
+      "stop": 66
+    },
+    "per_case": {
+      "fixture-izmir": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "smoke-izmir": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "us-cpi-distractor": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "fed-hold-range": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "tcmb-cut-decimal-comma": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "bist-close-separators": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "noaa-month-rank-word": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "nhc-advisory-units": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "season-counts-words": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "null-when-unstated": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "reported-not-confirmed": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "relative-year": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "date-format": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "tickers-that-fell": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "pick-the-named-city": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "gdp-quarter": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "jobs-thousands-comma": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "co2-annual-mean": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "negated-landfall": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "turkish-inflation": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "state-gdp-distractors": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      },
+      "signed-percentage-points": {
+        "calls": 3,
+        "exact": 3,
+        "wrong_fields": {}
+      }
+    }
+  },
+  "warnings": [],
+  "calls": [
+    {
+      "case": "fixture-izmir",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.289110473007895,
+      "completion_tokens": 1185,
+      "reasoning_tokens": 1159,
+      "tok_s": 77.50614413389543,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "İzmir",
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "smoke-izmir",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 4.4754296579631045,
+      "completion_tokens": 341,
+      "reasoning_tokens": 309,
+      "tok_s": 76.19380172655843,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Izmir",
+        "year": 2024,
+        "passed": true
+      },
+      "raw": null
+    },
+    {
+      "case": "us-cpi-distractor",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.62766019499395,
+      "completion_tokens": 1129,
+      "reasoning_tokens": 1087,
+      "tok_s": 77.18254218035361,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "mom_pct": 0.4,
+        "yoy_pct": 3.1
+      },
+      "raw": null
+    },
+    {
+      "case": "fed-hold-range",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 18.633566777978558,
+      "completion_tokens": 1441,
+      "reasoning_tokens": 1402,
+      "tok_s": 77.33355707845459,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "hold",
+        "lower_pct": 3.75,
+        "upper_pct": 4.0
+      },
+      "raw": null
+    },
+    {
+      "case": "tcmb-cut-decimal-comma",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.889670722011942,
+      "completion_tokens": 1237,
+      "reasoning_tokens": 1201,
+      "tok_s": 77.84931617786046,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "cut",
+        "previous_pct": 40.5,
+        "new_pct": 38
+      },
+      "raw": null
+    },
+    {
+      "case": "bist-close-separators",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 8.241389696020633,
+      "completion_tokens": 629,
+      "reasoning_tokens": 585,
+      "tok_s": 76.32207955215533,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "index": "BIST 100",
+        "change_pct": -1.24,
+        "close": 10482.37
+      },
+      "raw": null
+    },
+    {
+      "case": "noaa-month-rank-word",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 6.746267764014192,
+      "completion_tokens": 513,
+      "reasoning_tokens": 474,
+      "tok_s": 76.04204546051885,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-07",
+        "anomaly_c": 1.18,
+        "rank": 3
+      },
+      "raw": null
+    },
+    {
+      "case": "nhc-advisory-units",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.346507131995168,
+      "completion_tokens": 1106,
+      "reasoning_tokens": 1071,
+      "tok_s": 77.09193532782838,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Melissa",
+        "category": 4,
+        "max_wind_mph": 145
+      },
+      "raw": null
+    },
+    {
+      "case": "season-counts-words",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 19.424937759002205,
+      "completion_tokens": 1502,
+      "reasoning_tokens": 1455,
+      "tok_s": 77.32328507996995,
+      "fields_total": 4,
+      "fields_correct": 4,
+      "wrong_fields": [],
+      "parsed": {
+        "season": 2025,
+        "named_storms": 13,
+        "hurricanes": 5,
+        "major_hurricanes": 4
+      },
+      "raw": null
+    },
+    {
+      "case": "null-when-unstated",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 10.153242679021787,
+      "completion_tokens": 787,
+      "reasoning_tokens": 764,
+      "tok_s": 77.5121825489375,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "beneficiary": "farmers",
+        "total_cost": null
+      },
+      "raw": null
+    },
+    {
+      "case": "reported-not-confirmed",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 19.489390550996177,
+      "completion_tokens": 1511,
+      "reasoning_tokens": 1487,
+      "tok_s": 77.52936122072668,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "order_confirmed": false,
+        "aircraft_count": 50
+      },
+      "raw": null
+    },
+    {
+      "case": "relative-year",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 24.385285580996424,
+      "completion_tokens": 1888,
+      "reasoning_tokens": 1859,
+      "tok_s": 77.42373956330977,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2025,
+        "exports_bn_usd": 262
+      },
+      "raw": null
+    },
+    {
+      "case": "date-format",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 10.453232603962533,
+      "completion_tokens": 807,
+      "reasoning_tokens": 782,
+      "tok_s": 77.20099901862784,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "resolution_date": "2027-01-05",
+        "agency": "NOAA"
+      },
+      "raw": null
+    },
+    {
+      "case": "tickers-that-fell",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.484835945011582,
+      "completion_tokens": 1126,
+      "reasoning_tokens": 1111,
+      "tok_s": 77.73646897173053,
+      "fields_total": 1,
+      "fields_correct": 1,
+      "wrong_fields": [],
+      "parsed": {
+        "fell": [
+          "THYAO",
+          "PGSUS"
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "pick-the-named-city",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 17.191030615998898,
+      "completion_tokens": 1340,
+      "reasoning_tokens": 1316,
+      "tok_s": 77.94762454514647,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Istanbul",
+        "rainfall_mm": 41
+      },
+      "raw": null
+    },
+    {
+      "case": "gdp-quarter",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.810815701028332,
+      "completion_tokens": 1224,
+      "reasoning_tokens": 1180,
+      "tok_s": 77.415360671138,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "quarter": "2026-Q2",
+        "growth_yoy_pct": 3.2,
+        "previous_quarter_pct": 3.9
+      },
+      "raw": null
+    },
+    {
+      "case": "jobs-thousands-comma",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 12.834435666969512,
+      "completion_tokens": 995,
+      "reasoning_tokens": 950,
+      "tok_s": 77.52580836574803,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-08",
+        "unemployment_pct": 4.3,
+        "jobs_added": 22000
+      },
+      "raw": null
+    },
+    {
+      "case": "co2-annual-mean",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 21.08219459396787,
+      "completion_tokens": 1633,
+      "reasoning_tokens": 1589,
+      "tok_s": 77.45872910532954,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2024,
+        "co2_ppm": 424.61,
+        "increase_ppm": 3.53
+      },
+      "raw": null
+    },
+    {
+      "case": "negated-landfall",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 13.82566096301889,
+      "completion_tokens": 1069,
+      "reasoning_tokens": 1055,
+      "tok_s": 77.31999235764417,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Erin",
+        "us_landfall": false
+      },
+      "raw": null
+    },
+    {
+      "case": "turkish-inflation",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 17.368310158024542,
+      "completion_tokens": 1344,
+      "reasoning_tokens": 1299,
+      "tok_s": 77.38231225557901,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "annual_pct": 33.29,
+        "monthly_pct": 3.23
+      },
+      "raw": null
+    },
+    {
+      "case": "state-gdp-distractors",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 30.85838883300312,
+      "completion_tokens": 2398,
+      "reasoning_tokens": 2359,
+      "tok_s": 77.70982512979853,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "state": "Texas",
+        "gdp_trillion_usd": 2.71,
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "signed-percentage-points",
+      "repeat": 1,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.929778088000603,
+      "completion_tokens": 1242,
+      "reasoning_tokens": 1207,
+      "tok_s": 77.9671878125885,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "region": "euro area",
+        "rate_pct": 8.5,
+        "change_pp": -0.3
+      },
+      "raw": null
+    },
+    {
+      "case": "fixture-izmir",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.58657497400418,
+      "completion_tokens": 1130,
+      "reasoning_tokens": 1110,
+      "tok_s": 77.46849428422074,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "İzmir",
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "smoke-izmir",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 9.967382850998547,
+      "completion_tokens": 765,
+      "reasoning_tokens": 733,
+      "tok_s": 76.75033772013295,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Izmir",
+        "year": 2024,
+        "passed": true
+      },
+      "raw": null
+    },
+    {
+      "case": "us-cpi-distractor",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 17.531397801998537,
+      "completion_tokens": 1364,
+      "reasoning_tokens": 1322,
+      "tok_s": 77.80326562691467,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "mom_pct": 0.4,
+        "yoy_pct": 3.1
+      },
+      "raw": null
+    },
+    {
+      "case": "fed-hold-range",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 19.44645007903455,
+      "completion_tokens": 1517,
+      "reasoning_tokens": 1478,
+      "tok_s": 78.00909645897252,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "hold",
+        "lower_pct": 3.75,
+        "upper_pct": 4.0
+      },
+      "raw": null
+    },
+    {
+      "case": "tcmb-cut-decimal-comma",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 16.75282106094528,
+      "completion_tokens": 1304,
+      "reasoning_tokens": 1267,
+      "tok_s": 77.83763673330978,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "cut",
+        "previous_pct": 40.5,
+        "new_pct": 38
+      },
+      "raw": null
+    },
+    {
+      "case": "bist-close-separators",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.75758004502859,
+      "completion_tokens": 1222,
+      "reasoning_tokens": 1191,
+      "tok_s": 77.54997889955398,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "index": "BIST 100",
+        "change_pct": -1.24,
+        "close": 10482.37
+      },
+      "raw": null
+    },
+    {
+      "case": "noaa-month-rank-word",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 18.166236595017835,
+      "completion_tokens": 1409,
+      "reasoning_tokens": 1370,
+      "tok_s": 77.5614691920518,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-07",
+        "anomaly_c": 1.18,
+        "rank": 3
+      },
+      "raw": null
+    },
+    {
+      "case": "nhc-advisory-units",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 11.746280741004739,
+      "completion_tokens": 913,
+      "reasoning_tokens": 886,
+      "tok_s": 77.72673070998854,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Melissa",
+        "category": 4,
+        "max_wind_mph": 145
+      },
+      "raw": null
+    },
+    {
+      "case": "season-counts-words",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 13.904658362967893,
+      "completion_tokens": 1076,
+      "reasoning_tokens": 1029,
+      "tok_s": 77.38413788473204,
+      "fields_total": 4,
+      "fields_correct": 4,
+      "wrong_fields": [],
+      "parsed": {
+        "season": 2025,
+        "named_storms": 13,
+        "hurricanes": 5,
+        "major_hurricanes": 4
+      },
+      "raw": null
+    },
+    {
+      "case": "null-when-unstated",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 9.815125444030855,
+      "completion_tokens": 757,
+      "reasoning_tokens": 735,
+      "tok_s": 77.12586092930432,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "beneficiary": "farmers",
+        "total_cost": null
+      },
+      "raw": null
+    },
+    {
+      "case": "reported-not-confirmed",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.850502596993465,
+      "completion_tokens": 1156,
+      "reasoning_tokens": 1132,
+      "tok_s": 77.84248327285813,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "order_confirmed": false,
+        "aircraft_count": 50
+      },
+      "raw": null
+    },
+    {
+      "case": "relative-year",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.572400334000122,
+      "completion_tokens": 1213,
+      "reasoning_tokens": 1190,
+      "tok_s": 77.89422144199484,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2025,
+        "exports_bn_usd": 262
+      },
+      "raw": null
+    },
+    {
+      "case": "date-format",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 5.574491514998954,
+      "completion_tokens": 432,
+      "reasoning_tokens": 400,
+      "tok_s": 77.49585748541247,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "resolution_date": "2027-01-05",
+        "agency": "NOAA"
+      },
+      "raw": null
+    },
+    {
+      "case": "tickers-that-fell",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 12.481442196003627,
+      "completion_tokens": 971,
+      "reasoning_tokens": 955,
+      "tok_s": 77.79549708693918,
+      "fields_total": 1,
+      "fields_correct": 1,
+      "wrong_fields": [],
+      "parsed": {
+        "fell": [
+          "THYAO",
+          "PGSUS"
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "pick-the-named-city",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 35.18016380997142,
+      "completion_tokens": 2730,
+      "reasoning_tokens": 2712,
+      "tok_s": 77.60054827334865,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Istanbul",
+        "rainfall_mm": 41
+      },
+      "raw": null
+    },
+    {
+      "case": "gdp-quarter",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 20.338617683039047,
+      "completion_tokens": 1577,
+      "reasoning_tokens": 1531,
+      "tok_s": 77.53722620564844,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "quarter": "2026-Q2",
+        "growth_yoy_pct": 3.2,
+        "previous_quarter_pct": 3.9
+      },
+      "raw": null
+    },
+    {
+      "case": "jobs-thousands-comma",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 6.978083410009276,
+      "completion_tokens": 533,
+      "reasoning_tokens": 490,
+      "tok_s": 76.38200472574911,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-08",
+        "unemployment_pct": 4.3,
+        "jobs_added": 22000
+      },
+      "raw": null
+    },
+    {
+      "case": "co2-annual-mean",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 21.069117180013563,
+      "completion_tokens": 1634,
+      "reasoning_tokens": 1590,
+      "tok_s": 77.5542698841712,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2024,
+        "co2_ppm": 424.61,
+        "increase_ppm": 3.53
+      },
+      "raw": null
+    },
+    {
+      "case": "negated-landfall",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 10.11458329402376,
+      "completion_tokens": 777,
+      "reasoning_tokens": 755,
+      "tok_s": 76.81977372800849,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Erin",
+        "us_landfall": false
+      },
+      "raw": null
+    },
+    {
+      "case": "turkish-inflation",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 13.247620281996205,
+      "completion_tokens": 1026,
+      "reasoning_tokens": 979,
+      "tok_s": 77.44787200719782,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "annual_pct": 33.29,
+        "monthly_pct": 3.23
+      },
+      "raw": null
+    },
+    {
+      "case": "state-gdp-distractors",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 22.991011506994255,
+      "completion_tokens": 1785,
+      "reasoning_tokens": 1746,
+      "tok_s": 77.63903730190265,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "state": "Texas",
+        "gdp_trillion_usd": 2.71,
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "signed-percentage-points",
+      "repeat": 2,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.10240893397713,
+      "completion_tokens": 1100,
+      "reasoning_tokens": 1063,
+      "tok_s": 78.00085823279133,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "region": "euro area",
+        "rate_pct": 8.5,
+        "change_pp": -0.3
+      },
+      "raw": null
+    },
+    {
+      "case": "fixture-izmir",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 21.25408367702039,
+      "completion_tokens": 1657,
+      "reasoning_tokens": 1631,
+      "tok_s": 77.96148849228088,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Izmir",
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "smoke-izmir",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 10.775120120961219,
+      "completion_tokens": 835,
+      "reasoning_tokens": 803,
+      "tok_s": 77.49333563118662,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Izmir",
+        "year": 2024,
+        "passed": true
+      },
+      "raw": null
+    },
+    {
+      "case": "us-cpi-distractor",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 20.02575250901282,
+      "completion_tokens": 1550,
+      "reasoning_tokens": 1508,
+      "tok_s": 77.40033735573256,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "mom_pct": 0.4,
+        "yoy_pct": 3.1
+      },
+      "raw": null
+    },
+    {
+      "case": "fed-hold-range",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 20.551661947043613,
+      "completion_tokens": 1601,
+      "reasoning_tokens": 1562,
+      "tok_s": 77.9012424457627,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "hold",
+        "lower_pct": 3.75,
+        "upper_pct": 4.0
+      },
+      "raw": null
+    },
+    {
+      "case": "tcmb-cut-decimal-comma",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 16.94032191997394,
+      "completion_tokens": 1318,
+      "reasoning_tokens": 1282,
+      "tok_s": 77.80253564402321,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "decision": "cut",
+        "previous_pct": 40.5,
+        "new_pct": 38
+      },
+      "raw": null
+    },
+    {
+      "case": "bist-close-separators",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 19.955056890961714,
+      "completion_tokens": 1545,
+      "reasoning_tokens": 1501,
+      "tok_s": 77.42398372714138,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "index": "BIST 100",
+        "change_pct": -1.24,
+        "close": 10482.37
+      },
+      "raw": null
+    },
+    {
+      "case": "noaa-month-rank-word",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 22.999166514026,
+      "completion_tokens": 1792,
+      "reasoning_tokens": 1760,
+      "tok_s": 77.91586703401413,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-07",
+        "anomaly_c": 1.18,
+        "rank": 3
+      },
+      "raw": null
+    },
+    {
+      "case": "nhc-advisory-units",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 17.34811261697905,
+      "completion_tokens": 1341,
+      "reasoning_tokens": 1306,
+      "tok_s": 77.2994751421851,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Melissa",
+        "category": 4,
+        "max_wind_mph": 145
+      },
+      "raw": null
+    },
+    {
+      "case": "season-counts-words",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 12.927043710951693,
+      "completion_tokens": 1000,
+      "reasoning_tokens": 953,
+      "tok_s": 77.35720729038826,
+      "fields_total": 4,
+      "fields_correct": 4,
+      "wrong_fields": [],
+      "parsed": {
+        "season": 2025,
+        "named_storms": 13,
+        "hurricanes": 5,
+        "major_hurricanes": 4
+      },
+      "raw": null
+    },
+    {
+      "case": "null-when-unstated",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 15.181335796019994,
+      "completion_tokens": 1180,
+      "reasoning_tokens": 1156,
+      "tok_s": 77.72702058993741,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "beneficiary": "farmers",
+        "total_cost": null
+      },
+      "raw": null
+    },
+    {
+      "case": "reported-not-confirmed",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 12.241754574992228,
+      "completion_tokens": 947,
+      "reasoning_tokens": 923,
+      "tok_s": 77.35819193227056,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "order_confirmed": false,
+        "aircraft_count": 50
+      },
+      "raw": null
+    },
+    {
+      "case": "relative-year",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 20.274201340973377,
+      "completion_tokens": 1573,
+      "reasoning_tokens": 1544,
+      "tok_s": 77.58628680583476,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2025,
+        "exports_bn_usd": 262
+      },
+      "raw": null
+    },
+    {
+      "case": "date-format",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 5.857923217001371,
+      "completion_tokens": 454,
+      "reasoning_tokens": 422,
+      "tok_s": 77.50186937963986,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "resolution_date": "2027-01-05",
+        "agency": "NOAA"
+      },
+      "raw": null
+    },
+    {
+      "case": "tickers-that-fell",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 5.631274185026996,
+      "completion_tokens": 434,
+      "reasoning_tokens": 413,
+      "tok_s": 77.0695913109618,
+      "fields_total": 1,
+      "fields_correct": 1,
+      "wrong_fields": [],
+      "parsed": {
+        "fell": [
+          "THYAO",
+          "PGSUS"
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "pick-the-named-city",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 24.072774984990247,
+      "completion_tokens": 1874,
+      "reasoning_tokens": 1856,
+      "tok_s": 77.84727773048468,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "city": "Istanbul",
+        "rainfall_mm": 41
+      },
+      "raw": null
+    },
+    {
+      "case": "gdp-quarter",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 6.723870446032379,
+      "completion_tokens": 521,
+      "reasoning_tokens": 478,
+      "tok_s": 77.48513362678361,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "quarter": "2026-Q2",
+        "growth_yoy_pct": 3.2,
+        "previous_quarter_pct": 3.9
+      },
+      "raw": null
+    },
+    {
+      "case": "jobs-thousands-comma",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 7.3378917159861885,
+      "completion_tokens": 569,
+      "reasoning_tokens": 524,
+      "tok_s": 77.54270872659345,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-08",
+        "unemployment_pct": 4.3,
+        "jobs_added": 22000
+      },
+      "raw": null
+    },
+    {
+      "case": "co2-annual-mean",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 18.241032518970314,
+      "completion_tokens": 1423,
+      "reasoning_tokens": 1379,
+      "tok_s": 78.01093488102211,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "year": 2024,
+        "co2_ppm": 424.61,
+        "increase_ppm": 3.53
+      },
+      "raw": null
+    },
+    {
+      "case": "negated-landfall",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 10.067489983979613,
+      "completion_tokens": 777,
+      "reasoning_tokens": 755,
+      "tok_s": 77.17911825454402,
+      "fields_total": 2,
+      "fields_correct": 2,
+      "wrong_fields": [],
+      "parsed": {
+        "name": "Erin",
+        "us_landfall": false
+      },
+      "raw": null
+    },
+    {
+      "case": "turkish-inflation",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 18.63144641602412,
+      "completion_tokens": 1451,
+      "reasoning_tokens": 1406,
+      "tok_s": 77.87908504795722,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "month": "2026-09",
+        "annual_pct": 33.29,
+        "monthly_pct": 3.23
+      },
+      "raw": null
+    },
+    {
+      "case": "state-gdp-distractors",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 14.359984548995271,
+      "completion_tokens": 1112,
+      "reasoning_tokens": 1073,
+      "tok_s": 77.43740922602898,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "state": "Texas",
+        "gdp_trillion_usd": 2.71,
+        "year": 2024
+      },
+      "raw": null
+    },
+    {
+      "case": "signed-percentage-points",
+      "repeat": 3,
+      "status": "ok",
+      "error": null,
+      "finish_reason": "stop",
+      "latency_s": 16.443837958038785,
+      "completion_tokens": 1277,
+      "reasoning_tokens": 1240,
+      "tok_s": 77.65826951461304,
+      "fields_total": 3,
+      "fields_correct": 3,
+      "wrong_fields": [],
+      "parsed": {
+        "region": "euro area",
+        "rate_pct": 8.5,
+        "change_pp": -0.3
+      },
+      "raw": null
+    }
+  ]
+}
