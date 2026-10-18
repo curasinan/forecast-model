@@ -100,7 +100,7 @@ def cmd_baseline(args, *, meminfo: Path, port_open) -> int:
     answering = [port for port in LLM_PORTS if port_open(port)]
     if answering:
         print(f"baseline: something answers on {answering}: stop every LLM first "
-              "(cd ~/stack && docker compose stop qwenflash; and any eval container)",
+              "(cd ~/stack && docker compose stop qwen36; and any eval container)",
               file=sys.stderr)
         return 2
     info = parse_meminfo(meminfo.read_text(encoding="ascii"))

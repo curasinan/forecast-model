@@ -8,14 +8,14 @@
 #   bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python job.py
 #   bash scripts/spark/research_run.sh --dry-run -- COMMAND [ARG...]   # print the command, run nothing
 #
-# Kill order under memory pressure: research jobs +500, the LLM (qwenflash) -500, the Gateway
+# Kill order under memory pressure: research jobs +500, the LLM (qwen36) -500, the Gateway
 # and the trading runtime -900. The kernel kills the highest score first.
 #   * MemoryMax (default 15G) is a hard ceiling for the HOST memory of the job and everything
 #     it starts, and MemorySwapMax=0 keeps it from spilling into swap instead. A job that hits
 #     the ceiling is killed inside its own scope. It does NOT bound GPU memory: CUDA
 #     allocations are not charged to the cgroup (docker stats showed vLLM at 6.36 GiB while
 #     it held about 87 GiB, 2026-10-11; scripts/spark/cgroup_cuda_check.py is the check).
-#     Ask for more only after `cd ~/stack && docker compose stop qwenflash`.
+#     Ask for more only after `cd ~/stack && docker compose stop qwen36`.
 #   * --gpu-budget NG is the GPU side: the job sees RESEARCH_GPU_BUDGET_GIB=N, and
 #     analysis/gpu_budget.py's apply_gpu_budget(), which every torch job calls first, caps
 #     PyTorch's allocator at N GiB. Without the flag the variable is removed from the job's

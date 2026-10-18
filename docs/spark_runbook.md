@@ -111,26 +111,29 @@ Never run on the Spark (all under `scripts/`):
 - Data: `~/quant_data` -- a MIRROR pushed from the Zenbook (section 3). Same
   default root as the Zenbook on purpose; no `IBKR_DATA_ROOT` /
   `CLIMATE_DATA_ROOT` overrides anywhere.
-- `.env`: exactly one line, `LLM_MODEL=Qwen3.8-Flash-Next-NVFP4` (mode 600).
+- `.env`: exactly one line, `LLM_MODEL=Qwen3.6-35B-A3B-NVFP4` (mode 600).
   No API keys.
 - LLM stack: `~/stack/docker-compose.yml` (repo `curasinan/spark-llm-stack`;
-  services `qwenflash` (vLLM), `openwebui`, `portainer`, `phoenix`); vLLM on
+  services `qwen36` (vLLM serving Qwen3.6-35B-A3B-NVFP4), `openwebui`,
+  `portainer`, `phoenix`); vLLM on
   `127.0.0.1:8000`, Open WebUI 8080, Portainer 9000, Phoenix 6006/4317, all
   bound to loopback (checked 2026-10-03: the only socket listening on all
   interfaces is 22/tcp) and behind ufw (22/tcp is the only open port). Images
   are pinned by digest: never `docker compose pull`, never edit the compose
   file without the operator. NVIDIA driver packages are on `apt-mark hold`:
   no `apt upgrade`.
-- Memory, measured 2026-10-11 with Flash-Next loaded: weights 74.3 GiB and KV
-  cache 10 GiB, about 87 GiB for vLLM in all; about 34 GiB of page cache holds
-  the PLE sidecar, which vLLM reads through mmap; truly free is under 1 GiB.
-  `free -h` counts that page cache as available (the 22-24 GiB this line used
-  to quote), but a job that takes it evicts the sidecar and slows the LLM. So
-  with Flash-Next loaded a host-memory job takes its memory from that cache,
-  and there is no room for a GPU job at all. `docker stats` does not show
-  vLLM's CUDA memory because the cgroup is not charged for it (section 7.10).
-  For anything larger, finish the LLM batch first, then stop the vLLM service
-  on the Spark: `cd ~/stack && docker compose stop qwenflash`.
+- Memory, measured 2026-10-19 with Qwen3.6-35B-A3B loaded: weights 20.4 GiB
+  and KV cache 10 GiB (509,895 tokens), about 39 GiB for vLLM in all; `free -h`
+  shows about 70 GiB available with the LLM up, and nothing of it is a page
+  cache the model depends on. So a research job can take up to about 65 GiB
+  of host memory and GPU memory together while the LLM stays up (they come
+  out of the same 128 GB). `docker stats` does not show vLLM's CUDA memory
+  because the cgroup is not charged for it (section 7.10). For anything
+  larger, finish the LLM batch first, then stop the vLLM service on the
+  Spark: `cd ~/stack && docker compose stop qwen36`. The model until
+  2026-10-18, Qwen3.8-Flash-Next, held 87 GiB plus a 27 GiB sidecar in page
+  cache and asked vLLM for 112 GiB free at startup; it is retired here
+  (`docs/llm_eval_2026-10-18.md`).
 - Tests, from the Zenbook:
   `"$SSH" spark 'cd ~/work/forecast-model && .venv/bin/python -m pytest -q'`.
   The suite isolates the home itself: `tests/conftest.py` points the home at
@@ -295,14 +298,16 @@ before the next scoring parity run.
 - Request rules (measured on the Spark): `max_tokens >= 8192` for real work
   (the settings default; the gated live test asks for a yes/no schema answer
   and uses 2048), `reasoning_effort=low` (default effort burns ~1.6k
-  reasoning tokens), MTP off. Measured 2026-10-03: a schema-constrained
-  extraction is about 100 completion tokens at `reasoning_effort=low`,
-  11.7-16.4 tok/s single-stream, about 7 s end to end.
-- After a reboot the stack comes up by itself in about 10 minutes
-  (`ple-warm.service` warms the sidecar before docker; every service has
-  `restart: always`). It is ready when, on the Spark,
-  `docker inspect -f '{{.State.Health.Status}}' qwenflash` prints `healthy`.
-  The served model name is `Qwen3.8-Flash-Next-NVFP4`.
+  reasoning tokens), MTP off. Measured 2026-10-19 with Qwen3.6-35B-A3B: the
+  smoke test's schema-constrained extraction is 327 completion tokens (294 of
+  them reasoning) at `reasoning_effort=low`, 67.9 tok/s single-stream, 4.8 s
+  end to end; on the 22 eval cases 77.5 tok/s and 15.4 s median
+  (`docs/llm_eval_2026-10-18.md`).
+- After a reboot the stack comes up by itself in about 5 minutes (every
+  service has `restart: always`; the model loads in about 160 s). It is
+  ready when, on the Spark,
+  `docker inspect -f '{{.State.Health.Status}}' qwen36` prints `healthy`.
+  The served model name is `Qwen3.6-35B-A3B-NVFP4`.
 - The server returns the reasoning text under `message.reasoning`, not
   `reasoning_content`; the client accepts both (`reasoning_content` when it
   is not null, else `reasoning`). Two replies captured from the Spark on
@@ -677,7 +682,7 @@ Training and simulation start through the launcher
 `scripts/spark/research_run.sh`, as `scura`, from the research clone:
 
     bash scripts/spark/research_run.sh -- .venv/bin/python scripts/fit_gtm_emos.py --trend --root ~/quant_data/climate_data
-    bash scripts/spark/research_run.sh --memory 60G -- <command>     # only after: cd ~/stack && docker compose stop qwenflash
+    bash scripts/spark/research_run.sh --memory 60G -- <command>     # only after: cd ~/stack && docker compose stop qwen36
 
 It gives the job a memory ceiling (15 GiB unless told otherwise) and makes it
 the first thing the kernel kills when memory runs out: research jobs score
@@ -699,8 +704,8 @@ imports torch without it. The budget comes from the launcher:
 less, never for more. The cap covers PyTorch's own allocator, not the CUDA
 context, cuBLAS workspaces or another framework's allocator, so leave a few
 GiB of headroom. Host and GPU memory come out of the same 128 GB: the ceiling
-plus the budget must fit what is free with the LLM where it is (section 2).
-With Flash-Next loaded that is nothing, so GPU jobs wait until `qwenflash` is
+plus the budget must fit what is free with the LLM where it is (section 2):
+about 65 GiB with Qwen3.6-35B-A3B loaded, everything once `qwen36` is
 stopped. Keep GPU jobs in the research clone: the guard sees only the repo.
 
 The check that the ceiling does not see CUDA memory runs with no LLM loaded
