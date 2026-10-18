@@ -58,9 +58,10 @@ $recorderSettings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
 $launcher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_recorder.ps1'
+# conhost --headless runs the task without a terminal window (it drops the exit code).
 $recorderAction = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`"" `
+    -Execute 'conhost.exe' `
+    -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$launcher`"" `
     -WorkingDirectory $RepoRoot
 
 Register-IbkrTask `
@@ -88,8 +89,8 @@ $healthSettings = New-ScheduledTaskSettingsSet `
 
 $healthLauncher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_health.ps1'
 $healthAction = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$healthLauncher`"" `
+    -Execute 'conhost.exe' `
+    -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$healthLauncher`"" `
     -WorkingDirectory $RepoRoot
 
 Register-IbkrTask `
@@ -108,8 +109,8 @@ $syncSettings = New-ScheduledTaskSettingsSet `
 
 $syncLauncher = Join-Path $RepoRoot 'scripts\scheduling\run_ibkr_sync.ps1'
 $syncAction = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$syncLauncher`"" `
+    -Execute 'conhost.exe' `
+    -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$syncLauncher`"" `
     -WorkingDirectory $RepoRoot
 
 Register-IbkrTask `

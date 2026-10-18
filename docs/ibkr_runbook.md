@@ -277,7 +277,7 @@ Three layers, cheapest first:
 One-liners (from the repo root):
 
 ```powershell
-# Task status: last/next run and result codes (0 = success)
+# Task status: last/next run (LastTaskResult stays 0 under conhost --headless; check the logs)
 Get-ScheduledTask -TaskPath '\IBKR\' | Get-ScheduledTaskInfo |
     Format-Table TaskName, LastRunTime, LastTaskResult, NextRunTime
 
