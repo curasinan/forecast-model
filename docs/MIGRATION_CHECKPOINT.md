@@ -488,8 +488,12 @@ the pricing/ordering path by `tests/test_architecture/test_llm_boundary.py`.
 
 ## 11. Runtime move to the Spark (2026-10)
 
-**Status: built, not cut over.** The Zenbook is still the runtime; everything
-in sections 0 to 8 and in section 10 stands. What exists is the build in the
+**Status: cut over on 2026-10-20; acceptance pending.** The Spark is the runtime
+(cutover report `docs/spark_runtime_cutover_2026-10-20.md`); the Zenbook's four
+scheduled tasks are disabled and its old live root is kept as
+`~/quant_data_zenbook_final` for one rollback week. Wherever sections 0 to 8
+say "Task Scheduler" or `~/quant_data` on the Zenbook, read "systemd on the
+Spark" and `/srv/quant_data`. What exists is the build in the
 repository: systemd units under `deploy/spark/` (among them the owner rule
 that admits only `trading` to the Gateway port), a marker file that tells a
 mirror from the live root, a daily backup with a restore check, and the

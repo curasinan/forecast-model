@@ -138,7 +138,7 @@ fi
 
 echo "== 4/5 copy $SRC -> $DEST (nothing is deleted there)"
 EXCLUDES=(--exclude "ibkr_ticks/state/" --exclude "*.tmp" --exclude "/$MARKER")
-COPY_CMD=(rsync -rlt --stats "${EXCLUDES[@]}" -e "$SSH -o BatchMode=yes -o ConnectTimeout=20"
+COPY_CMD=(rsync -rlt --stats --blocking-io "${EXCLUDES[@]}" -e "$SSH -o BatchMode=yes -o ConnectTimeout=20"
           "$SRC/" "$DEST/")
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "DRY-RUN: ${COPY_CMD[*]}"

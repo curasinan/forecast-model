@@ -1,9 +1,10 @@
 # DGX Spark runbook -- research mirror
 
-> **Runtime move (2026-10): built, not yet in force.** Sections 1 to 6 describe
-> the system as it runs: the Zenbook is the runtime, the Spark a research
-> mirror. Section 7 describes the Spark as the runtime and takes over at the
-> cutover (`docs/spark_runtime_cutover_<date>.md`, when it exists).
+> **Since 2026-10-20 the Spark is the trading runtime** (cutover report:
+> `docs/spark_runtime_cutover_2026-10-20.md`). Section 7 is the operator's page.
+> Sections 1 and 3 describe the arrangement before that date and are kept
+> for the rollback week only; where they disagree with section 7, section 7
+> holds. Sections 2, 4, 5 and 6 stand.
 
 Parity evidence:
 the newest `docs/spark_parity_*.md` with its `_zenbook.json` / `_spark.json`
@@ -356,11 +357,9 @@ role, if it ever comes, goes over Tailscale first (operator decision
 
 ## 7. The trading runtime on the Spark
 
-**Status: built, not yet in force.** Until a cutover report
-(`docs/spark_runtime_cutover_<date>.md`) exists, the Zenbook runs the runtime,
-`docs/ibkr_runbook.md` describes it, and sections 1 to 3 above are the rules
-in force. From the cutover on, this section replaces them wherever they
-disagree.
+**Status: in force since 2026-10-20** (cutover report:
+`docs/spark_runtime_cutover_2026-10-20.md`). The design and the plan behind
+this section are local documents, kept outside the repository.
 
 Git Bash commands assume `source scripts/spark/env.sh`, as everywhere on this
 page. A shell script is always started through `bash` (the checkout carries no
@@ -411,7 +410,8 @@ executable bits).
   message.
 - When: every Sunday after 01:00 US Eastern (08:00 Istanbul time, 09:00 in
   the US winter), and whenever a DOWN message says the Gateway cannot be
-  reached. The daily restart at 23:45 Europe/Istanbul needs no login.
+  reached. The daily restart at 03:30 Europe/Istanbul needs no login (moved
+  from 23:45 at the cutover, so that an evening's work never meets it).
 - One session, one machine. Before the paper user logs in anywhere else, the
   Spark's container is stopped and `scripts/spark/session_check.py` exits 0
   there, as `scura`, from `~/work/forecast-model` on the Spark:

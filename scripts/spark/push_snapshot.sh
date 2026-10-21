@@ -77,7 +77,7 @@ fi
 KEEP=(--exclude "/parity/" --exclude "/identity_spark.json")
 
 FREEZE=(rsync -rlt --delete "${EXCLUDES[@]}" "${KEEP[@]}" "$SRC/" "$SNAP/")
-PUSH=(rsync -rlt --stats --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "${EXCLUDES[@]}" "${KEEP[@]}"
+PUSH=(rsync -rlt --stats --blocking-io --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "${EXCLUDES[@]}" "${KEEP[@]}"
       -e "$SSH" "$SNAP/" "$DEST/")
 VERIFY="cd $REMOTE_REPO && $REMOTE_PY scripts/spark/verify_mirror.py --root $REMOTE_ROOT"
 

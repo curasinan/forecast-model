@@ -5,10 +5,13 @@ follow the claim/evidence convention of `docs/venue_semantics.md`: claim,
 evidence, date verified, invalidation condition. Anything sourced from IBKR
 documentation rather than our own logs/probes is labeled as such.
 
-> **Runtime move (2026-10): built, not yet in force.** The runtime is moving
-> to the DGX Spark (`docs/spark_runbook.md` section 7). Until a cutover report
-> `docs/spark_runtime_cutover_<date>.md` exists, this page describes the
-> system as it runs, on the Zenbook.
+> **Since 2026-10-20 the runtime runs on the DGX Spark.** The operator's page is
+> `docs/spark_runbook.md` section 7: login 7.2, units and logs 7.3, deploy
+> 7.4. On this page, sections 2, 5, 7 and 10 still describe how the recorder,
+> the restart window, the alerts and the monthly rituals behave; sections 1,
+> 3, 4, 6, 8 and 9 describe the Zenbook's Task Scheduler setup, which is
+> disabled and kept for one rollback week. **Do not open IB Gateway on the
+> Zenbook: a login there takes the session away from the Spark.**
 
 Quick facts:
 

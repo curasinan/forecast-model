@@ -21,7 +21,7 @@ services:
       # Never take a session over on our own: one session, one machine.
       EXISTING_SESSION_DETECTED_ACTION: manual
       TWOFA_TIMEOUT_ACTION: restart
-      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-11:45 PM}
+      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-3:30 AM}
       TIME_ZONE: Europe/Istanbul
       TZ: Europe/Istanbul
       TWS_SETTINGS_PATH: /home/ibgateway/tws_settings

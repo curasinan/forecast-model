@@ -56,8 +56,8 @@ if [ "$INCLUDE_RAW" -eq 0 ]; then
   EXCLUDES+=(--exclude "climate_data/raw/")
 fi
 RSH="$SSH -o BatchMode=yes -o ConnectTimeout=20"
-PULL=(rsync -rlt --stats "${EXCLUDES[@]}" -e "$RSH" "$SRC/" "$DEST/")
-PULL_BACKUPS=(rsync -rlt --stats --exclude "*.partial/" -e "$RSH" "$BACKUPS_SRC/" "$BACKUPS_DEST/")
+PULL=(rsync -rlt --stats --blocking-io "${EXCLUDES[@]}" -e "$RSH" "$SRC/" "$DEST/")
+PULL_BACKUPS=(rsync -rlt --stats --blocking-io --exclude "*.partial/" -e "$RSH" "$BACKUPS_SRC/" "$BACKUPS_DEST/")
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "DRY-RUN: ${PULL[*]}"
