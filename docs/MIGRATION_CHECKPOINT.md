@@ -493,7 +493,9 @@ the pricing/ordering path by `tests/test_architecture/test_llm_boundary.py`.
 scheduled tasks are disabled and its old live root is kept as
 `~/quant_data_zenbook_final` for one rollback week. Wherever sections 0 to 8
 say "Task Scheduler" or `~/quant_data` on the Zenbook, read "systemd on the
-Spark" and `/srv/quant_data`. What exists is the build in the
+Spark" and `/srv/quant_data`; the Gateway's daily restart there is at 03:30
+Europe/Istanbul, not 23:45, and trading's `.env` names that window
+(`IBKR_RESTART_WINDOW_LOCAL=03:15-04:00`). What exists is the build in the
 repository: systemd units under `deploy/spark/` (among them the owner rule
 that admits only `trading` to the Gateway port), a marker file that tells a
 mirror from the live root, a daily backup with a restore check, and the

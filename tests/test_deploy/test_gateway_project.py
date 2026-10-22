@@ -65,3 +65,14 @@ def test_the_settings_survive_a_restart():
     service = _service()
     assert service["environment"]["TWS_SETTINGS_PATH"] == "/home/ibgateway/tws_settings"
     assert service["volumes"] == ["./jts:/home/ibgateway/tws_settings"]
+
+
+def test_the_restart_time_is_spelled_the_way_ibc_reads_it():
+    # "3:30 AM" is refused at the login, and the Gateway keeps the time it has stored.
+    spelled = re.compile(r"(0[1-9]|1[0-2]):[0-5][0-9] [AP]M")
+    env_default = _service()["environment"]["AUTO_RESTART_TIME"]
+    default = re.fullmatch(r"\$\{AUTO_RESTART_TIME:-(.*)\}", env_default)
+    assert default and spelled.fullmatch(default.group(1)), env_default
+    example = (PROJECT / "env.example").read_text(encoding="utf-8")
+    value = re.search(r"^AUTO_RESTART_TIME=(.*)$", example, flags=re.MULTILINE)
+    assert value and spelled.fullmatch(value.group(1)), example

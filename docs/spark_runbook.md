@@ -411,7 +411,16 @@ executable bits).
 - When: every Sunday after 01:00 US Eastern (08:00 Istanbul time, 09:00 in
   the US winter), and whenever a DOWN message says the Gateway cannot be
   reached. The daily restart at 03:30 Europe/Istanbul needs no login (moved
-  from 23:45 at the cutover, so that an evening's work never meets it).
+  from 23:45 at the cutover, so that an evening's work never meets it). IBC
+  takes `AUTO_RESTART_TIME` only as `hh:mm AM` or `hh:mm PM` with a two-digit
+  hour (`03:30 AM`); `3:30 AM` is refused at the login, the container log is
+  the only place that says so, and the Gateway keeps the time it has stored.
+  The value is read when the container starts, so a change in `.env` is a
+  recreate (`docker compose up -d --pull never`) and a new login; the
+  Gateway's own Lock and Exit settings change the stored time without
+  either, mind AM against PM. `IBKR_RESTART_WINDOW_LOCAL=03:15-04:00` in
+  trading's `.env` names the same window, so the recorder logs the restart's
+  disconnect as expected.
 - One session, one machine. Before the paper user logs in anywhere else, the
   Spark's container is stopped and `scripts/spark/session_check.py` exits 0
   there, as `scura`, from `~/work/forecast-model` on the Spark:
@@ -466,7 +475,10 @@ alerted, 3 the probe crashed. A run that stopped at `ExecStartPre` (the owner-ru
 pre-check) never started the probe: systemd resets `ExecMainStatus` to 0 and
 leaves `ExecMainExitTimestamp` empty, and the unit is `failed`, so a 0 with no
 exit time is not a healthy probe. `systemctl status ibkr-health.service` (or
-`journalctl -u ibkr-health.service`) shows the failed pre-check.
+`journalctl -u ibkr-health.service`) shows the failed pre-check. A probe run while
+`ibkr-health.timer` is disabled leaves no `ExecMain*` record at all: nothing references
+the finished one-shot unit, so systemd unloads it, as seen at the cutover; with the
+timer enabled the record stays.
 
 To run the probe now, exactly as the timer does:
 `"$SSH" spark 'sudo -n /usr/bin/systemctl start ibkr-health.service'`. It is a
