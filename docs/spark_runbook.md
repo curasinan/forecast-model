@@ -421,6 +421,14 @@ executable bits).
   either, mind AM against PM. `IBKR_RESTART_WINDOW_LOCAL=03:15-04:00` in
   trading's `.env` names the same window, so the recorder logs the restart's
   disconnect as expected.
+- A DOWN message is cleared only by a person. The daily restart logs in again
+  with a token it wrote the day before; when that fails (2026-10-22: the
+  Gateway sat at `Unrecognized Username or Password` from 15:30 until the
+  next login, with its settings window open across the restart minute), the
+  probe says DOWN within the hour and the recorder retries every minute until
+  someone does the login above. Close every Gateway window before the restart
+  minute. Never answer a DOWN message by opening the Zenbook's Gateway: a
+  login there takes the session and records nothing (`docs/ibkr_runbook.md`).
 - One session, one machine. Before the paper user logs in anywhere else, the
   Spark's container is stopped and `scripts/spark/session_check.py` exits 0
   there, as `scura`, from `~/work/forecast-model` on the Spark:
