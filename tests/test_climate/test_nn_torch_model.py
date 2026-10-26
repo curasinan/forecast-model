@@ -93,14 +93,16 @@ def test_standardiser_round_trip():
     assert again.transform(np.array([[2.0, 10.0]])).tolist() == [[0.0, 0.0]]
 
 
-def test_the_module_imports_without_torch():
-    code = (
-        "import sys; sys.path.insert(0, sys.argv[1]); sys.modules['torch'] = None; "
-        "import climate.nn.torch_model"
-    )
-    done = subprocess.run(
+def _in_fresh_interpreter(code: str) -> subprocess.CompletedProcess:
+    """Run code in a new process whose import path starts at this checkout."""
+    code = "import sys; sys.path.insert(0, sys.argv[1])\n" + code
+    return subprocess.run(
         [sys.executable, "-c", code, str(REPO_ROOT)], capture_output=True, text=True
     )
+
+
+def test_the_module_imports_without_torch():
+    done = _in_fresh_interpreter("sys.modules['torch'] = None\nimport climate.nn.torch_model")
     assert done.returncode == 0, done.stderr
 
 
@@ -222,15 +224,31 @@ def test_standardiser_uses_the_population_sd_floors_a_constant_column_and_writes
     assert json.loads(json.dumps(s.to_dict())) == s.to_dict()
 
 
+# the GPU budget applies once per process, before any allocation, so the job gets a fresh one
+CUDA_JOB = """
+import tempfile
+from pathlib import Path
+import numpy as np
+import torch
+from climate.nn import torch_model as tm
+
+assert tm.configure_device(1.0) == "cuda"
+rng = np.random.default_rng(7)
+X = rng.normal(size=(200, 3))
+y = X[:, 0] - 0.3 + rng.normal(0.0, 0.1, size=200)
+cfg = tm.FitConfig(seed=0, max_epochs=10, device="cuda")
+a, _ = tm.fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
+b, _ = tm.fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
+assert all(torch.equal(p, q) for p, q in zip(a.state_dict().values(), b.state_dict().values()))
+mu_cuda = tm.predict_gaussian(a, X, "cuda")[0]
+with tempfile.TemporaryDirectory() as tmp:
+    tm.save_net(a, Path(tmp) / "w.pt")
+    cpu_net = tm.load_net(Path(tmp) / "w.pt", in_dim=3, hidden=32)
+np.testing.assert_allclose(tm.predict_gaussian(cpu_net, X, "cpu")[0], mu_cuda, atol=1e-4)
+"""
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
-def test_a_fit_on_cuda_is_deterministic_and_its_weights_load_on_the_cpu(tmp_path):
-    assert configure_device(1.0) == "cuda"
-    X, y, _, _ = _biased_problem(n=200, seed=7)
-    cfg = FitConfig(seed=0, max_epochs=10, device="cuda")
-    a, _ = fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
-    b, _ = fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
-    assert _same_weights(a, b)
-    save_net(a, tmp_path / "w.pt")
-    cpu_net = load_net(tmp_path / "w.pt", in_dim=3, hidden=32)
-    on_cpu, on_cuda = predict_gaussian(cpu_net, X, "cpu"), predict_gaussian(a, X, "cuda")
-    np.testing.assert_allclose(on_cpu[0], on_cuda[0], atol=1e-4)
+def test_a_fit_on_cuda_is_deterministic_and_its_weights_load_on_the_cpu():
+    done = _in_fresh_interpreter(CUDA_JOB)
+    assert done.returncode == 0, done.stderr

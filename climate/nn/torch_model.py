@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import functools
 import math
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -138,7 +137,6 @@ def fit_gaussian_net(
 
     X_train, y_train = _checked("train", X_train, y_train)
     X_val, y_val = _checked("validation", X_val, y_val)
-    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")  # deterministic CUDA matmul
     torch.use_deterministic_algorithms(True)
     torch.manual_seed(cfg.seed)
     net = make_net(X_train.shape[1], cfg.hidden).to(cfg.device)
