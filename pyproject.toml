@@ -60,6 +60,7 @@ trading = [
 ibkr = [
     "ib_async>=2.1",
 ]
+research = ["torch>=2.4"]
 climate = [
     "cdsapi>=0.7.4",
     "xarray>=2024.1",
