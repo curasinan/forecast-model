@@ -217,11 +217,18 @@ def test_collapse_seeds_averages_the_variances_not_the_sds():
     np.testing.assert_allclose(sigma, [np.sqrt(5.0), 2.0])
 
 
-def test_standardiser_uses_the_population_sd_floors_a_constant_column_and_writes_json():
+def test_standardiser_uses_the_population_sd_gives_a_constant_column_scale_one_and_writes_json():
     s = Standardiser().fit(np.array([[1.0, 10.0], [5.0, 10.0]]))
-    assert s.mean.tolist() == [3.0, 10.0] and s.sd.tolist() == [2.0, 1e-8]
+    assert s.mean.tolist() == [3.0, 10.0] and s.sd.tolist() == [2.0, 1.0]
     assert s.transform(np.array([[5.0, 10.0]])).tolist() == [[1.0, 0.0]]
+    assert s.transform(np.array([[5.0, 11.0]])).tolist() == [[1.0, 1.0]]  # a later value is small
     assert json.loads(json.dumps(s.to_dict())) == s.to_dict()
+
+
+def test_a_column_constant_up_to_rounding_noise_also_gets_scale_one():
+    s = Standardiser().fit(np.full((3, 1), 0.1))  # the computed sd of this column is 1e-17, not 0
+    assert s.sd.tolist() == [1.0]
+    assert s.transform(np.array([[0.2]]))[0, 0] == pytest.approx(0.1)
 
 
 # the GPU budget applies once per process, before any allocation, so the job gets a fresh one

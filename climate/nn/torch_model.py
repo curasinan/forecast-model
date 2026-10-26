@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 NET_SIGMA_FLOOR = 1e-4
 LOSS_SIGMA_FLOOR = 1e-6  # the floor climate.emos.crps_gaussian uses
-STD_FLOOR = 1e-8
 _SQRT2 = math.sqrt(2.0)
 _SQRT_2PI = math.sqrt(2.0 * math.pi)
 _INV_SQRT_PI = 1.0 / math.sqrt(math.pi)
@@ -26,7 +25,7 @@ _INV_SQRT_PI = 1.0 / math.sqrt(math.pi)
 
 @dataclass(eq=False)
 class Standardiser:
-    """Per-column mean and sd of the training rows; the sd is floored at STD_FLOOR."""
+    """Per-column mean and sd of the training rows; a constant column gets scale 1.0."""
 
     mean: np.ndarray | None = None
     sd: np.ndarray | None = None
@@ -34,7 +33,7 @@ class Standardiser:
     def fit(self, X: np.ndarray) -> Standardiser:
         X = np.asarray(X, dtype=float)
         self.mean = X.mean(axis=0)
-        self.sd = np.maximum(X.std(axis=0), STD_FLOOR)
+        self.sd = np.where(np.ptp(X, axis=0) > 0.0, X.std(axis=0), 1.0)
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
