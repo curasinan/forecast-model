@@ -257,6 +257,11 @@ def _stored(root):
     return pd.read_parquet(root.joinpath(*DAILY_PARQUET))
 
 
+def _year_lines(captured):
+    """The per-year lines of the script's output: those that start with a year."""
+    return [line for line in captured.out.splitlines() if line[:4].isdigit()]
+
+
 def test_fetch_cli_refuses_a_mirror_root(tmp_path, cds_client, capsys):
     (tmp_path / ".mirror-of-spark").write_text("x")
     assert main(["--root", str(tmp_path), "--years", "1993"]) == 2
@@ -272,18 +277,19 @@ def test_fetch_cli_downloads_the_requested_years_and_reduces_them(tmp_path, cds_
     assert all(request["time"] == list(DAILY_TIMES) for request in cds_client.requests)
     assert all(_raw(root, year).stat().st_size > 0 for year in (1993, 1994))
     assert _stored(root)["date"].dt.year.value_counts().to_dict() == {1993: 3, 1994: 3}
-    lines = capsys.readouterr().out.splitlines()
-    assert [line.split(":")[0] for line in lines if line[:4].isdigit()] == ["1993", "1994"]
-    assert any(line.startswith("done: 2/2") and "6 daily rows" in line for line in lines)
-    assert all("downloaded" in line for line in lines if line[:4].isdigit())
+    captured = capsys.readouterr()
+    lines = _year_lines(captured)
+    assert [line.split(":")[0] for line in lines] == ["1993", "1994"]
+    assert all("downloaded" in line and "cached" not in line for line in lines)
+    done = [line for line in captured.out.splitlines() if line.startswith("done:")]
+    assert len(done) == 1 and done[0].startswith("done: 2/2") and "6 daily rows" in done[0]
 
 
 def test_fetch_cli_takes_a_list_of_years_and_handles_each_once(tmp_path, cds_client, capsys):
     cds_client.serve = {str(year): _year_bytes(tmp_path, year) for year in (1995, 1997)}
     assert main(["--root", str(tmp_path / "root"), "--years", "1997,1995,1995"]) == 0
     assert sorted(request["year"] for request in cds_client.requests) == ["1995", "1997"]
-    lines = capsys.readouterr().out.splitlines()
-    assert [line[:4] for line in lines if line[:4].isdigit()] == ["1995", "1997"]
+    assert [line[:4] for line in _year_lines(capsys.readouterr())] == ["1995", "1997"]
 
 
 def test_a_second_run_is_a_cache_hit_that_adds_nothing(tmp_path, cds_client, capsys):
@@ -292,8 +298,8 @@ def test_a_second_run_is_a_cache_hit_that_adds_nothing(tmp_path, cds_client, cap
     assert main(argv) == 0 and len(cds_client.requests) == 1
     capsys.readouterr()
     assert main(argv) == 0 and len(cds_client.requests) == 1
-    out = capsys.readouterr().out
-    assert "cached" in out and "+0 rows, 3 total" in out
+    (line,) = _year_lines(capsys.readouterr())
+    assert "cached" in line and "downloaded" not in line and "+0 rows, 3 total" in line
 
 
 def test_an_empty_raw_file_is_not_a_cache_hit(tmp_path, cds_client, capsys):
@@ -302,7 +308,8 @@ def test_an_empty_raw_file_is_not_a_cache_hit(tmp_path, cds_client, capsys):
     _raw(root, 1993).write_bytes(b"")
     cds_client.serve = {"1993": _year_bytes(tmp_path, 1993)}
     assert main(["--root", str(root), "--years", "1993"]) == 0
-    assert len(cds_client.requests) == 1 and "downloaded" in capsys.readouterr().out
+    (line,) = _year_lines(capsys.readouterr())
+    assert len(cds_client.requests) == 1 and "downloaded" in line and "cached" not in line
 
 
 def test_a_rerun_after_a_failed_year_fetches_only_that_year(tmp_path, cds_client, capsys):
@@ -406,7 +413,7 @@ def test_the_years_are_reduced_and_listed_in_order_whatever_order_they_finished_
         paths.append(raw)
     monkeypatch.setattr(gtm_nn_fetch, "run_tasks", lambda tasks, timeout, jobs: (paths[::-1], []))
     assert main(["--root", str(root), "--years", "1993-1994"]) == 0
-    lines = [line for line in capsys.readouterr().out.splitlines() if line[:4].isdigit()]
+    lines = _year_lines(capsys.readouterr())
     assert [line[:4] for line in lines] == ["1993", "1994"]
     assert (
         "cached" in lines[0] and "+3 rows, 3 total" in lines[0] and "+3 rows, 6 total" in lines[1]

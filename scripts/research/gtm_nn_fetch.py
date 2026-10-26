@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"climate data root: {root}")
     print(
         f"daily ERA5: {len(tasks)} years {args.years[0]}..{args.years[-1]}, "
-        f"{len(cached)} already downloaded"
+        f"{len(cached)} raw files already present"
     )
     completed, failures = run_tasks(tasks, args.soft_timeout, args.jobs)
 
