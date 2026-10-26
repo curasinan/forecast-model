@@ -1,32 +1,85 @@
-"""Daily ERA5 global means for the nowcast: the CDS request, the reducer and the per-year task."""
+"""Daily ERA5 global means for the nowcast: the CDS requests, the reducer and the fetch tasks."""
 
 from __future__ import annotations
 
+import calendar
+import re
+from collections.abc import Iterable
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from climate.cds import DEFAULT_GRID, _two_digit
+from climate.nn.availability import ERA5_LAG_DAYS
 from climate.reduce import _ERA5_TIME_CANDIDATES, _pick, append_parquet, global_mean_series
 
 ERA5_HOURLY_DATASET = "reanalysis-era5-single-levels"
 DAILY_TIMES = ("00:00", "06:00", "12:00", "18:00")
 DAILY_PARQUET = ("reference", "era5_daily_global_mean.parquet")
 DAILY_KEYS = ["date"]
+MONTH_TEXT = re.compile(r"([0-9]{4})-([0-9]{2})")
 
 
-def build_era5_daily_request(year: int, grid: str = DEFAULT_GRID) -> dict:
-    """Request dict for one year of 6-hourly ERA5 2m temperature."""
+def _daily_request(year: int, months: Iterable[int], days: Iterable[int], grid: str) -> dict:
+    """The request dict that the year and the month requests are both made from."""
     return {
         "product_type": "reanalysis",
         "variable": "2m_temperature",
         "year": str(int(year)),
-        "month": _two_digit(range(1, 13)),
-        "day": _two_digit(range(1, 32)),
+        "month": _two_digit(months),
+        "day": _two_digit(days),
         "time": list(DAILY_TIMES),
         "data_format": "netcdf",
         "grid": grid,
     }
+
+
+def build_era5_daily_request(year: int, grid: str = DEFAULT_GRID) -> dict:
+    """Request dict for one year of 6-hourly ERA5 2m temperature."""
+    return _daily_request(year, range(1, 13), range(1, 32), grid)
+
+
+def _parse_month(text: str) -> tuple[int, int]:
+    """The (year, month) of a YYYY-MM text; anything else raises ValueError."""
+    found = MONTH_TEXT.fullmatch(text)
+    if found is None or not 1 <= int(found[2]) <= 12 or int(found[1]) == 0:
+        raise ValueError(f"month must be YYYY-MM, got {text!r}")
+    return int(found[1]), int(found[2])
+
+
+def build_era5_daily_month_request(month: str, *, today: date, grid: str = DEFAULT_GRID) -> dict:
+    """Request dict for the days of one YYYY-MM month that ERA5 has published by today."""
+    year, number = _parse_month(month)
+    cutoff = today - timedelta(days=ERA5_LAG_DAYS)
+    if date(year, number, 1) > cutoff:
+        raise ValueError(f"no ERA5 day of {month} is available by {today}")
+    length = calendar.monthrange(year, number)[1]
+    last = length if date(year, number, length) <= cutoff else cutoff.day
+    request = _daily_request(year, [number], range(1, last + 1), grid)
+    request["download_format"] = "unarchived"
+    return request
+
+
+def _month_index(text: str) -> int:
+    year, number = _parse_month(text)
+    return year * 12 + number - 1
+
+
+def _month_text(index: int) -> str:
+    return f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+
+def parse_months(text: str) -> list[str]:
+    """Months of '2026-01,2026-03' or the inclusive range '2026-01..2026-10', sorted, unique."""
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) == 1 and ".." in parts[0]:
+        first, _, last = parts[0].partition("..")
+        start, stop = _month_index(first), _month_index(last)
+        if start > stop:
+            raise ValueError(f"month range runs backwards: {text!r}")
+        return [_month_text(index) for index in range(start, stop + 1)]
+    return sorted({_month_text(_month_index(part)) for part in parts})
 
 
 def era5_daily_frame(nc_path: str | Path) -> pd.DataFrame:
@@ -50,15 +103,29 @@ def era5_daily_frame(nc_path: str | Path) -> pd.DataFrame:
     )
 
 
-def reduce_era5_daily_file(nc_path: str | Path, root: Path) -> tuple[int, int]:
-    """Reduce one daily-request netCDF into the parquet; a file with no complete day raises."""
+def reduce_era5_daily_file(
+    nc_path: str | Path, root: Path, *, replace: bool = False
+) -> tuple[int, int]:
+    """Reduce one daily netCDF into the parquet; replace first drops the file's stored months."""
     frame = era5_daily_frame(nc_path)
     if frame.empty:
         raise ValueError(f"no complete day in {nc_path}")
-    return append_parquet(frame, root / DAILY_PARQUET[0] / DAILY_PARQUET[1], DAILY_KEYS)
+    path = root / DAILY_PARQUET[0] / DAILY_PARQUET[1]
+    if replace and path.exists():
+        stored = pd.read_parquet(path, engine="pyarrow")
+        months = frame["date"].dt.to_period("M").unique()
+        kept = stored[~stored["date"].dt.to_period("M").isin(months)]
+        kept.reset_index(drop=True).to_parquet(path, engine="pyarrow", index=False)
+    return append_parquet(frame, path, DAILY_KEYS)
 
 
 def daily_task(root: Path, year: int) -> tuple[str, dict, Path]:
     """The (dataset, request, raw file) task of one year, as run_tasks takes it."""
     out = root / "raw" / f"era5_{int(year)}_t2m_6hourly.nc"
     return ERA5_HOURLY_DATASET, build_era5_daily_request(year), out
+
+
+def daily_month_task(root: Path, month: str, *, today: date) -> tuple[str, dict, Path]:
+    """The (dataset, request, raw file) task of one YYYY-MM month, as run_tasks takes it."""
+    request = build_era5_daily_month_request(month, today=today)
+    return ERA5_HOURLY_DATASET, request, root / "raw" / f"era5_{month}_t2m_6hourly.nc"

@@ -29,6 +29,7 @@ CASES = [
     ("scripts.collect_climate_labels", [], "data_root"),
     ("scripts.fetch_climate_forecasts", ["--pilot"], "climate_data_root"),
     ("scripts.fit_gtm_emos", ["--trend", "--live"], "fit_gtm"),
+    ("scripts.research.gtm_nn_fetch", [], "run_tasks"),
 ]
 IDS = [case[0].split(".")[-1] for case in CASES]
 
