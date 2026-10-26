@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +29,7 @@ from climate.nn.daily import (
     daily_month_task,
     daily_task,
     era5_daily_frame,
+    has_era5_day,
     parse_months,
     reduce_era5_daily_file,
 )
@@ -251,6 +252,44 @@ def test_daily_month_task_refuses_a_month_with_no_available_day(tmp_path):
     message = "no ERA5 day of 2026-11 is available by 2026-11-03"
     with pytest.raises(ValueError, match=f"^{message}$"):
         daily_month_task(tmp_path, "2026-11", today=date(2026, 11, 3))
+
+
+@pytest.mark.parametrize(
+    ("month", "today", "available"),
+    [
+        ("2026-11", date(2026, 11, 3), False),
+        ("2026-11", date(2026, 11, 5), False),
+        ("2026-11", date(2026, 11, 6), True),
+        ("2026-10", date(2026, 11, 3), True),
+        ("2026-01", date(2025, 12, 31), False),
+        ("2026-01", date(2026, 1, 6), True),
+        ("2027-01", date(2026, 10, 27), False),
+        ("2000-01", date(2026, 10, 27), True),
+    ],
+)
+def test_has_era5_day_from_the_sixth_day_of_the_month(month, today, available):
+    assert has_era5_day(month, today=today) is available
+
+
+def test_has_era5_day_follows_the_availability_lag(monkeypatch):
+    assert not has_era5_day("2026-11", today=date(2026, 11, 1))
+    monkeypatch.setattr(daily, "ERA5_LAG_DAYS", 0)
+    assert has_era5_day("2026-11", today=date(2026, 11, 1))
+
+
+def test_has_era5_day_refuses_a_malformed_month():
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        has_era5_day("2026-1", today=date(2026, 11, 3))
+
+
+def test_has_era5_day_agrees_with_the_request_builder_around_the_start_of_a_month():
+    for offset in range(-8, 12):
+        today = date(2026, 3, 1) + timedelta(days=offset)
+        if has_era5_day("2026-03", today=today):
+            assert build_era5_daily_month_request("2026-03", today=today)["day"][0] == "01"
+        else:
+            with pytest.raises(ValueError, match="no ERA5 day of 2026-03"):
+                build_era5_daily_month_request("2026-03", today=today)
 
 
 def test_parse_months_accepts_lists_and_ranges():
@@ -706,12 +745,12 @@ def test_a_known_bad_delivery_is_named_and_the_other_months_are_still_reduced(
     assert len(_stored(root)) == 31 and _raw(root, "2026-02").exists()
 
 
-def _fail_reducing_1994(monkeypatch, error):
-    """The script's reducer made to raise error for the 1994 file and to work as usual otherwise."""
+def _fail_reducing(monkeypatch, error, marker="1994"):
+    """The script's reducer made to raise error for the files named with marker."""
     real = gtm_nn_fetch.reduce_era5_daily_file
 
     def reducer(path, root, **kwargs):
-        if "1994" in path.name:
+        if marker in path.name:
             raise error
         return real(path, root, **kwargs)
 
@@ -725,7 +764,7 @@ def test_the_errors_of_a_bad_file_fail_its_item_and_the_others_are_still_reduced
     tmp_path, cds_client, monkeypatch, capsys, error
 ):
     cds_client.serve = {str(year): _year_bytes(tmp_path, year) for year in (1993, 1994)}
-    _fail_reducing_1994(monkeypatch, error)
+    _fail_reducing(monkeypatch, error)
     assert main(["--root", str(tmp_path / "root"), "--years", "1993-1994"]) == 1
     out = capsys.readouterr().out
     assert f"1994: FAILED to reduce era5_1994_t2m_6hourly.nc: {error!r}" in out
@@ -734,7 +773,7 @@ def test_the_errors_of_a_bad_file_fail_its_item_and_the_others_are_still_reduced
 
 def test_an_error_that_is_not_about_the_file_is_not_swallowed(tmp_path, cds_client, monkeypatch):
     cds_client.serve = {"1994": _year_bytes(tmp_path, 1994)}
-    _fail_reducing_1994(monkeypatch, RuntimeError("a bug, not a bad file"))
+    _fail_reducing(monkeypatch, RuntimeError("a bug, not a bad file"))
     with pytest.raises(RuntimeError, match="a bug"):
         main(["--root", str(tmp_path / "root"), "--years", "1994"])
 
@@ -952,6 +991,134 @@ def test_a_failed_refresh_keeps_the_stored_days_and_a_rerun_replaces_them(
     )
 
 
+REFRESH_HINT = "rerun with --refresh"
+
+
+def test_the_failure_line_of_a_refreshed_month_ends_with_the_rerun_hint(
+    tmp_path, cds_client, capsys
+):
+    argv = ["--root", str(tmp_path / "root"), "--months", "2026-02", "--today", "2026-10-27"]
+    cds_client.serve = {"2026-02": RuntimeError("queue full")}
+    plain = "FAILED: era5_2026-02_t2m_6hourly.nc -- RuntimeError('queue full')"
+
+    assert main([*argv, "--refresh"]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert f"{plain} -- {REFRESH_HINT}" in lines
+
+    assert main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert plain in lines and not any(REFRESH_HINT in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("served", "opening", "size"),
+    [
+        (RuntimeError("queue full"), "FAILED: era5_2026-02_t2m_6hourly.nc", 1),
+        (
+            RuntimeError("required licences not accepted"),
+            "USER ACTION required for era5_2026-02_t2m_6hourly.nc",
+            3,
+        ),
+        (None, "submitted/queued, not complete: era5_2026-02_t2m_6hourly.nc", 1),
+    ],
+    ids=["error", "licence", "soft timeout"],
+)
+def test_every_kind_of_fetch_failure_of_a_refreshed_month_closes_with_the_rerun_hint(
+    tmp_path, cds_client, capsys, served, opening, size
+):
+    cds_client.serve = {"2026-02": served}
+    argv = ["--root", str(tmp_path / "root"), "--months", "2026-02", "--today", "2026-10-27"]
+    argv += ["--soft-timeout", "0.05"]
+
+    assert main([*argv, "--refresh"]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith(opening))
+    block = lines[start : start + size]
+    assert block[-1].endswith(REFRESH_HINT)
+    assert not any(REFRESH_HINT in line for line in block[:-1])
+
+    assert main(argv) == 1
+    assert REFRESH_HINT not in capsys.readouterr().out
+
+
+def test_only_the_refreshed_months_get_the_rerun_hint_beside_a_failed_year(
+    tmp_path, cds_client, capsys
+):
+    cds_client.serve = {"1994": RuntimeError("queue full"), "2026-02": RuntimeError("queue full")}
+    argv = ["--root", str(tmp_path / "root"), "--years", "1994", "--months", "2026-02"]
+    assert main([*argv, "--today", "2026-10-27", "--refresh"]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert "FAILED: era5_1994_t2m_6hourly.nc -- RuntimeError('queue full')" in lines
+    month = [line for line in lines if line.startswith("FAILED: era5_2026-02")]
+    assert len(month) == 1 and month[0].endswith(f" -- {REFRESH_HINT}")
+
+
+@pytest.mark.parametrize(
+    ("kind", "named"),
+    [("empty", "empty download"), ("zip", "the CDS returned a zip, not a netCDF")],
+)
+def test_a_known_bad_delivery_of_a_refreshed_month_says_to_rerun_with_refresh(
+    tmp_path, cds_client, capsys, kind, named
+):
+    root = tmp_path / "root"
+    bad = b"" if kind == "empty" else _zipped(_month_bytes(tmp_path, "2026-02", 28))
+    cds_client.serve = {"2026-01": _month_bytes(tmp_path, "2026-01", 31), "2026-02": bad}
+    argv = ["--root", str(root), "--months", "2026-01,2026-02", "--today", "2026-10-27"]
+    assert main([*argv, "--refresh"]) == 1
+    out = capsys.readouterr().out
+    failed = f"2026-02: FAILED to reduce era5_2026-02_t2m_6hourly.nc: {named}; {REFRESH_HINT}"
+    assert failed in out.splitlines() and "delete it" not in out
+    assert "2026-01: era5_2026-01_t2m_6hourly.nc downloaded" in out and "done: 1/2" in out
+    assert len(_stored(root)) == 31
+
+
+def test_a_year_that_fails_to_reduce_in_a_refresh_run_keeps_the_plain_hint(
+    tmp_path, cds_client, capsys
+):
+    cds_client.serve = {"1994": b"", "2026-02": _month_bytes(tmp_path, "2026-02", 28)}
+    argv = ["--root", str(tmp_path / "root"), "--years", "1994", "--months", "2026-02"]
+    assert main([*argv, "--today", "2026-10-27", "--refresh"]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    failed = "1994: FAILED to reduce era5_1994_t2m_6hourly.nc: empty download"
+    assert f"{failed}; delete it to fetch it again" in lines
+    assert not any(REFRESH_HINT in line for line in lines)
+
+
+def test_a_reduce_error_of_a_refreshed_month_ends_with_the_rerun_hint_and_a_plain_one_does_not(
+    tmp_path, cds_client, monkeypatch, capsys
+):
+    argv = ["--root", str(tmp_path / "root"), "--months", "2026-02", "--today", "2026-10-27"]
+    cds_client.serve = {"2026-02": _month_bytes(tmp_path, "2026-02", 28)}
+    _fail_reducing(monkeypatch, OSError("odd"), marker="2026-02")
+    failed = "2026-02: FAILED to reduce era5_2026-02_t2m_6hourly.nc: OSError('odd')"
+
+    assert main([*argv, "--refresh"]) == 1
+    assert f"{failed}; {REFRESH_HINT}" in capsys.readouterr().out.splitlines()
+
+    assert main(argv) == 1
+    assert failed in capsys.readouterr().out.splitlines()
+
+
+def test_a_plain_rerun_after_a_failed_refresh_fetches_the_month_but_keeps_the_older_values(
+    tmp_path, cds_client, capsys
+):
+    root = tmp_path / "root"
+    argv = ["--root", str(root), "--months", "2026-02", "--today", "2026-10-27"]
+    cds_client.serve = {"2026-02": _month_bytes(tmp_path, "2026-02", 28)}
+    assert main(argv) == 0
+    before = _stored(root)
+    cds_client.serve["2026-02"] = RuntimeError("queue full")
+    assert main([*argv, "--refresh"]) == 1
+
+    cds_client.serve["2026-02"] = _month_bytes(tmp_path, "2026-02", 28, offset=1.0)
+    cds_client.requests.clear()
+    capsys.readouterr()
+    assert main(argv) == 0 and len(cds_client.requests) == 1
+    (line,) = _year_lines(capsys.readouterr())
+    assert "downloaded" in line and "+0 rows, 28 total" in line
+    pd.testing.assert_frame_equal(_stored(root), before)
+
+
 def test_refreshing_a_month_without_a_raw_file_downloads_it_and_still_replaces_its_days(
     tmp_path, cds_client, capsys
 ):
@@ -972,21 +1139,109 @@ def test_refreshing_a_month_without_a_raw_file_downloads_it_and_still_replaces_i
     np.testing.assert_allclose(_stored(root)["t2m_global_K"], old + 1.0, rtol=1e-6)
 
 
-def test_fetch_cli_month_with_no_available_day_is_a_usage_error(tmp_path, cds_client, capsys):
+SKIPPED_NOVEMBER = "2026-11: no ERA5 day available by 2026-11-03, skipped"
+
+
+def test_fetch_cli_skips_a_month_with_no_available_day_and_says_so(tmp_path, cds_client, capsys):
     root = tmp_path / "root"
-    argv = ["--root", str(root), "--months", "2026-10,2026-11", "--today", "2026-11-03"]
-    assert main(argv) == 2
-    assert "no ERA5 day of 2026-11 is available by 2026-11-03" in capsys.readouterr().err
+    argv = ["--root", str(root), "--months", "2026-11", "--today", "2026-11-03"]
+    assert main(argv) == 0
+    captured = capsys.readouterr()
+    assert _year_lines(captured) == [SKIPPED_NOVEMBER]
+    done = _done_line(captured)
+    assert done.startswith("done: 0/0 months reduced into ") and done.endswith(", 1 skipped")
     assert cds_client.requests == [] and not root.exists()
 
 
-def test_a_usage_error_about_a_month_deletes_no_raw_file(tmp_path, cds_client, capsys):
+def test_fetch_cli_skips_the_month_with_no_available_day_beside_a_fetched_one(
+    tmp_path, cds_client, capsys
+):
+    root = tmp_path / "root"
+    cds_client.serve = {"2026-10": _month_bytes(tmp_path, "2026-10", 29)}
+    argv = ["--root", str(root), "--months", "2026-10..2026-11", "--today", "2026-11-03"]
+    assert main(argv) == 0
+    assert [(_label(request), len(request["day"])) for request in cds_client.requests] == [
+        ("2026-10", 29)
+    ]
+    captured = capsys.readouterr()
+    lines = _year_lines(captured)
+    assert [line.partition(":")[0] for line in lines] == ["2026-10", "2026-11"]
+    assert _header(captured) == "daily ERA5: 2 months 2026-10..2026-11, 0 raw files already present"
+    assert "downloaded" in lines[0] and "+29 rows, 29 total" in lines[0]
+    assert lines[1] == SKIPPED_NOVEMBER
+    done = _done_line(captured)
+    assert done.startswith("done: 1/1 months reduced") and done.endswith("29 daily rows, 1 skipped")
+    assert len(_stored(root)) == 29
+    assert [path.name for path in (root / "raw").iterdir()] == ["era5_2026-10_t2m_6hourly.nc"]
+
+
+def test_a_skipped_month_beside_a_year_is_counted_in_the_summary(tmp_path, cds_client, capsys):
+    cds_client.serve = {"1993": _year_bytes(tmp_path, 1993)}
+    argv = ["--root", str(tmp_path / "root"), "--years", "1993", "--months", "2026-11"]
+    assert main([*argv, "--today", "2026-11-03"]) == 0
+    captured = capsys.readouterr()
+    assert [line.partition(":")[0] for line in _year_lines(captured)] == ["1993", "2026-11"]
+    done = _done_line(captured)
+    assert done.startswith("done: 1/1 years and months reduced") and done.endswith(", 1 skipped")
+
+
+def test_the_months_with_no_available_day_are_each_skipped_and_counted(
+    tmp_path, cds_client, capsys
+):
+    cds_client.serve = {"2026-10": _month_bytes(tmp_path, "2026-10", 29)}
+    argv = [
+        "--root",
+        str(tmp_path / "root"),
+        "--months",
+        "2026-10..2026-12",
+        "--today",
+        "2026-11-03",
+    ]
+    assert main(argv) == 0
+    captured = capsys.readouterr()
+    lines = _year_lines(captured)
+    assert [line.partition(":")[0] for line in lines] == ["2026-10", "2026-11", "2026-12"]
+    assert lines[1:] == [SKIPPED_NOVEMBER, "2026-12: no ERA5 day available by 2026-11-03, skipped"]
+    assert [_label(request) for request in cds_client.requests] == ["2026-10"]
+    assert _done_line(captured).endswith("29 daily rows, 2 skipped")
+
+
+def test_a_skipped_month_loses_no_raw_file_to_a_refresh(tmp_path, cds_client, capsys):
+    root = tmp_path / "root"
+    for month in ("2026-10", "2026-11"):
+        _raw(root, month).parent.mkdir(parents=True, exist_ok=True)
+        _raw(root, month).write_bytes(_month_bytes(tmp_path, month, 3))
+    stale = _raw(root, "2026-11").read_bytes()
+    cds_client.serve = {"2026-10": _month_bytes(tmp_path, "2026-10", 29)}
+    argv = ["--root", str(root), "--months", "2026-10..2026-11", "--today", "2026-11-03"]
+    assert main([*argv, "--refresh"]) == 0
+    assert [_label(request) for request in cds_client.requests] == ["2026-10"]
+    assert _raw(root, "2026-11").read_bytes() == stale
+    captured = capsys.readouterr()
+    assert _header(captured).endswith("0 raw files already present, 1 deleted for refresh")
+    assert _year_lines(captured)[-1] == SKIPPED_NOVEMBER
+    assert len(_stored(root)) == 29
+
+
+def test_fetch_cli_asks_run_tasks_only_for_the_months_with_an_available_day(tmp_path, monkeypatch):
+    seen = _spy_on_run_tasks(monkeypatch)
+    argv = ["--root", str(tmp_path), "--months", "2026-10..2026-11", "--today", "2026-11-03"]
+    assert main(argv) == 0
+    assert [task[2].name for task in seen["tasks"]] == ["era5_2026-10_t2m_6hourly.nc"]
+    assert seen["tasks"][0][1]["day"][-1] == "29"
+
+
+@pytest.mark.parametrize("month", ["2026-1", "2026-13"])
+def test_a_malformed_month_is_still_a_usage_error_and_deletes_nothing(
+    tmp_path, cds_client, capsys, month
+):
     root = tmp_path / "root"
     raw = _raw(root, "2026-10")
     raw.parent.mkdir(parents=True)
     raw.write_bytes(_month_bytes(tmp_path, "2026-10", 3))
-    argv = ["--root", str(root), "--months", "2026-10,2026-11", "--today", "2026-11-03"]
+    argv = ["--root", str(root), "--months", f"2026-10,{month}", "--today", "2026-11-03"]
     assert main([*argv, "--refresh"]) == 2
+    assert "usage" in capsys.readouterr().err.lower()
     assert cds_client.requests == [] and raw.stat().st_size > 0
 
 

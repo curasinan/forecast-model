@@ -48,12 +48,23 @@ def _parse_month(text: str) -> tuple[int, int]:
     return int(found[1]), int(found[2])
 
 
+def _cutoff(today: date) -> date:
+    """The latest day that ERA5 has published by today."""
+    return today - timedelta(days=ERA5_LAG_DAYS)
+
+
+def has_era5_day(month: str, *, today: date) -> bool:
+    """Whether ERA5 has published at least one day of the YYYY-MM month by today."""
+    year, number = _parse_month(month)
+    return date(year, number, 1) <= _cutoff(today)
+
+
 def build_era5_daily_month_request(month: str, *, today: date, grid: str = DEFAULT_GRID) -> dict:
     """Request dict for the days of one YYYY-MM month that ERA5 has published by today."""
     year, number = _parse_month(month)
-    cutoff = today - timedelta(days=ERA5_LAG_DAYS)
-    if date(year, number, 1) > cutoff:
+    if not has_era5_day(month, today=today):
         raise ValueError(f"no ERA5 day of {month} is available by {today}")
+    cutoff = _cutoff(today)
     length = calendar.monthrange(year, number)[1]
     last = length if date(year, number, length) <= cutoff else cutoff.day
     request = _daily_request(year, [number], range(1, last + 1), grid)

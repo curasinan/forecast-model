@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import re
 import sys
 import zipfile
@@ -17,6 +19,7 @@ from climate.nn.daily import (  # noqa: E402
     DAILY_PARQUET,
     daily_month_task,
     daily_task,
+    has_era5_day,
     parse_months,
     reduce_era5_daily_file,
 )
@@ -33,6 +36,8 @@ DEFAULT_YEARS = "1993-2025"
 DEFAULT_JOBS = 2
 DEFAULT_SOFT_TIMEOUT = 7200.0
 DAY_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+REFRESH_HINT = "rerun with --refresh"
+DELETE_HINT = "delete it to fetch it again"
 
 
 def _years(text: str) -> list[int]:
@@ -86,13 +91,15 @@ def _parser() -> argparse.ArgumentParser:
         type=_months,
         default=None,
         help="2026-01,2026-03 or 2026-01..2026-10: one request per month for the days ERA5 has "
-        "published by --today, fetched after the years",
+        "published by --today, fetched after the years; a month with none yet is skipped and "
+        "said so",
     )
     parser.add_argument(
         "--refresh",
         action="store_true",
         help="delete the raw files of the --months, fetch them again and replace their stored "
-        "days; the years stay as they are",
+        "days; the years stay as they are. Rerun a failed month with --refresh too: a plain "
+        "rerun keeps the older stored days",
     )
     parser.add_argument(
         "--today",
@@ -138,6 +145,19 @@ def _bad_delivery(path: Path) -> str | None:
     return None
 
 
+def _report_failures(failures: list[tuple[Path, BaseException]], refreshing: set[Path]) -> None:
+    """report_failures, the last line of each failure of a refreshed month ending in a hint."""
+    for failure in failures:
+        if failure[0] not in refreshing:
+            report_failures([failure])
+            continue
+        shown = io.StringIO()
+        with contextlib.redirect_stdout(shown):
+            report_failures([failure])
+        *first, last = shown.getvalue().splitlines()
+        print(*first, f"{last} -- {REFRESH_HINT}", sep="\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _args(argv)
@@ -151,14 +171,12 @@ def main(argv: list[str] | None = None) -> int:
     except MirrorRootError as exc:
         print(exc, file=sys.stderr)
         return 2
-    try:
-        month_tasks = [daily_month_task(root, month, today=today) for month in args.months]
-    except ValueError as exc:  # a month of which ERA5 has no day yet
-        print(exc, file=sys.stderr)
-        return 2
 
+    available = [month for month in args.months if has_era5_day(month, today=today)]
+    skipped = [month for month in args.months if month not in available]
+    month_tasks = [daily_month_task(root, month, today=today) for month in available]
     tasks = [daily_task(root, year) for year in args.years] + month_tasks
-    labels = [str(year) for year in args.years] + args.months
+    labels = [str(year) for year in args.years] + available
     position = {path: index for index, (_, _, path) in enumerate(tasks)}
     refreshed = set()
     if args.refresh:
@@ -182,27 +200,33 @@ def main(argv: list[str] | None = None) -> int:
     reduced, total, unreadable = 0, None, 0
     for path in sorted(completed, key=position.__getitem__):
         label = labels[position[path]]
+        again = f"; {REFRESH_HINT}" if path in replace else ""
         bad = _bad_delivery(path)
         if bad is not None:
-            print(f"{label}: FAILED to reduce {path.name}: {bad}; delete it to fetch it again")
+            tail = again or f"; {DELETE_HINT}"
+            print(f"{label}: FAILED to reduce {path.name}: {bad}{tail}")
             unreadable += 1
             continue
         try:
             added, total = reduce_era5_daily_file(path, root, replace=path in replace)
         except (ValueError, KeyError, OSError) as exc:  # one bad file must not hide the others
-            print(f"{label}: FAILED to reduce {path.name}: {exc!r}")
+            print(f"{label}: FAILED to reduce {path.name}: {exc!r}{again}")
             unreadable += 1
             continue
         reduced += 1
         how = "refreshed" if path in refreshed else "cached" if path in cached else "downloaded"
         size = path.stat().st_size
         print(f"{label}: {path.name} {how} ({size} bytes), +{added} rows, {total} total")
-    report_failures(failures)
+    for month in skipped:
+        print(f"{month}: no ERA5 day available by {today}, skipped")
+    _report_failures(failures, replace)
     unit = (
         "years and months" if args.years and args.months else "months" if args.months else "years"
     )
     rows = "" if total is None else f", {total} daily rows"
-    print(f"done: {reduced}/{len(tasks)} {unit} reduced into {root.joinpath(*DAILY_PARQUET)}{rows}")
+    note = f", {len(skipped)} skipped" if skipped else ""
+    parquet = root.joinpath(*DAILY_PARQUET)
+    print(f"done: {reduced}/{len(tasks)} {unit} reduced into {parquet}{rows}{note}")
     return 1 if failures or unreadable else 0
 
 
