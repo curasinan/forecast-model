@@ -156,9 +156,9 @@ def test_predict_collapses_the_seeds_over_the_standardised_features(fitted):
     X = model.standardiser.transform(frame[SEASONAL_FEATURES].to_numpy(dtype=float))
     per_seed = [predict_gaussian(model.nets[seed], X, "cpu") for seed in (0, 1)]
     mu, sigma = collapse_seeds([m for m, _ in per_seed], [s for _, s in per_seed])
-    pred = model.predict(frame)
-    np.testing.assert_allclose(pred["mu"], mu)
-    np.testing.assert_allclose(pred["sigma"], sigma)
+    pred = model.predict(frame)  # float32 sums may differ in the last bit with the memory layout
+    np.testing.assert_allclose(pred["mu"], mu, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(pred["sigma"], sigma, rtol=1e-5, atol=1e-6)
     assert not np.allclose(per_seed[0][0], per_seed[1][0])  # the seeds differ, so the collapse acts
 
 
