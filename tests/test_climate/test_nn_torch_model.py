@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,10 @@ def _biased_problem(n: int, seed: int):
     X = rng.normal(size=(n, 3))
     y = X[:, 0] - 0.3 + rng.normal(0.0, 0.1, size=n)
     return X, y, X[:, 0].copy(), np.full(n, 0.3)
+
+
+def _same_weights(a, b) -> bool:
+    return all(torch.equal(p, q) for p, q in zip(a.state_dict().values(), b.state_dict().values()))
 
 
 def test_torch_crps_matches_the_closed_form_numpy_version():
@@ -107,36 +112,76 @@ def test_configure_device_applies_the_budget_and_returns_cuda_when_cuda_is_there
     assert budgets == [8.0]
 
 
-def test_the_network_has_two_relu_hidden_layers_and_a_positive_sigma():
+def test_torch_crps_floors_sigma_like_the_numpy_version():
+    y, mu, sigma = torch.tensor([1.0]), torch.tensor([0.0]), torch.tensor([0.0])
+    got = crps_gaussian_torch(y, mu, sigma).numpy()
+    np.testing.assert_allclose(got, crps_gaussian(1.0, 0.0, 0.0), atol=1e-6)
+
+
+def test_the_network_is_two_relu_layers_then_a_mean_and_a_floored_softplus_sigma():
     net = make_net(3)
     assert type(net).__name__ == "SmallGaussianNet" and isinstance(net, torch.nn.Module)
     weights = [tuple(v.shape) for k, v in net.state_dict().items() if k.endswith("weight")]
     assert weights == [(32, 3), (32, 32), (2, 32)]
     assert sum(isinstance(m, torch.nn.ReLU) for m in net.modules()) == 2
-    mu, sigma = net(torch.randn(5, 3))
+    head_weight, head_bias = list(net.parameters())[-2:]
+    with torch.no_grad():
+        head_weight.zero_()
+        head_bias.copy_(torch.tensor([0.7, 0.3]))
+        mu, sigma = net(torch.randn(5, 3))
+        head_bias.copy_(torch.tensor([0.0, -100.0]))
+        floored = net(torch.zeros(1, 3))[1]
     assert mu.shape == sigma.shape == (5,)
-    assert bool((sigma > 1e-4).all())
+    np.testing.assert_allclose(mu.numpy(), 0.7, rtol=1e-6)
+    np.testing.assert_allclose(sigma.numpy(), np.log1p(np.exp(0.3)) + 1e-4, rtol=1e-6)
+    assert floored.item() == pytest.approx(1e-4, rel=1e-3)
 
 
 def test_early_stopping_restores_the_best_validation_weights():
     X, y, _, _ = _biased_problem(n=120, seed=5)
     cfg = FitConfig(seed=0, lr=0.01, max_epochs=400, patience=10)
-    net, hist = fit_gaussian_net(X[:20], y[:20], X[20:], y[20:], cfg)
+    net, hist = fit_gaussian_net(X[:20], y[:20], X[20:], y[20:], cfg)  # 20 rows overfit quickly
     epochs = len(hist["train_crps"])
     assert set(hist) == {"best_epoch", "best_val_crps", "train_crps"}
     assert hist["best_epoch"] < epochs and epochs - hist["best_epoch"] == cfg.patience
     mu, sigma = predict_gaussian(net, X[20:], "cpu")
+    assert mu.dtype == sigma.dtype == np.float64 and mu.shape == (100,)
     assert crps_gaussian(y[20:], mu, sigma).mean() == pytest.approx(hist["best_val_crps"], rel=1e-4)
     assert json.loads(json.dumps(hist)) == hist
+    # the restored weights are those after exactly best_epoch epochs
+    short = replace(cfg, max_epochs=hist["best_epoch"])
+    again, again_hist = fit_gaussian_net(X[:20], y[:20], X[20:], y[20:], short)
+    assert _same_weights(net, again)
+    assert again_hist["train_crps"] == hist["train_crps"][: hist["best_epoch"]]
+
+
+def test_max_epochs_bounds_the_run():
+    X, y, _, _ = _biased_problem(n=60, seed=7)
+    _, hist = fit_gaussian_net(X[:40], y[:40], X[40:], y[40:], FitConfig(max_epochs=5))
+    assert len(hist["train_crps"]) == 5 and 1 <= hist["best_epoch"] <= 5
 
 
 def test_different_seeds_give_different_weights():
     X, y, _, _ = _biased_problem(n=300, seed=2)
     a, _ = fit_gaussian_net(X[:200], y[:200], X[200:], y[200:], FitConfig(seed=3, max_epochs=20))
     b, _ = fit_gaussian_net(X[:200], y[:200], X[200:], y[200:], FitConfig(seed=4, max_epochs=20))
-    assert not all(
-        torch.equal(p, q) for p, q in zip(a.state_dict().values(), b.state_dict().values())
-    )
+    assert not _same_weights(a, b)
+
+
+@pytest.mark.parametrize("change", [{"lr": 0.01}, {"weight_decay": 0.5}, {"hidden": 8}])
+def test_a_changed_fit_setting_changes_the_weights(change):
+    X, y, _, _ = _biased_problem(n=300, seed=2)
+    base = FitConfig(seed=3, max_epochs=20)
+    a, _ = fit_gaussian_net(X[:200], y[:200], X[200:], y[200:], base)
+    b, _ = fit_gaussian_net(X[:200], y[:200], X[200:], y[200:], replace(base, **change))
+    assert not _same_weights(a, b)
+
+
+def test_a_fit_switches_on_deterministic_algorithms():
+    X, y, _, _ = _biased_problem(n=60, seed=7)
+    torch.use_deterministic_algorithms(False)
+    fit_gaussian_net(X[:40], y[:40], X[40:], y[40:], FitConfig(max_epochs=2))
+    assert torch.are_deterministic_algorithms_enabled()
 
 
 def test_fit_refuses_non_finite_or_misshapen_arrays():
@@ -152,13 +197,40 @@ def test_fit_refuses_non_finite_or_misshapen_arrays():
         fit_gaussian_net(X[:40], y[:40], X[:0], y[:0], cfg)
 
 
+def test_a_loaded_net_is_in_eval_mode_on_the_cpu(tmp_path):
+    save_net(make_net(3), tmp_path / "w.pt")
+    again = load_net(tmp_path / "w.pt", in_dim=3, hidden=32)
+    assert not again.training and all(p.device.type == "cpu" for p in again.parameters())
+
+
 def test_collapse_of_one_seed_is_that_seed():
     mu, sigma = collapse_seeds([np.array([0.5, -1.0, 2.0])], [np.array([0.1, 0.2, 0.3])])
     np.testing.assert_allclose(mu, [0.5, -1.0, 2.0])
     np.testing.assert_allclose(sigma, [0.1, 0.2, 0.3])
 
 
+def test_collapse_seeds_averages_the_variances_not_the_sds():
+    same = [np.array([1.0, 1.0]), np.array([1.0, 1.0])]
+    _, sigma = collapse_seeds(same, [np.array([1.0, 2.0]), np.array([3.0, 2.0])])
+    np.testing.assert_allclose(sigma, [np.sqrt(5.0), 2.0])
+
+
 def test_standardiser_uses_the_population_sd_floors_a_constant_column_and_writes_json():
-    s = Standardiser().fit(np.array([[1.0, 10.0], [3.0, 10.0]]))
-    assert s.mean.tolist() == [2.0, 10.0] and s.sd.tolist() == [1.0, 1e-8]
+    s = Standardiser().fit(np.array([[1.0, 10.0], [5.0, 10.0]]))
+    assert s.mean.tolist() == [3.0, 10.0] and s.sd.tolist() == [2.0, 1e-8]
+    assert s.transform(np.array([[5.0, 10.0]])).tolist() == [[1.0, 0.0]]
     assert json.loads(json.dumps(s.to_dict())) == s.to_dict()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_a_fit_on_cuda_is_deterministic_and_its_weights_load_on_the_cpu(tmp_path):
+    assert configure_device(1.0) == "cuda"
+    X, y, _, _ = _biased_problem(n=200, seed=7)
+    cfg = FitConfig(seed=0, max_epochs=10, device="cuda")
+    a, _ = fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
+    b, _ = fit_gaussian_net(X[:150], y[:150], X[150:], y[150:], cfg)
+    assert _same_weights(a, b)
+    save_net(a, tmp_path / "w.pt")
+    cpu_net = load_net(tmp_path / "w.pt", in_dim=3, hidden=32)
+    on_cpu, on_cuda = predict_gaussian(cpu_net, X, "cpu"), predict_gaussian(a, X, "cuda")
+    np.testing.assert_allclose(on_cpu[0], on_cuda[0], atol=1e-4)
