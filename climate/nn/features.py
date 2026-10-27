@@ -65,6 +65,12 @@ def seasonal_frame(
     seas5: pd.DataFrame, era5_K: pd.Series, noaa_C: pd.Series, *, bridge: Bridge
 ) -> pd.DataFrame:
     """The GTM frame plus bridged member quantiles, month and lead encodings, availability times."""
+    outside = sorted(set(seas5["lead_month"].unique().tolist()) - set(_LEADS))
+    if outside:
+        raise ValueError(
+            f"lead_month {outside[0]} is outside 1..6: the seasonal features encode leads 1 to 6, "
+            "keep only those SEAS5 rows"
+        )
     frame = build_frame_from_inputs(seas5, era5_K, noaa_C, bridge=bridge)
     keys = ["init_date", "lead_month"]
     quantiles = frame[keys].merge(member_quantiles(seas5), on=keys, how="left")

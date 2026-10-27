@@ -49,6 +49,8 @@ class GtmNnModel:
         if len(seeds) == 0:
             raise ValueError("seeds must name at least one seed")
         self.seeds = tuple(int(seed) for seed in seeds)
+        if len(set(self.seeds)) != len(self.seeds):
+            raise ValueError(f"seeds {self.seeds} repeat a seed: name each seed once")
         self.hidden = int(hidden)
         self.device = device  # fitting only; prediction always runs on the CPU
         self.features: list[str] = list(self.FEATURES)
@@ -158,7 +160,7 @@ class GtmNnModel:
         return model
 
     def fingerprint(self) -> str:
-        """The first 16 hex characters of the sha256 of the manifest without the history."""
+        """16 hex digits of the manifest's sha256 less its history: the setup, not the weights."""
         manifest = {key: value for key, value in self._manifest().items() if key != "history"}
         text = json.dumps(manifest, sort_keys=True)
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]

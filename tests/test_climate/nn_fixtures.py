@@ -6,8 +6,10 @@ from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from climate.dataset import month_of_year, target_month, target_year_frac
+from climate.nn import seasonal_model
 from climate.nn.windows import strict_windows
 from climate.storage import LEDGER_COLUMNS, VINTAGE_BACKFILL, VINTAGE_LIVE
 
@@ -75,14 +77,13 @@ def nowcast_rows(
     months: Sequence[str] | None = None,
     prev_label: Sequence[float] | None = None,
 ) -> pd.DataFrame:
-    """Rows of one checkpoint and one calendar month with the nowcast frame's column names.
-
-    One row per entry of the longest list given (one row when none is). Defaults: target months
-    run from 2000 in consecutive years, mtd_mean_K is 287.0, full_month_mean_K is mtd + delta
-    (NaN without deltas), prev_label_C and y_C are NaN. days_in_month is 30 and days_used is the
-    checkpoint's day number without the ERA5 lag, or 30 for a "+n" checkpoint after month end.
-    """
-    n = max((len(v) for v in (deltas, mtd, y, months, prev_label) if v is not None), default=1)
+    """Rows of one checkpoint and calendar month as the nowcast frame has them; NaN if not given."""
+    given = {"deltas": deltas, "mtd": mtd, "y": y, "months": months, "prev_label": prev_label}
+    given = {name: values for name, values in given.items() if values is not None}
+    n = max((len(values) for values in given.values()), default=1)
+    for name, values in given.items():
+        if len(values) != n:
+            raise ValueError(f"{name} has {len(values)} values for {n} rows: give one per row")
     labels = list(months) if months is not None else [f"{2000 + i}-{month:02d}" for i in range(n)]
     mtd_K = np.full(n, 287.0) if mtd is None else np.asarray(mtd, dtype=float)
     days_in_month = 30
@@ -161,6 +162,25 @@ def synthetic_nowcast(
         columns=LEDGER_COLUMNS,
     )
     return daily_K, noaa_C, seas5, ledger
+
+
+class _Seen(Exception):
+    """Ends a fit once the rows it hands to the torch core are known."""
+
+
+def rows_a_fit_uses(model, rows: pd.DataFrame) -> int:
+    """How many rows the model's fit hands to the torch core, training and validation together."""
+    seen = []
+
+    def stop(X_train, y_train, X_val, y_val, cfg):
+        seen.append(len(X_train) + len(X_val))
+        raise _Seen
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(seasonal_model, "fit_gaussian_net", stop)
+        with pytest.raises(_Seen):
+            model.fit(rows)
+    return seen[0]
 
 
 def windows_with_a_late_input(*args, **kwargs):

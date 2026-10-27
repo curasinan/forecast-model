@@ -219,6 +219,29 @@ def test_a_complete_month_row_gets_no_remainder_whatever_the_training_stats_say(
     np.testing.assert_array_equal(sigma, [0.03, 0.03])
 
 
+def test_the_complete_month_rule_reads_the_days_used_not_the_checkpoint_name():
+    bridge = Bridge(alpha=ZERO_ALPHA, beta=1.0, resid_sd=0.03)
+    train = pd.concat(
+        [
+            nowcast_rows("+1", month=3, deltas=[0.5, 0.5, 0.5]),
+            nowcast_rows("10", month=3, deltas=[0.2, 0.2, 0.2]),
+        ]
+    )
+    short = nowcast_rows("+1", month=3, mtd=[287.0]).assign(days_used=26)  # 26 of 30 days
+    whole = nowcast_rows("10", month=3, mtd=[287.5]).assign(days_used=30)  # every day
+    mu, sigma = bridge_nowcast(train, pd.concat([short, whole]), bridge=bridge)
+    assert mu[0] == pytest.approx(287.5)  # the "+1" remainder is added
+    assert sigma[0] == pytest.approx(np.hypot(SIGMA_FLOOR, 0.03))
+    np.testing.assert_array_equal([mu[1], sigma[1]], [287.5, 0.03])  # no remainder at all
+
+
+def test_nowcast_rows_refuses_a_list_shorter_than_the_rows_instead_of_broadcasting_it():
+    with pytest.raises(ValueError, match="deltas has 1 values for 3 rows"):
+        nowcast_rows("10", month=3, deltas=[0.1], y=[1.0, 1.1, 1.2])
+    with pytest.raises(ValueError, match="mtd has 2 values for 3 rows"):
+        nowcast_rows("10", month=3, mtd=[287.0, 287.1], deltas=[0.1, 0.2, 0.3])
+
+
 def test_the_nowcast_baselines_return_empty_arrays_for_an_empty_test_frame():
     bridge = Bridge(alpha=ZERO_ALPHA, beta=1.0, resid_sd=0.03)
     train = nowcast_rows("10", month=3, deltas=[0.1, 0.2, 0.3], y=[1.0, 1.1, 1.2])

@@ -11,10 +11,11 @@ import pytest
 
 from climate.bridge import Bridge
 from climate.dataset import build_frame_from_inputs, month_of_year, target_year_frac
-from climate.nn.features import SEASONAL_FEATURES, member_quantiles, seasonal_frame
+from climate.nn.features import MIN_MEMBERS, SEASONAL_FEATURES, member_quantiles, seasonal_frame
 from tests.test_climate import nn_fixtures
 
 QUANTILE_NAMES = ("q10", "q25", "q50", "q75", "q90")
+QUANTILE_K = [f"{name}_K" for name in QUANTILE_NAMES]
 
 
 def _members(init: str, lead: int, values) -> pd.DataFrame:
@@ -55,6 +56,46 @@ def test_member_quantiles_use_finite_members_only():
     values = [*np.arange(1.0, 13.0), np.nan, np.nan, np.inf]  # 12 finite members 1..12
     q = member_quantiles(_members(init="2020-01-01", lead=1, values=values)).iloc[0]
     assert q["q50_K"] == pytest.approx(6.5) and q["n_finite"] == 12
+
+
+def test_nine_finite_members_are_dropped_and_ten_are_kept():
+    assert MIN_MEMBERS == 10
+    nine = member_quantiles(_members("2020-01-01", 1, [*np.arange(1.0, 10.0), np.nan])).iloc[0]
+    ten = member_quantiles(_members("2020-01-01", 1, np.arange(1.0, 11.0))).iloc[0]
+    assert nine["n_finite"] == 9 and nine[QUANTILE_K].isna().all()
+    assert ten["n_finite"] == 10 and ten[QUANTILE_K].notna().all()
+
+
+def test_the_seasonal_features_are_the_agreed_list_in_order():
+    assert SEASONAL_FEATURES == [
+        "fc_mean_C",
+        "fc_sd_C",
+        "q10_C",
+        "q25_C",
+        "q50_C",
+        "q75_C",
+        "q90_C",
+        "target_year_frac",
+        "moy_sin",
+        "moy_cos",
+        "lead_1",
+        "lead_2",
+        "lead_3",
+        "lead_4",
+        "lead_5",
+        "lead_6",
+    ]
+
+
+@pytest.mark.parametrize("lead", [0, 7])
+def test_a_lead_outside_one_to_six_is_refused_and_named(lead, synthetic_inputs):
+    seas5, era5_K, noaa_C = synthetic_inputs
+    odd = seas5.copy()
+    cell = (odd["init_date"] == "2010-03-01") & (odd["lead_month"] == 1)
+    odd.loc[cell, "lead_month"] = lead
+    bridge = Bridge().fit(era5_K, noaa_C, end="2015-12")
+    with pytest.raises(ValueError, match=f"lead_month {lead} is outside 1..6"):
+        seasonal_frame(odd, era5_K, noaa_C, bridge=bridge)
 
 
 def test_seasonal_frame_carries_features_availability_and_the_bridge(synthetic_inputs):

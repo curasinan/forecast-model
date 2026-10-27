@@ -22,6 +22,7 @@ from climate.nn.benchmark import (  # noqa: E402
 )
 from climate.nn.leakage import LeakageError  # noqa: E402
 from climate.nn.report import render_seasonal_report  # noqa: E402
+from climate.nn.windows import WindowError  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.storage import ledger_path, load_ledger  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
@@ -75,7 +76,10 @@ def _benchmark(args: argparse.Namespace) -> int:
     )
     with tempfile.TemporaryDirectory() as scratch:
         model_dir = Path(scratch) / "model"
-        rows, summary, extras = run_seasonal(inputs, ledger, cfg, model_dir=model_dir)
+        try:
+            rows, summary, extras = run_seasonal(inputs, ledger, cfg, model_dir=model_dir)
+        except WindowError as exc:
+            raise nn_cli.UsageError(str(exc)) from exc
         if not (summary["n"] > 0).any():
             raise nn_cli.UsageError("no test row could be scored: check --root and the test years")
         judged = args.protocol == "strict" and {"nn", "emos"} <= set(models)

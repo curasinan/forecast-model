@@ -294,6 +294,23 @@ def test_bad_options_exit_2_and_write_nothing(extra, tmp_path, synthetic_root, c
     assert not (tmp_path / "r").exists() and capsys.readouterr().err != ""
 
 
+def test_a_seed_given_twice_exits_2_before_anything_runs(tmp_path, synthetic_root, capsys):
+    argv = ["--models", "emos", "--seeds", "0,0", *FAST_YEARS]
+    assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 2
+    err = capsys.readouterr().err
+    assert "--seeds" in err and "each seed once" in err and not (tmp_path / "r").exists()
+
+
+def test_a_first_test_year_too_early_for_a_bridge_exits_2_with_a_one_line_message(
+    tmp_path, synthetic_root, capsys
+):
+    argv = ["--models", "emos", "--first-test-year", "1994", "--last-test-year", "1994"]
+    assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and "test year 1994: bridge fit needs" in err.splitlines()[-1]
+    assert not (tmp_path / "r").exists()
+
+
 def test_a_first_test_year_after_the_last_names_both(tmp_path, synthetic_root, capsys):
     argv = ["--models", "emos", "--first-test-year", "2009", "--last-test-year", "2008"]
     assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 2

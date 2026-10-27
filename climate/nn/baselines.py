@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from climate.bridge import Bridge
-from climate.emos import SIGMA_FLOOR, EmosModel, TrendClimatology
+from climate.emos import SIGMA_FLOOR, EmosModel, trend_climatology_baseline
 
 SEASONAL_BASELINES: tuple[str, ...] = ("raw", "emos", "trend")
 NOWCAST_BASELINES: tuple[str, ...] = ("bridge", "persistence")
@@ -48,15 +48,11 @@ def emos_baseline(
 
 def trend_climatology(train: pd.DataFrame, test: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Per-month trend climatology fit on train, predicted for the rows of test."""
-    return TrendClimatology().fit(train).predict(test)
+    return trend_climatology_baseline(train, test)
 
 
 def fit_remainder(train_nowcast: pd.DataFrame) -> RemainderStats:
-    """Mean and sample sd of full_month_mean_K - mtd_mean_K per (month_of_year, checkpoint).
-
-    Only rows with a finite remainder count. A key with fewer than MIN_KEY_ROWS such rows takes
-    the pooled stats of its checkpoint; the sd is NaN where a checkpoint has a single row.
-    """
+    """Mean and sd of full_month_mean_K - mtd_mean_K by (month, checkpoint); sparse keys pool."""
     remainder = np.array(train_nowcast["full_month_mean_K"], dtype=float) - np.array(
         train_nowcast["mtd_mean_K"], dtype=float
     )

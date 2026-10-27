@@ -136,6 +136,16 @@ def test_fit_ignores_rows_with_a_missing_label_or_a_non_finite_feature(frame):
     assert model.validation_years == [2007, 2008, 2009]
 
 
+@pytest.mark.parametrize("column", [*NOWCAST_FEATURES, "y_C"])
+def test_a_missing_value_in_any_feature_or_the_label_keeps_its_row_out_of_the_fit(column, frame):
+    rows = _train(frame, 2009).reset_index(drop=True)
+    row = rows.index[(rows["checkpoint"] == "15") & (rows["target_month"] == "2005-06")][0]
+    holed = rows.copy()
+    holed.loc[row, column] = np.nan
+    full = nn_fixtures.rows_a_fit_uses(GtmNowcastModel(seeds=(0,)), rows)
+    assert nn_fixtures.rows_a_fit_uses(GtmNowcastModel(seeds=(0,)), holed) == full - 1
+
+
 def test_fit_needs_four_distinct_target_years_among_the_usable_rows(frame):
     model = GtmNowcastModel(seeds=(0,), hidden=8).fit(
         _train(frame, 2003)

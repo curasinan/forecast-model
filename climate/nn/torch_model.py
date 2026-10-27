@@ -131,11 +131,18 @@ def fit_gaussian_net(
     y_val: np.ndarray,
     cfg: FitConfig,
 ) -> tuple[torch.nn.Module, dict]:
-    """Full-batch Adam on the training CRPS; the best validation epoch's weights come back."""
+    """Full-batch Adam to the best epoch; train_crps[i] is before step i+1, best_val_crps after."""
     import torch
 
+    if cfg.max_epochs < 1:
+        raise ValueError(f"max_epochs must be at least 1, got {cfg.max_epochs}")
     X_train, y_train = _checked("train", X_train, y_train)
     X_val, y_val = _checked("validation", X_val, y_val)
+    if X_val.shape[1] != X_train.shape[1]:
+        raise ValueError(
+            f"validation has {X_val.shape[1]} features, training has {X_train.shape[1]}: "
+            "give both the same columns"
+        )
     torch.use_deterministic_algorithms(True)
     torch.manual_seed(cfg.seed)
     net = make_net(X_train.shape[1], cfg.hidden).to(cfg.device)
@@ -166,7 +173,7 @@ def fit_gaussian_net(
 def predict_gaussian(
     net: torch.nn.Module, X: np.ndarray, device: str
 ) -> tuple[np.ndarray, np.ndarray]:
-    """The network's mu and sigma for the rows of X, as float64 arrays."""
+    """mu and sigma of the rows of X as float64; moves the caller's net to device, in eval mode."""
     import torch
 
     net = net.to(device).eval()

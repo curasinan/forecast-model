@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +15,7 @@ torch = pytest.importorskip("torch")
 
 from climate.emos import crps_gaussian  # noqa: E402
 from climate.nn import torch_model  # noqa: E402
+from climate.nn.seasonal_model import SEEDS  # noqa: E402
 from climate.nn.torch_model import (  # noqa: E402
     FitConfig,
     Standardiser,
@@ -85,6 +86,7 @@ def test_save_and_load_round_trip(tmp_path):
     again = load_net(tmp_path / "w.pt", in_dim=X.shape[1], hidden=32)
     before, after = predict_gaussian(net, X, "cpu"), predict_gaussian(again, X, "cpu")
     np.testing.assert_allclose(after[0], before[0])
+    np.testing.assert_allclose(after[1], before[1])
 
 
 def test_standardiser_round_trip():
@@ -97,7 +99,7 @@ def _in_fresh_interpreter(code: str) -> subprocess.CompletedProcess:
     """Run code in a new process whose import path starts at this checkout."""
     code = "import sys; sys.path.insert(0, sys.argv[1])\n" + code
     return subprocess.run(
-        [sys.executable, "-c", code, str(REPO_ROOT)], capture_output=True, text=True
+        [sys.executable, "-c", code, str(REPO_ROOT)], capture_output=True, text=True, timeout=120
     )
 
 
@@ -197,6 +199,34 @@ def test_fit_refuses_non_finite_or_misshapen_arrays():
         fit_gaussian_net(X[:40], y[:40, None], X[40:], y[40:], cfg)
     with pytest.raises(ValueError, match="shape"):
         fit_gaussian_net(X[:40], y[:40], X[:0], y[:0], cfg)
+
+
+@pytest.mark.parametrize("max_epochs", [0, -1])
+def test_fewer_than_one_epoch_is_refused(max_epochs):
+    X, y, _, _ = _biased_problem(n=60, seed=6)
+    with pytest.raises(ValueError, match=f"max_epochs must be at least 1, got {max_epochs}"):
+        fit_gaussian_net(X[:40], y[:40], X[40:], y[40:], FitConfig(max_epochs=max_epochs))
+
+
+def test_a_validation_set_with_other_features_than_training_is_refused():
+    X, y, _, _ = _biased_problem(n=60, seed=6)
+    with pytest.raises(ValueError, match="validation has 2 features, training has 3"):
+        fit_gaussian_net(X[:40], y[:40], X[40:, :2], y[40:], FitConfig(max_epochs=2))
+
+
+def test_the_fit_defaults_are_the_protocol_constants():
+    assert asdict(FitConfig()) == {
+        "seed": 0,
+        "hidden": 32,
+        "lr": 1e-3,
+        "weight_decay": 1e-4,
+        "max_epochs": 500,
+        "patience": 50,
+        "device": "cpu",
+    }
+    assert SEEDS == (0, 1, 2, 3, 4)
+    hidden_layers = [m for m in make_net(3).modules() if isinstance(m, torch.nn.ReLU)]
+    assert len(hidden_layers) == 2
 
 
 def test_a_loaded_net_is_in_eval_mode_on_the_cpu(tmp_path):

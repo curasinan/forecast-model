@@ -195,6 +195,13 @@ def test_a_test_year_without_enough_overlap_for_the_bridge_names_the_year(inputs
     assert issubclass(WindowError, ValueError)
 
 
+def test_nowcast_windows_are_compared_by_identity_instead_of_by_their_frames(inputs):
+    (first,) = _windows(inputs, 2010, 2010)
+    (again,) = _windows(inputs, 2010, 2010)
+    assert first == first and first != again
+    assert first in [first] and first not in [again]
+
+
 def test_a_given_bridge_month_fits_one_bridge_for_every_window(inputs):
     early, late = _windows(inputs, 2009, 2010, bridge_through="2011-11")
     assert early.bridge.fit_end == late.bridge.fit_end == "2011-11"

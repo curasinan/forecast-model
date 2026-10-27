@@ -946,7 +946,19 @@ def test_a_model_directory_that_misses_its_files_exits_2_and_names_the_problem(
     assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize("damage", ["garbage", "width", "keys", "features", "json"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "garbage",
+        "width",
+        "keys",
+        "features",
+        "json",
+        "null-standardiser",
+        "text-history",
+        "text-features",
+    ],
+)
 def test_a_damaged_model_directory_exits_2_instead_of_a_traceback(
     damage, tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
 ):
@@ -960,6 +972,9 @@ def test_a_damaged_model_directory_exits_2_instead_of_a_traceback(
             "keys": {},
             "features": manifest | {"features": ["not_a_feature"]},
             "json": None,
+            "null-standardiser": manifest | {"standardiser": None},  # TypeError
+            "text-history": manifest | {"history": "none"},  # AttributeError
+            "text-features": manifest | {"features": "mtd_mean_C"},  # ValueError
         }[damage]
         text = "{" if manifest is None else json.dumps(manifest)
         (broken / "manifest.json").write_text(text, encoding="utf-8")

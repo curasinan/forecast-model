@@ -91,6 +91,49 @@ def test_the_defaults_are_the_protocol_constants():
         GtmNnModel(seeds=())
 
 
+def test_a_seed_named_twice_is_refused():
+    with pytest.raises(ValueError, match=r"seeds \(0, 1, 0\) repeat a seed: name each seed once"):
+        GtmNnModel(seeds=(0, 1, 0))
+
+
+def test_a_fit_on_rows_without_a_finite_label_is_refused(synthetic_inputs):
+    frame = _strict_frame(synthetic_inputs, 2012)
+    rows = frame[target_year(frame) <= 2012].assign(y_C=np.nan)
+    with pytest.raises(ValueError, match="got 0"):
+        GtmNnModel(seeds=(0,)).fit(rows)
+    with pytest.raises(ValueError, match="got 0"):
+        GtmNnModel(seeds=(0,)).fit(rows.iloc[0:0])
+
+
+@pytest.mark.parametrize("column", [*SEASONAL_FEATURES, "y_C"])
+def test_a_missing_value_in_any_feature_or_the_label_keeps_its_row_out_of_the_fit(column, fitted):
+    frame, _ = fitted
+    rows = frame[target_year(frame) <= 2012].reset_index(drop=True)
+    holed = rows.copy()
+    holed.loc[100, column] = np.nan
+    full = nn_fixtures.rows_a_fit_uses(GtmNnModel(seeds=(0,)), rows)
+    assert nn_fixtures.rows_a_fit_uses(GtmNnModel(seeds=(0,)), holed) == full - 1
+
+
+def test_predict_runs_on_the_cpu_whatever_device_the_model_was_fitted_for(
+    tmp_path, fitted, monkeypatch
+):
+    frame, model = fitted
+    model.save(tmp_path / "m")
+    again = GtmNnModel.load(tmp_path / "m")
+    again.device = "cuda:fake"
+    devices, real = [], seasonal_model.predict_gaussian
+
+    def spy(net, X, device):
+        devices.append(device)
+        return real(net, X, device)
+
+    monkeypatch.setattr(seasonal_model, "predict_gaussian", spy)
+    again.predict(frame.iloc[:3])
+    model.predict(frame.iloc[:3])
+    assert devices == ["cpu"] * 4  # two seeds, two models
+
+
 def test_fit_returns_the_model_with_one_history_per_seed_and_the_hidden_width(synthetic_inputs):
     frame = _strict_frame(synthetic_inputs, 2012)
     model = GtmNnModel(seeds=(3, 5), hidden=8)
@@ -212,13 +255,14 @@ def test_a_loaded_model_has_the_setup_and_history_of_the_saved_one(tmp_path, fit
     np.testing.assert_allclose(again.predict(frame), model.predict(frame))
 
 
-def test_a_loaded_model_keeps_the_features_it_was_saved_with(tmp_path, fitted, monkeypatch):
-    frame, model = fitted
+def test_a_saved_model_whose_features_the_class_no_longer_uses_is_refused_at_load(
+    tmp_path, fitted, monkeypatch
+):
+    _, model = fitted
     model.save(tmp_path / "m")
-    monkeypatch.setattr(seasonal_model, "SEASONAL_FEATURES", SEASONAL_FEATURES[:7])
-    again = GtmNnModel.load(tmp_path / "m")
-    assert again.features == SEASONAL_FEATURES
-    np.testing.assert_allclose(again.predict(frame), model.predict(frame))
+    monkeypatch.setattr(GtmNnModel, "FEATURES", SEASONAL_FEATURES[:7])
+    with pytest.raises(ValueError, match=r"uses the features \['fc_mean_C'.*fitted on"):
+        GtmNnModel.load(tmp_path / "m")
 
 
 def test_the_fingerprint_is_the_sha256_of_the_manifest_without_the_history(tmp_path, fitted):

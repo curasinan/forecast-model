@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from climate.bridge import Bridge
 from climate.emos import target_year
-from climate.nn.windows import FIRST_TEST_YEAR, n_labelled_targets, strict_windows
+from climate.nn.windows import FIRST_TEST_YEAR, WindowError, n_labelled_targets, strict_windows
 from climate.storage import LEDGER_COLUMNS, VINTAGE_LIVE
 
 
@@ -140,6 +141,30 @@ def test_the_first_test_year_defaults_to_2001(synthetic_inputs):
     windows = strict_windows(*synthetic_inputs, last_test_year=2002)
     assert FIRST_TEST_YEAR == 2001
     assert [w.test_year for w in windows] == [2001, 2002]
+
+
+def test_a_test_year_whose_bridge_cannot_be_fitted_raises_a_window_error_naming_it(
+    synthetic_inputs,
+):
+    # the series start in 1993-01, so a bridge through 1993-12 has twelve months only
+    with pytest.raises(WindowError, match="test year 1994: "):
+        strict_windows(*synthetic_inputs, first_test_year=1994, last_test_year=1994)
+    assert issubclass(WindowError, ValueError)
+
+
+def test_a_test_year_beyond_the_data_gives_a_window_with_an_empty_test_frame(synthetic_inputs):
+    (w,) = strict_windows(*synthetic_inputs, first_test_year=2017, last_test_year=2017)
+    assert len(w.test) == 0 and w.excluded == 0
+    assert list(w.test.columns) == list(w.train.columns)
+    assert n_labelled_targets(w.train) == 245  # every labelled target month, 1996-01 to 2016-05
+    assert w.cutoff_utc == datetime(2017, 1, 12, tzinfo=timezone.utc)
+
+
+def test_windows_are_compared_by_identity_instead_of_by_their_frames(synthetic_inputs):
+    (first,) = strict_windows(*synthetic_inputs, first_test_year=2006, last_test_year=2006)
+    (again,) = strict_windows(*synthetic_inputs, first_test_year=2006, last_test_year=2006)
+    assert first == first and first != again
+    assert first in [first] and first not in [again]
 
 
 def _years_later(inputs, years: int):

@@ -22,7 +22,15 @@ TORCH_MISSING = (
     'research extra not installed: uv pip install -e ".[climate,research]" into ~/work/wx-dl/.venv'
 )
 # what a model directory that is incomplete or damaged can raise while it loads
-LOAD_ERRORS = (OSError, ValueError, KeyError, RuntimeError, pickle.UnpicklingError)
+LOAD_ERRORS = (
+    OSError,
+    ValueError,
+    KeyError,
+    TypeError,
+    AttributeError,
+    RuntimeError,
+    pickle.UnpicklingError,
+)
 ISO_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -54,11 +62,14 @@ def positive(kind: type) -> Callable[[str], int | float]:
 
 
 def parse_seeds(text: str) -> tuple[int, ...]:
-    """An argparse type: integers separated by commas."""
+    """An argparse type: integers separated by commas, each seed once."""
     try:
-        return tuple(int(part) for part in text.split(","))
+        seeds = tuple(int(part) for part in text.split(","))
     except ValueError:
         raise argparse.ArgumentTypeError(f"integers separated by commas, got {text!r}") from None
+    if len(set(seeds)) != len(seeds):
+        raise argparse.ArgumentTypeError(f"each seed once, got {text!r}")
+    return seeds
 
 
 def models_parser(check: Callable[[tuple[str, ...]], tuple[str, ...]]) -> Callable[[str], tuple]:

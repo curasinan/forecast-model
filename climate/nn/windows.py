@@ -16,7 +16,11 @@ from climate.nn.features import seasonal_frame
 FIRST_TEST_YEAR: int = 2001
 
 
-@dataclass
+class WindowError(ValueError):
+    """A test year whose bridge cannot be fitted."""
+
+
+@dataclass(eq=False)
 class Window:
     """One test year: training rows, admitted test rows, the bridge refit for it, the cutoff."""
 
@@ -51,7 +55,10 @@ def strict_windows(
     windows: list[Window] = []
     for year in range(first_test_year, last_test_year + 1):
         last_label = f"{year - 1}-12"
-        bridge = Bridge().fit(era5_K, noaa_C, end=last_label)
+        try:
+            bridge = Bridge().fit(era5_K, noaa_C, end=last_label)
+        except ValueError as exc:
+            raise WindowError(f"test year {year}: {exc}") from exc
         frame = seasonal_frame(seas5, era5_K, noaa_C, bridge=bridge)
         years = target_year(frame)
         train = frame[(years < year) & _is_labelled(frame)]
