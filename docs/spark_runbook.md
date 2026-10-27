@@ -740,12 +740,11 @@ check (most often: the LLM is still loaded).
 
 The GTM research package is `climate/nn/`: neural post-processing of SEAS5
 and a nowcast of the running month, benchmark only; nothing in it is wired
-into the paper loop. Its data root, `<data root>` below, is
-`gtm_research/climate_data` under `~/data`, never the mirror and never the
-live root, so pass it as `--root`: the default is the mirror. Of the six
-scripts only `gtm_nn_fetch.py` is in `CASES` of
-`tests/test_architecture/test_mirror_refusal.py`, and it refuses a mirror
-root (exit 2).
+into the paper loop. Its data root is `~/data/gtm_research/climate_data`,
+never the mirror and never the live root. Set it as `CLIMATE_DATA_ROOT` or
+pass it as `--root`: with neither, the scripts use the mirror.
+`gtm_nn_fetch.py` writes under the root and refuses a mirror root (exit 2);
+the benchmarks and the payload and pricing scripts only read it.
 
 In `scripts/research/`, `gtm_nn_fetch.py` fetches daily ERA5 into
 `reference/era5_daily_global_mean.parquet`. It needs `~/.cdsapirc` for
@@ -780,7 +779,7 @@ with the research venv. A benchmark's own `--gpu-budget` (GiB, at most the
 launcher's) is what puts its network on the GPU; the payload and pricing
 scripts run on the CPU and take none:
 
-    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root <data root> --gpu-budget 20
+    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root ~/data/gtm_research/climate_data --gpu-budget 20
 
 The torch tests run in that venv:
 

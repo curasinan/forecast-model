@@ -10,7 +10,7 @@ RUNBOOK = REPO_ROOT / "docs" / "spark_runbook.md"
 HEADING = "## 7. The trading runtime on the Spark"
 TOP_LEVEL = ("scripts", "deploy", "monitoring", "docs", "tests", "src", "analysis", "data",
              "climate")
-REPO_PATH = re.compile(r"(?<![\w.~-])((?:" + "|".join(TOP_LEVEL) + r")/[\w./-]+)")
+REPO_PATH = re.compile(r"(?<![\w.~-])(?<!~/)((?:" + "|".join(TOP_LEVEL) + r")/[\w./-]+)")
 NAME_WITH_EXTENSION = re.compile(r"(?<![\w.-])([\w-]+)\.([A-Za-z]+)\b")
 UNIT_EXTENSIONS = ("service", "timer")
 
@@ -72,10 +72,12 @@ def test_the_scan_sees_a_typo_in_a_command_a_code_block_or_an_extension():
             "    bash scripts/spark/deplyo.sh\n"
             "    source scripts/spark/env.sh\n"
             "and `scripts/spark/deploy.shh` or `climate/nn/seasonl_model.py`, but not "
-            "`scripts/spark/<name>` or scripts/spark/*.sh\n")
+            "`scripts/spark/<name>` or scripts/spark/*.sh\n"
+            "or `data/ibkr_universe_live.jsn`, but not `--root ~/data/gtm_research/climate_data`\n")
     assert missing_paths(text) == sorted(["scripts/run_gtm_papr.py", "scripts/spark/deplyo.sh",
                                           "scripts/spark/deploy.shh",
-                                          "climate/nn/seasonl_model.py"])
+                                          "climate/nn/seasonl_model.py",
+                                          "data/ibkr_universe_live.jsn"])
 
 
 def test_the_scan_sees_a_misspelled_unit_name_or_unit_extension():
