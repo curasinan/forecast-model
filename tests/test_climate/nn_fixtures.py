@@ -116,9 +116,9 @@ def synthetic_nowcast(
     for i in range(1, len(months)):
         anomaly[i] = ANOMALY_PERSISTENCE * anomaly[i - 1] + shocks[i]
     anomaly = pd.Series(anomaly, index=months)
-    year = days.year + (days.dayofyear - 0.5) / 365.25
+    year = days.year + (days.day_of_year - 0.5) / 365.25
     warming = 0.4 + 0.025 * (year - 2010.0)
-    cycle = 2.0 * np.sin(2.0 * np.pi * (days.dayofyear - 80) / 365.25)
+    cycle = 2.0 * np.sin(2.0 * np.pi * (days.day_of_year - 80) / 365.25)
     smooth = pd.Series(287.0 + warming + cycle, index=days)
     expected_K = smooth.groupby(periods).mean()
     warming_C = pd.Series(warming, index=days).groupby(periods).mean()
