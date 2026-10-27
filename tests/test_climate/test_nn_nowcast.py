@@ -527,6 +527,33 @@ def test_a_late_first_print_keeps_the_label_out_until_it_is_seen():
     assert leakage_violations(frame, "decision_utc", LEAKAGE_INPUTS).empty
 
 
+def _month_frame(month: str) -> pd.DataFrame:
+    """The frame of one whole month with labels for the year before it and no seasonal row."""
+    first = pd.Period(month, freq="M")
+    return nowcast_frame(
+        _daily(f"{month}-01", first.days_in_month),
+        _labels(first=str(first - 12), upto=month),
+        _seasonal(inits=[]),
+        bridge=_bridge(),
+        months=[month],
+    )
+
+
+def test_the_two_late_noaa_prints_keep_the_previous_label_back_until_they_appeared():
+    january = _month_frame("2019-01")  # 2018-12 was printed on 2019-02-06 at 16:00
+    used = dict(zip(january["checkpoint"], january["prev_label_month"], strict=True))
+    assert used == {name: "2018-12" if name == "+10" else "2018-11" for name in CHECKPOINTS}
+    plus_10 = _row(january, "+10", "2019-01")
+    assert plus_10["decision_utc"] == datetime(2019, 2, 10, tzinfo=UTC)
+    assert plus_10["avail_prev_label_utc"] == datetime(2019, 2, 6, 16, tzinfo=UTC)
+    october = _month_frame("2024-10")  # 2024-09 was printed on 2024-10-24 at 16:00
+    used = dict(zip(october["checkpoint"], october["prev_label_month"], strict=True))
+    before = ("5", "10", "15", "20")
+    assert used == {name: "2024-08" if name in before else "2024-09" for name in CHECKPOINTS}
+    for frame in (january, october):
+        assert leakage_violations(frame, "decision_utc", LEAKAGE_INPUTS).empty
+
+
 def test_full_month_mean_is_nan_until_the_month_is_complete():
     frame = nowcast_frame(
         _daily("2026-02-01", 20), _labels(), _seasonal(), bridge=_bridge(), months=["2026-02"]

@@ -140,3 +140,21 @@ def test_the_first_test_year_defaults_to_2001(synthetic_inputs):
     windows = strict_windows(*synthetic_inputs, last_test_year=2002)
     assert FIRST_TEST_YEAR == 2001
     assert [w.test_year for w in windows] == [2001, 2002]
+
+
+def _years_later(inputs, years: int):
+    """The synthetic inputs with every init and every month moved later by whole years."""
+    seas5, era5_K, noaa_C = inputs
+    moved = seas5.assign(init_date=seas5["init_date"] + pd.DateOffset(years=years))
+    months = (pd.PeriodIndex(era5_K.index, freq="M") + 12 * years).astype(str)
+    return moved, era5_K.set_axis(months), noaa_C.set_axis(months)
+
+
+def test_the_late_december_2018_print_keeps_the_january_2019_inits_out(synthetic_inputs):
+    (w,) = strict_windows(
+        *_years_later(synthetic_inputs, 4), first_test_year=2019, last_test_year=2019
+    )
+    assert w.cutoff_utc == datetime(2019, 2, 6, 16, tzinfo=timezone.utc)
+    assert (w.test["init_date"] != pd.Timestamp("2019-01-01")).all()  # decided 01-13 12:00
+    assert (w.test["init_date"] == pd.Timestamp("2019-02-01")).sum() == 6
+    assert w.excluded == 15 + 6
