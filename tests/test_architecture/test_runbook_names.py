@@ -8,7 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs" / "spark_runbook.md"
 HEADING = "## 7. The trading runtime on the Spark"
-TOP_LEVEL = ("scripts", "deploy", "monitoring", "docs", "tests", "src", "analysis", "data")
+TOP_LEVEL = ("scripts", "deploy", "monitoring", "docs", "tests", "src", "analysis", "data",
+             "climate")
 REPO_PATH = re.compile(r"(?<![\w.~-])((?:" + "|".join(TOP_LEVEL) + r")/[\w./-]+)")
 NAME_WITH_EXTENSION = re.compile(r"(?<![\w.-])([\w-]+)\.([A-Za-z]+)\b")
 UNIT_EXTENSIONS = ("service", "timer")
@@ -70,9 +71,11 @@ def test_the_scan_sees_a_typo_in_a_command_a_code_block_or_an_extension():
     text = ("run `.venv/bin/python scripts/run_gtm_papr.py --mode approve` or\n\n"
             "    bash scripts/spark/deplyo.sh\n"
             "    source scripts/spark/env.sh\n"
-            "and `scripts/spark/deploy.shh`, but not `scripts/spark/<name>` or scripts/spark/*.sh\n")
+            "and `scripts/spark/deploy.shh` or `climate/nn/seasonl_model.py`, but not "
+            "`scripts/spark/<name>` or scripts/spark/*.sh\n")
     assert missing_paths(text) == sorted(["scripts/run_gtm_papr.py", "scripts/spark/deplyo.sh",
-                                          "scripts/spark/deploy.shh"])
+                                          "scripts/spark/deploy.shh",
+                                          "climate/nn/seasonl_model.py"])
 
 
 def test_the_scan_sees_a_misspelled_unit_name_or_unit_extension():

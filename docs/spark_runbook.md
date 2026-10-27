@@ -737,3 +737,51 @@ Exit 0 with `VERDICT: cuda_outside_cgroup` confirms it. Exit 137 from the
 launcher would mean the ceiling does cover CUDA memory, and this paragraph is
 then wrong. Exit 1 is no verdict; exit 3 says why the machine cannot run the
 check (most often: the LLM is still loaded).
+
+The GTM research package is `climate/nn/`: neural post-processing of SEAS5
+and a nowcast of the running month, benchmark only; nothing in it is wired
+into the paper loop. Its data root, `<data root>` below, is
+`gtm_research/climate_data` under `~/data`, never the mirror and never the
+live root, so pass it as `--root`: the default is the mirror. Of the six
+scripts only `gtm_nn_fetch.py` is in `CASES` of
+`tests/test_architecture/test_mirror_refusal.py`, and it refuses a mirror
+root (exit 2).
+
+In `scripts/research/`, `gtm_nn_fetch.py` fetches daily ERA5 into
+`reference/era5_daily_global_mean.parquet`. It needs `~/.cdsapirc` for
+`scura`; the monthly ritual is
+`--refresh --months <previous month>..<current month>`. `gtm_nn_benchmark.py`
+is the seasonal strict run against EMOS, `gtm_nn_compare.py` tabulates run
+directories of one kind with the verdict, `gtm_nowcast_benchmark.py` is the
+nowcast strict run against the bridge, `gtm_nowcast.py` prints the payload of
+one as-of, and `gtm_nn_price.py` prices a strike ladder with EMOS and the
+seasonal network side by side. The four that run a network share
+`scripts/research/nn_cli.py`: torch check, device rule, run directories,
+as-of parsing, provenance read.
+
+A run directory holds `config.json`, `metrics.json`, `report.md`,
+`rows.parquet` and, when the network ran, `weights/` with
+`weights/provenance.json` (`kind`, `test_year`, `labels_through`, the bridge
+parameters). The payload scripts rebuild their inputs from that file, so a
+model directory is always the `weights/` of a strict run.
+
+The payload of `gtm_nowcast.py` is `usable` only when the daily series has
+every public day of the month so far (ERA5 lags five days), no input of the
+network is missing, and the as-of is at or after 00:00 UTC of the 10th of the
+target month, the first scored checkpoint. Before that it still prints the
+payload (and writes `--out`) and exits 3, as for any unusable one; exit 2 is
+a usage error (a month not started, a month whose public days the series
+lacks, torch missing). The network is trained and scored only at the nine
+checkpoints, so an as-of between two of them interpolates in the fraction of
+days used, and `usable` does not mean calibrated there.
+
+Run the scripts as `scura` from the research clone, through the launcher,
+with the research venv. A benchmark's own `--gpu-budget` (GiB, at most the
+launcher's) is what puts its network on the GPU; the payload and pricing
+scripts run on the CPU and take none:
+
+    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root <data root> --gpu-budget 20
+
+The torch tests run in that venv:
+
+    ~/work/wx-dl/.venv/bin/python -m pytest tests/test_climate tests/test_architecture -q -p no:cacheprovider

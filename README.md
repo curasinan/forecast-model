@@ -38,7 +38,7 @@ repository does.
 
 | Track | State | Where |
 |---|---|---|
-| Climate lane (GTM) | Active, paper-traded | `climate/`, `scripts/*climate*`, `scripts/fit_gtm_emos.py`, `scripts/run_gtm_paper.py` |
+| Climate lane (GTM) | Active, paper-traded | `climate/`, `scripts/*climate*`, `scripts/fit_gtm_emos.py`, `scripts/run_gtm_paper.py`, `scripts/research/` |
 | IBKR ForecastEx venue | Active (paper) | `src/venues/ibkr/`, `src/trading/`, `scripts/*ibkr*` |
 | Weather EMOS | Research | `weather/`, `collectors/weather/` |
 | Polymarket | Research only, runtime retired | `collectors/`, `features/`, `model/`, `decision/`, `analysis/`, `legacy/` |
@@ -58,6 +58,7 @@ the move to ForecastEx invalidated.
 | Path | What it is |
 |---|---|
 | `climate/` | GTM lane: NOAA labels, Copernicus retrievals, ERA5 to NOAA bridge, EMOS fit, strike ladder, paper loop, go-live gates |
+| `climate/nn/` | GTM research: neural post-processing and nowcast, benchmark only |
 | `src/venues/` | Venue abstraction. `src/venues/ibkr/` is the IB Gateway adapter: session supervisor, pacing limiter, quote recorder, hourly backfill |
 | `src/trading/` | Executor, risk manager, position tracker, paper-book reconciliation, lock file |
 | `src/llm/` | Client for a local OpenAI-compatible model server |
