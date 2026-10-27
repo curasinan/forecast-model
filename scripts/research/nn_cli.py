@@ -122,7 +122,7 @@ def require_torch(models: Sequence[str]) -> None:
 
 
 def new_run_dir(given: str | None, name: str) -> Path:
-    """The run directory: the given path, else ~/runs/<name>_<UTC stamp>; UsageError if it exists."""
+    """The run directory, the given path or ~/runs/<name>_<UTC stamp>; UsageError if it exists."""
     if given is not None:
         run_dir = Path(given).expanduser()
     else:

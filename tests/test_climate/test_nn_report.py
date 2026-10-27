@@ -13,10 +13,12 @@ import pandas as pd
 import pytest
 
 from climate.nn import report
+from climate.nn.nowcast import CHECKPOINTS
 from climate.nn.report import (
     compare_runs,
     git_commit,
     read_run,
+    render_nowcast_report,
     render_seasonal_report,
     write_run,
 )
@@ -120,6 +122,22 @@ def test_the_json_files_are_strict_json_with_nan_as_null_and_numpy_as_numbers(tm
     assert read_run(tmp_path / "r")["metrics"]["summary"][0]["crps"] is None
 
 
+def test_a_frame_in_the_metrics_is_written_as_a_list_of_records(tmp_path):
+    frame = pd.DataFrame({"model": ["nn", "bridge"], "n": [3, 0], "crps": [0.05, float("nan")]})
+    write_run(
+        tmp_path / "r",
+        config={},
+        metrics={"extras": {"first_print_summary": frame}},
+        rows=pd.DataFrame(),
+        report_md="",
+    )
+    written = read_run(tmp_path / "r")["metrics"]["extras"]["first_print_summary"]
+    assert written == [
+        {"model": "nn", "n": 3, "crps": 0.05},
+        {"model": "bridge", "n": 0, "crps": None},
+    ]
+
+
 def test_a_saved_model_directory_is_copied_to_weights_and_the_original_is_left_alone(tmp_path):
     model = tmp_path / "model"
     (model / "weights").mkdir(parents=True)
@@ -151,7 +169,7 @@ def test_a_run_directory_is_never_reused(tmp_path):
 
 def test_a_refused_run_directory_leaves_no_scratch_directory_beside_it(tmp_path):
     (tmp_path / "r").mkdir()
-    with pytest.raises(FileExistsError):
+    with pytest.raises(FileExistsError, match="exists already"):
         write_run(tmp_path / "r", config={}, metrics={}, rows=pd.DataFrame(), report_md="")
     assert [p.name for p in tmp_path.iterdir()] == ["r"]
 
@@ -428,3 +446,201 @@ def test_the_report_is_valid_markdown_tables_with_matching_column_counts():
     for block in tables:
         counts = {line.count("|") for line in block.splitlines()}
         assert len(counts) == 1
+
+
+# nowcast runs: compare and report
+
+NOWCAST_HEADER = (
+    "| run | cp10_nn | cp10_bridge | cp25_nn | cp25_bridge | cp+3_nn | cp+3_bridge | win |"
+)
+
+
+def _nowcast_records(nn_crps=0.04, bridge_crps=0.05, n=30, models=("nn", "bridge")):
+    """Summary rows of the models over the nine checkpoints; nn has no score at checkpoint 5."""
+    crps = {"nn": nn_crps, "bridge": bridge_crps, "persistence": 0.08}
+    rows = [
+        {
+            "model": model,
+            "checkpoint": checkpoint,
+            "n": n,
+            "crps": crps[model],
+            "skill_vs_bridge": 0.2,
+            "cover50": 0.5,
+            "cover90": 0.9,
+        }
+        for model in models
+        for checkpoint in CHECKPOINTS
+        if crps[model] is not None
+    ]
+    for row in rows:
+        if row["model"] == "nn" and row["checkpoint"] == "5":
+            row.update(n=0, crps=float("nan"), skill_vs_bridge=float("nan"), cover50=float("nan"))
+    return rows
+
+
+def _write_nowcast_run(run_dir, *, nn_crps, bridge_crps, win, protocol="strict"):
+    verdict = None if win is None else [win, "" if win else "nn does not beat bridge at 10"]
+    summary = _nowcast_records(nn_crps, bridge_crps)
+    metrics = {"summary": summary, "extras": {}, "win": verdict}
+    config = {"kind": "nowcast", "protocol": protocol}
+    write_run(run_dir, config=config, metrics=metrics, rows=pd.DataFrame(), report_md="# r")
+
+
+def test_the_nowcast_compare_table_has_the_documented_columns_and_four_decimals(tmp_path):
+    _write_nowcast_run(tmp_path / "a", nn_crps=0.04, bridge_crps=0.05, win=True)
+    _write_nowcast_run(tmp_path / "b", nn_crps=0.06123456, bridge_crps=0.05, win=False)
+    lines = compare_runs([tmp_path / "a", tmp_path / "b"]).splitlines()
+    assert lines[0] == NOWCAST_HEADER
+    assert lines[1] == "|" + "---|" * 8
+    assert lines[2] == "| a | " + " | ".join(["0.0400", "0.0500"] * 3) + " | yes |"
+    expected = " | ".join(["0.0612", "0.0500"] * 3)
+    assert lines[3] == f"| b | {expected} | no: nn does not beat bridge at 10 |"
+    assert len(lines) == 4
+
+
+def test_a_nowcast_run_without_a_verdict_or_a_model_prints_dashes(tmp_path):
+    _write_nowcast_run(
+        tmp_path / "base", nn_crps=None, bridge_crps=0.05, win=None, protocol="frozen"
+    )
+    line = compare_runs([tmp_path / "base"]).splitlines()[2]
+    assert line == "| base | " + " | ".join(["-", "0.0500"] * 3) + " | - |"
+
+
+def test_runs_of_one_kind_are_compared_and_the_nowcast_kind_does_not_mix_with_the_seasonal_one(
+    tmp_path,
+):
+    _write_nowcast_run(tmp_path / "n1", nn_crps=0.04, bridge_crps=0.05, win=True)
+    _write_nowcast_run(tmp_path / "n2", nn_crps=0.04, bridge_crps=0.05, win=True)
+    _write_synthetic_run(tmp_path / "s", nn_crps=0.04, emos_crps=0.05, win=True)
+    assert compare_runs([tmp_path / "n1", tmp_path / "n2"]).count("\n| ") == 2
+    with pytest.raises(ValueError, match=r"different kinds.*n1 \(nowcast\).*s \(seasonal\)"):
+        compare_runs([tmp_path / "n1", tmp_path / "s"])
+
+
+def _first_print(n=2):
+    return pd.DataFrame(_nowcast_records(0.045, 0.05, n=n))
+
+
+def _nowcast_extras(**more):
+    pit = {"nn": [0.1] * 10, "bridge": [0.05] * 5 + [0.15] * 5}
+    return {
+        "protocol": "strict",
+        "kind": "nowcast",
+        "bridge_through": None,
+        "dropped_gap_rows": 3,
+        "skipped_windows": [],
+        "pit_hist": pit,
+        "first_print_summary": _first_print(),
+        **more,
+    }
+
+
+def _nowcast_summary(nn_crps=0.04):
+    return pd.DataFrame(_nowcast_records(nn_crps, 0.05, models=("nn", "bridge", "persistence")))
+
+
+def test_the_nowcast_report_names_the_protocol_the_verdict_and_every_cell():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert text.startswith("# GTM nowcast benchmark: strict protocol")
+    assert "Verdict: win\n" in text
+    assert "| model | checkpoint | n | CRPS | skill vs bridge | cover50 | cover90 |" in text
+    assert "| nn | 10 | 30 | 0.0400 | 0.200 | 0.500 | 0.900 |" in text
+    assert "| bridge | +3 | 30 | 0.0500 | 0.200 | 0.500 | 0.900 |" in text
+    assert "| nn | 5 | 0 | - | - | - | 0.900 |" in text
+    assert text.count("| persistence | ") == 9
+
+
+def test_the_nowcast_report_states_the_win_rule_it_applies():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert "10, 15, 20, 25, +1, +3" in text and "at least 3 rows" in text
+    assert "current-vintage" in text and "below" in text
+
+
+def test_a_lost_run_says_why_and_a_run_without_a_verdict_says_so_in_the_nowcast_report():
+    lost = render_nowcast_report(
+        _nowcast_summary(0.06), _nowcast_extras(), (False, "nn does not beat bridge at 10")
+    )
+    assert "Verdict: no win (nn does not beat bridge at 10)" in lost
+    unjudged = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), None)
+    assert "Verdict: none" in unjudged and "Verdict: win" not in unjudged
+
+
+def test_the_nowcast_report_has_a_table_of_the_genuine_first_prints_after_the_main_one():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    main, first = text.index("## CRPS and calibration"), text.index("## Genuine first prints")
+    assert main < first < text.index("## PIT histogram")
+    assert "| nn | 10 | 2 | 0.0450 | 0.200 | 0.500 | 0.900 |" in text[first:]
+    records = render_nowcast_report(
+        _nowcast_summary(),
+        _nowcast_extras(first_print_summary=_first_print().to_dict("records")),
+        (True, ""),
+    )
+    assert records == text  # a run read back from metrics.json renders the same
+
+
+def test_a_nowcast_report_without_a_scored_first_print_says_so_instead_of_a_table_of_dashes():
+    unscored = _first_print(n=0)
+    text = render_nowcast_report(
+        _nowcast_summary(), _nowcast_extras(first_print_summary=unscored), (True, "")
+    )
+    assert "No genuine first print has been scored yet." in text
+    assert text.count("| model | checkpoint |") == 1  # the scores table only
+
+
+def test_the_nowcast_report_says_in_one_line_that_persistence_is_too_tight_at_two_checkpoints():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    notes = [line for line in text.splitlines() if "Persistence" in line]
+    assert len(notes) == 1
+    assert "one-month changes" in notes[0] and "two months old" in notes[0]
+    assert "too tight" in notes[0] and "compares against the bridge" in notes[0]
+
+
+def test_the_nowcast_report_says_why_checkpoint_five_has_no_prediction():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert any("Checkpoint 5" in line and "no ERA5 day" in line for line in text.splitlines())
+
+
+def test_the_strict_nowcast_report_describes_the_windows_and_the_frozen_one_the_bridge_month():
+    strict = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert "Expanding windows by target year" in strict and "never the headline" not in strict
+    frozen = render_nowcast_report(
+        _nowcast_summary(),
+        _nowcast_extras(protocol="frozen", bridge_through="2025-12"),
+        None,
+    )
+    assert frozen.startswith("# GTM nowcast benchmark: frozen protocol")
+    assert "2025-12" in frozen and "never the headline" in frozen
+    assert "Expanding windows by target year" not in frozen
+
+
+def test_the_nowcast_report_counts_the_dropped_rows_and_lists_the_skipped_years():
+    clean = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert "Test rows dropped for a gap day in the ERA5 series: 3" in clean
+    assert "Test years skipped: none" in clean
+    skipped = render_nowcast_report(
+        _nowcast_summary(), _nowcast_extras(skipped_windows=[2002, 2003]), (True, "")
+    )
+    assert "Test years skipped: 2002, 2003" in skipped
+
+
+def test_every_nowcast_table_carries_the_label_vintage_note_and_the_pit_table_has_ten_bins():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert text.count("current vintage") == 2  # the scores table and the PIT table
+    assert "| model | 0.0-0.1 | 0.1-0.2 | 0.2-0.3 |" in text
+    assert "| nn | " + " | ".join(["0.100"] * 10) + " |" in text
+
+
+def test_the_nowcast_report_is_valid_markdown_tables_with_matching_column_counts():
+    text = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (False, "x"))
+    tables = [block for block in text.split("\n\n") if block.startswith("|")]
+    assert len(tables) == 3
+    for block in tables:
+        assert len({line.count("|") for line in block.splitlines()}) == 1
+
+
+def test_the_nowcast_report_needs_the_protocol_but_none_of_the_other_extras():
+    with pytest.raises(KeyError, match="protocol"):
+        render_nowcast_report(_nowcast_summary(), {}, (True, ""))
+    text = render_nowcast_report(_nowcast_summary(), {"protocol": "strict"}, (True, ""))
+    assert text.startswith("# GTM nowcast benchmark: strict protocol")
+    assert "Test years skipped: none" in text and "Genuine first prints" in text

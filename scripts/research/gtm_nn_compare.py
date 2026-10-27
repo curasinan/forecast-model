@@ -15,7 +15,8 @@ from climate.nn.report import compare_runs  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Compare run directories of one kind: the CRPS of the network and its reference per lead or checkpoint and the verdict."
+        description="Compare run directories of one kind: the CRPS of the network and its "
+        "reference per lead or checkpoint, and the verdict."
     )
     parser.add_argument(
         "run_dir",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
@@ -40,6 +40,9 @@ def usable_target_years(frame: pd.DataFrame, features: list[str]) -> np.ndarray:
 class GtmNnModel:
     """One small Gaussian network per seed on the seasonal features, collapsed to one Gaussian."""
 
+    FEATURES: ClassVar[list[str]] = SEASONAL_FEATURES
+    USABLE: ClassVar[str] = "a label and every feature"
+
     def __init__(
         self, seeds: tuple[int, ...] = SEEDS, hidden: int = 32, device: str = "cpu"
     ) -> None:
@@ -48,7 +51,7 @@ class GtmNnModel:
         self.seeds = tuple(int(seed) for seed in seeds)
         self.hidden = int(hidden)
         self.device = device  # fitting only; prediction always runs on the CPU
-        self.features: list[str] = list(SEASONAL_FEATURES)
+        self.features: list[str] = list(self.FEATURES)
         self.standardiser: Standardiser | None = None
         self.nets: dict[int, Any] = {}  # torch modules, typed Any to keep torch out of this file
         self.validation_years: list[int] = []
@@ -56,7 +59,7 @@ class GtmNnModel:
 
     def fit(self, frame: pd.DataFrame) -> GtmNnModel:
         """Fit a network per seed on the usable rows; the last three target years validate."""
-        usable = usable_rows(frame, self.features)
+        usable = usable_rows(frame, self.features) & self._admitted(frame)
         X = frame[self.features].to_numpy(dtype=float)[usable]
         y = frame["y_C"].to_numpy(dtype=float)[usable]
         years = target_year(frame[usable])
@@ -64,7 +67,7 @@ class GtmNnModel:
         if len(distinct) <= VALIDATION_YEARS:
             raise ValueError(
                 f"fit needs at least {VALIDATION_YEARS + 1} distinct target years among the rows "
-                f"with a label and every feature, got {len(distinct)}"
+                f"with {self.USABLE}, got {len(distinct)}"
             )
         validation_years = [int(year) for year in distinct[-VALIDATION_YEARS:]]
         held_out = np.isin(years, validation_years)
@@ -84,7 +87,7 @@ class GtmNnModel:
         """Predictive (mu, sigma) per row of the frame; NaN where a feature is not finite."""
         standardiser = self._fitted()
         X = frame[self.features].to_numpy(dtype=float)
-        finite = np.isfinite(X).all(axis=1)
+        finite = np.isfinite(X).all(axis=1) & self._admitted(frame)
         mu = np.full(len(frame), np.nan)
         sigma = np.full(len(frame), np.nan)
         if finite.any():
@@ -99,6 +102,10 @@ class GtmNnModel:
         """Per-row CRPS against y_C; NaN where the prediction or the label is missing."""
         pred = self.predict(frame)
         return crps_gaussian(frame["y_C"].to_numpy(dtype=float), pred["mu"], pred["sigma"])
+
+    def _admitted(self, frame: pd.DataFrame) -> np.ndarray:
+        """Rows the model may fit on and predict besides those with finite features: all here."""
+        return np.ones(len(frame), dtype=bool)
 
     def _fitted(self) -> Standardiser:
         """The standardiser of the fit; a model that was neither fitted nor loaded has none."""

@@ -1,4 +1,4 @@
-"""The seasonal benchmark: strict and frozen protocols, per-lead scores and the win rule."""
+"""The GTM benchmarks: the seasonal and nowcast protocols, their summaries and win rules."""
 
 from __future__ import annotations
 
@@ -14,10 +14,19 @@ from climate.emos import (
     expanding_window_scores,
     summarise_scores,
 )
-from climate.nn.availability import seas5_available_on
-from climate.nn.baselines import emos_baseline, raw_ensemble, trend_climatology
+from climate.nn.availability import genuine_first_print_months, seas5_available_on
+from climate.nn.baselines import (
+    bridge_nowcast,
+    emos_baseline,
+    persistence,
+    raw_ensemble,
+    trend_climatology,
+)
 from climate.nn.features import SEASONAL_FEATURES
 from climate.nn.leakage import LeakageError, assert_no_leakage
+from climate.nn.nowcast import CHECKPOINTS, NOWCAST_FEATURES, WIN_CHECKPOINTS
+from climate.nn.nowcast_model import GtmNowcastModel
+from climate.nn.nowcast_windows import NowcastWindow, nowcast_windows
 from climate.nn.scoring import pit_histograms, summarise, summary_columns
 from climate.nn.seasonal_model import VALIDATION_YEARS, GtmNnModel, usable_target_years
 from climate.nn.windows import Window, strict_windows
@@ -34,6 +43,14 @@ COVER90_BAND: tuple[float, float] = (0.75, 0.98)
 ROW_COLUMNS = ["test_year", "lead_month", "target_month", "decision_utc", "y_C"]
 SEASONAL_REFERENCES = {"skill_vs_trend": "trend", "skill_vs_emos": "emos"}
 SUMMARY_COLUMNS = summary_columns("lead_month", SEASONAL_REFERENCES)
+SEASONAL_AVAILABILITY = ["avail_seas5_utc"]
+
+NOWCAST_MODELS: tuple[str, ...] = ("nn", "bridge", "persistence")
+NOWCAST_ROW_COLUMNS = ["test_year", "target_month", "checkpoint", "decision_utc", "y_C"]
+NOWCAST_REFERENCES = {"skill_vs_bridge": "bridge"}
+NOWCAST_SUMMARY_COLUMNS = summary_columns("checkpoint", NOWCAST_REFERENCES)
+NOWCAST_AVAILABILITY = ["avail_era5_utc", "avail_seas_utc", "avail_prev_label_utc"]
+FIRST_PRINT_MIN_ROWS: int = 3
 
 
 @dataclass
@@ -41,6 +58,18 @@ class SeasonalRun:
     """Options of one seasonal run; a frozen run ignores models and scores emos, trend, clim."""
 
     protocol: str
+    models: tuple[str, ...]
+    first_test_year: int
+    last_test_year: int
+    seeds: tuple[int, ...]
+    hidden: int
+    device: str
+
+
+@dataclass
+class NowcastRun:
+    """Options of one nowcast run."""
+
     models: tuple[str, ...]
     first_test_year: int
     last_test_year: int
@@ -99,6 +128,75 @@ def seasonal_win(summary: pd.DataFrame) -> tuple[bool, str]:
     return True, ""
 
 
+def run_nowcast(
+    daily_K: pd.Series,
+    noaa_C: pd.Series,
+    seas5: pd.DataFrame,
+    ledger: pd.DataFrame | None,
+    cfg: NowcastRun,
+    *,
+    bridge_through: str | None = None,
+    model_dir: Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """(rows, summary per model and checkpoint, extras); the last window's net goes to model_dir."""
+    models = check_models(tuple(cfg.models), NOWCAST_MODELS)
+    windows = nowcast_windows(
+        daily_K,
+        noaa_C,
+        seas5,
+        ledger,
+        first_test_year=cfg.first_test_year,
+        last_test_year=cfg.last_test_year,
+        bridge_through=bridge_through,
+    )
+    for window in windows:
+        _assert_clean(window, NOWCAST_AVAILABILITY)
+    skipped, blocks, last_net = [], [], None
+    for window in windows:
+        year = window.test_year
+        if len(window.test) == 0 or _short_of_years(window, NOWCAST_FEATURES):
+            skipped.append(year)
+            _progress(year, window, "skipped")
+            continue
+        block, net = _predict_nowcast_window(window, models, cfg)
+        blocks.append(block)
+        last_net = net
+        _progress(year, window, "scored")
+    if model_dir is not None and last_net is not None:
+        last_net.save(model_dir)
+    rows = (
+        pd.concat(blocks, ignore_index=True) if blocks else _empty_rows(models, NOWCAST_ROW_COLUMNS)
+    )
+    genuine = genuine_first_print_months(ledger) if ledger is not None else set()
+    extras = {
+        "protocol": "strict" if bridge_through is None else "frozen",
+        "kind": "nowcast",
+        "bridge_through": bridge_through,
+        "dropped_gap_rows": int(sum(window.dropped_gap_rows for window in windows)),
+        "skipped_windows": skipped,
+        "pit_hist": pit_histograms(rows, models),
+        "first_print_summary": _nowcast_summary(rows[rows["target_month"].isin(genuine)], models),
+    }
+    return rows, _nowcast_summary(rows, models), extras
+
+
+def nowcast_win(summary: pd.DataFrame, first_print_summary: pd.DataFrame) -> tuple[bool, str]:
+    """(True, "") when nn wins on both tables, else (False, the first reason found)."""
+    nn, bridge = _by_checkpoint(summary, "nn"), _by_checkpoint(summary, "bridge")
+    if nn.empty or bridge.empty:
+        return False, "the summary needs both nn and bridge rows"
+    for checkpoint in WIN_CHECKPOINTS:
+        if not _beats(nn, bridge, checkpoint):
+            return False, f"nn does not beat bridge at {checkpoint}"
+    first_nn = _by_checkpoint(first_print_summary, "nn")
+    first_bridge = _by_checkpoint(first_print_summary, "bridge")
+    for checkpoint in WIN_CHECKPOINTS:
+        enough = min(_rows_at(first_nn, checkpoint), _rows_at(first_bridge, checkpoint))
+        if enough >= FIRST_PRINT_MIN_ROWS and not _beats(first_nn, first_bridge, checkpoint):
+            return False, f"first print table disagrees at {checkpoint}"
+    return True, ""
+
+
 # strict protocol
 
 
@@ -114,12 +212,12 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
         ledger=ledger,
     )
     for window in windows:
-        _assert_clean(window)
+        _assert_clean(window, SEASONAL_AVAILABILITY)
     made = {window.test_year: window for window in windows}
     skipped, blocks, last_net = [], [], None
     for year in range(cfg.first_test_year, cfg.last_test_year + 1):
         window = made.get(year)
-        if window is None or len(window.test) == 0 or _short_of_years(window):
+        if window is None or len(window.test) == 0 or _short_of_years(window, SEASONAL_FEATURES):
             skipped.append(year)
             _progress(year, window, "skipped")
             continue
@@ -150,21 +248,21 @@ def _progress(year: int, window, outcome: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
-def _assert_clean(window: Window) -> None:
+def _assert_clean(window: Window | NowcastWindow, availability_cols: list[str]) -> None:
     """LeakageError, naming the test year, when a test row used an input not yet public."""
     try:
-        assert_no_leakage(window.test, "decision_utc", ["avail_seas5_utc"])
+        assert_no_leakage(window.test, "decision_utc", availability_cols)
     except LeakageError as exc:
         raise LeakageError(f"test year {window.test_year}: {exc}") from exc
 
 
-def _training_years(train: pd.DataFrame) -> int:
+def _training_years(train: pd.DataFrame, features: list[str] = SEASONAL_FEATURES) -> int:
     """Distinct target years among the training rows the network can use."""
-    return len(usable_target_years(train, SEASONAL_FEATURES))
+    return len(usable_target_years(train, features))
 
 
-def _short_of_years(window: Window) -> bool:
-    return _training_years(window.train) < MIN_TRAIN_YEARS
+def _short_of_years(window: Window | NowcastWindow, features: list[str]) -> bool:
+    return _training_years(window.train, features) < MIN_TRAIN_YEARS
 
 
 def _predict_window(window: Window, models, cfg: SeasonalRun):
@@ -191,8 +289,8 @@ def _baseline(name: str, train: pd.DataFrame, test: pd.DataFrame):
     return trend_climatology(train, test)
 
 
-def _empty_rows(models) -> pd.DataFrame:
-    return pd.DataFrame(columns=[*ROW_COLUMNS, *_prediction_columns(models)])
+def _empty_rows(models, columns: list[str] = ROW_COLUMNS) -> pd.DataFrame:
+    return pd.DataFrame(columns=[*columns, *_prediction_columns(models)])
 
 
 def _prediction_columns(models) -> list[str]:
@@ -263,3 +361,48 @@ def _frozen_summary(by_lead: pd.DataFrame) -> pd.DataFrame:
 def _ratio_skill(crps: float, reference: float) -> float:
     """1 - crps / reference as summarise_scores computes it."""
     return 1.0 - crps / reference if reference > 0 else float("nan")
+
+
+# nowcast protocol
+
+
+def _predict_nowcast_window(window: NowcastWindow, models, cfg: NowcastRun):
+    """The window's test rows with (mu, sigma) of every model, and the fitted network if any."""
+    block = window.test[["target_month", "checkpoint", "decision_utc", "y_C"]].copy()
+    block.insert(0, "test_year", window.test_year)
+    net = None
+    for name in models:
+        if name == "nn":
+            net = GtmNowcastModel(cfg.seeds, cfg.hidden, cfg.device).fit(window.train)
+            prediction = net.predict(window.test)
+            mu, sigma = prediction["mu"].to_numpy(), prediction["sigma"].to_numpy()
+        elif name == "bridge":
+            mu, sigma = bridge_nowcast(window.train, window.test, bridge=window.bridge)
+        else:
+            mu, sigma = persistence(window.train, window.test)
+        block[f"mu_{name}"], block[f"sigma_{name}"] = mu, sigma
+    return block, net
+
+
+def _nowcast_summary(rows: pd.DataFrame, models) -> pd.DataFrame:
+    return summarise(
+        rows, models, key="checkpoint", key_values=CHECKPOINTS, references=NOWCAST_REFERENCES
+    )
+
+
+def _by_checkpoint(summary: pd.DataFrame, model: str) -> pd.DataFrame:
+    """The model's summary rows indexed by checkpoint; empty when the summary has none."""
+    if "model" not in summary:
+        return pd.DataFrame()
+    return summary[summary["model"] == model].set_index("checkpoint")
+
+
+def _rows_at(by_checkpoint: pd.DataFrame, checkpoint: str) -> int:
+    return int(by_checkpoint.at[checkpoint, "n"]) if checkpoint in by_checkpoint.index else 0
+
+
+def _beats(nn: pd.DataFrame, bridge: pd.DataFrame, checkpoint: str) -> bool:
+    """Whether nn has the lower CRPS at the checkpoint; a tie or a missing score does not beat."""
+    if checkpoint not in nn.index or checkpoint not in bridge.index:
+        return False
+    return bool(nn.at[checkpoint, "crps"] < bridge.at[checkpoint, "crps"])

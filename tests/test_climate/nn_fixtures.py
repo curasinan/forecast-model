@@ -1,4 +1,4 @@
-"""Synthetic SEAS5, ERA5 and NOAA inputs and nowcast rows shared by the GTM research tests."""
+"""Synthetic SEAS5, ERA5, NOAA and daily ERA5 inputs and nowcast rows for the GTM research tests."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pandas as pd
 
 from climate.dataset import month_of_year, target_month, target_year_frac
 from climate.nn.windows import strict_windows
+from climate.storage import LEDGER_COLUMNS, VINTAGE_BACKFILL, VINTAGE_LIVE
 
 FIRST_INIT = "1996-01-01"
 LAST_INIT = "2015-12-01"
@@ -19,6 +20,17 @@ N_MEMBERS = 25
 BIAS_K = 0.12
 SPREAD_K = 0.2
 LABEL_NOISE_C = 0.07
+
+NOWCAST_FIRST_DAY = "2000-01-01"
+NOWCAST_LAST_DAY = "2011-12-31"
+NOWCAST_LAST_LABEL = "2011-11"
+NOWCAST_MEMBERS = 12
+DAY_NOISE_K = 0.3
+ANOMALY_SD_C = 0.1
+ANOMALY_PERSISTENCE = 0.6
+BACKFILL_SEEN = "2012-01-01T00:00:00+00:00"
+# the live first prints came a day after NOAA's usual date
+LIVE_FIRST_PRINTS = {"2011-09": "2011-10-13T00:00:00+00:00", "2011-10": "2011-11-13T00:00:00+00:00"}
 
 
 def _truth_C(months) -> np.ndarray:
@@ -89,6 +101,66 @@ def nowcast_rows(
             "target_year_frac": target_year_frac(labels).to_numpy(),
         }
     )
+
+
+def synthetic_nowcast(
+    seed: int = 0,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, pd.DataFrame]:
+    """(daily_K, noaa_C, seas5, ledger) for 2000 to 2011, the last month unlabelled."""
+    rng = np.random.default_rng(seed)
+    days = pd.date_range(NOWCAST_FIRST_DAY, "2012-06-30", freq="D")  # past the daily series
+    periods = days.to_period("M")
+    months = pd.period_range(NOWCAST_FIRST_DAY, "2012-06", freq="M")
+    anomaly = np.zeros(len(months))
+    shocks = rng.normal(0.0, ANOMALY_SD_C, len(months))
+    for i in range(1, len(months)):
+        anomaly[i] = ANOMALY_PERSISTENCE * anomaly[i - 1] + shocks[i]
+    anomaly = pd.Series(anomaly, index=months)
+    year = days.year + (days.dayofyear - 0.5) / 365.25
+    warming = 0.4 + 0.025 * (year - 2010.0)
+    cycle = 2.0 * np.sin(2.0 * np.pi * (days.dayofyear - 80) / 365.25)
+    smooth = pd.Series(287.0 + warming + cycle, index=days)
+    expected_K = smooth.groupby(periods).mean()
+    warming_C = pd.Series(warming, index=days).groupby(periods).mean()
+
+    noise = rng.normal(0.0, DAY_NOISE_K, len(days))
+    values = smooth.to_numpy() + anomaly.reindex(periods).to_numpy() + noise
+    seen = days <= NOWCAST_LAST_DAY
+    daily_K = pd.Series(
+        values[seen], index=pd.DatetimeIndex(days[seen], name="date"), name="t2m_global_K"
+    )
+
+    labelled = pd.period_range(NOWCAST_FIRST_DAY, NOWCAST_LAST_LABEL, freq="M")
+    noise = rng.normal(0.0, LABEL_NOISE_C, len(labelled))
+    labels = warming_C[labelled].to_numpy() + anomaly[labelled].to_numpy() + noise
+    noaa_C = pd.Series(labels, index=labelled.astype(str), name="y_C")
+
+    inits = pd.date_range(NOWCAST_FIRST_DAY, "2011-12-01", freq="MS")
+    cells = pd.MultiIndex.from_product([inits, LEADS], names=["init_date", "lead_month"])
+    cells = cells.to_frame(index=False)
+    targets = pd.PeriodIndex(target_month(cells["init_date"], cells["lead_month"]), freq="M")
+    centre = expected_K.reindex(targets).to_numpy() + BIAS_K
+    draws = centre[:, None] + SPREAD_K * rng.standard_normal((len(cells), NOWCAST_MEMBERS))
+    seas5 = cells.loc[cells.index.repeat(NOWCAST_MEMBERS)].reset_index(drop=True)
+    seas5["member"] = np.tile(np.arange(NOWCAST_MEMBERS), len(cells))
+    seas5["t2m_global_K"] = draws.ravel()
+
+    ledger = pd.DataFrame(
+        [
+            {
+                "series": "gtm",
+                "period": month,
+                "value": float(value),
+                "first_seen_utc": LIVE_FIRST_PRINTS.get(month, BACKFILL_SEEN),
+                "vintage": VINTAGE_LIVE if month in LIVE_FIRST_PRINTS else VINTAGE_BACKFILL,
+                "is_revision": False,
+                "source_url": "",
+            }
+            for month, value in noaa_C.items()
+        ],
+        columns=LEDGER_COLUMNS,
+    )
+    return daily_K, noaa_C, seas5, ledger
 
 
 def windows_with_a_late_input(*args, **kwargs):

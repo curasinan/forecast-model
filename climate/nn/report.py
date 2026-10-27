@@ -13,11 +13,28 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from climate.nn.benchmark import COVER50_BAND, COVER90_BAND, LEADS, WIN_MIN_LEADS
+from climate.nn.benchmark import (
+    COVER50_BAND,
+    COVER90_BAND,
+    FIRST_PRINT_MIN_ROWS,
+    LEADS,
+    WIN_MIN_LEADS,
+)
+from climate.nn.nowcast import WIN_CHECKPOINTS
 from climate.nn.scoring import PIT_BINS
 
 KIND_SEASONAL = "seasonal"
+KIND_NOWCAST = "nowcast"
 COMPARE_MODELS: tuple[str, ...] = ("nn", "emos")
+# the nowcast compare table: (checkpoint, model) per column
+NOWCAST_COMPARE_CELLS = (
+    ("10", "nn"),
+    ("10", "bridge"),
+    ("25", "nn"),
+    ("25", "bridge"),
+    ("+3", "nn"),
+    ("+3", "bridge"),
+)
 LABEL_NOTE = (
     "Labels are NOAA's current vintage for history (genuine first prints exist only since "
     "2026-08), so a score carries a revision of a few hundredths of a degree."
@@ -34,6 +51,31 @@ PROTOCOL_NOTES = {
         "never the headline. Coverage is tabulated for emos only, as in that report."
     ),
 }
+NOWCAST_NOTES = {
+    "strict": (
+        "Expanding windows by target year: for each test year the bridge is refit on the labels "
+        "through the year before, the seasonal input is rebuilt with it, and a test row counts "
+        "only when every ERA5 day it uses is in the series."
+    ),
+    "frozen": (
+        "One bridge, fitted through {bridge_through} for every window, so it has seen labels from "
+        "after the test years. This run shows that the baselines are the same code, is never the "
+        "headline and carries no verdict."
+    ),
+}
+PERSISTENCE_NOTE = (
+    "Persistence takes its sigma from one-month changes while its label is two months old at "
+    "checkpoints 5 and 10, so it is too tight there; it is a reference and the win rule "
+    "compares against the bridge."
+)
+CHECKPOINT_5_NOTE = (
+    "Checkpoint 5 sees no ERA5 day yet, so the bridge and the network have no prediction there "
+    "and their cells stay at n = 0."
+)
+FIRST_PRINT_NOTE = (
+    "Months whose first print was seen live, scored against that first print. The win rule reads "
+    f"this table at a checkpoint only where it has at least {FIRST_PRINT_MIN_ROWS} rows."
+)
 
 
 # run directories
@@ -97,6 +139,8 @@ def _plain(value):
     """A JSON-ready copy: numpy values as Python ones, NaN and infinity as None."""
     if isinstance(value, dict):
         return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, pd.DataFrame):
+        return _plain(value.to_dict(orient="records"))
     if isinstance(value, (list, tuple, np.ndarray)):
         return [_plain(item) for item in value]
     if isinstance(value, np.generic):
@@ -140,7 +184,7 @@ def _rule_line() -> str:
 
 def _verdict_line(win: tuple[bool, str] | None) -> str:
     if win is None:
-        return "Verdict: none (the win rule is judged on a strict run that includes the network)"
+        return "Verdict: none (judged only on a strict run of the network and its baseline)"
     ok, why = win
     return "Verdict: win" if ok else f"Verdict: no win ({why})"
 
@@ -174,13 +218,68 @@ def render_seasonal_report(
         lines += [f"Rows excluded by the strict rule: {extras['excluded_rows']}", ""]
     skipped = extras.get("skipped_windows") or []
     lines += ["Test years skipped: " + (", ".join(str(year) for year in skipped) or "none"), ""]
+    return "\n".join([*lines, *_pit_lines(extras, "all leads")])
+
+
+def _pit_lines(extras: dict, scope: str) -> list[str]:
+    """The PIT section of a report: a row of bin frequencies per model; none without them."""
     pit = extras.get("pit_hist") or {}
-    if pit:
-        edges = [f"{k / PIT_BINS:.1f}-{(k + 1) / PIT_BINS:.1f}" for k in range(PIT_BINS)]
-        body = [[name, *(_fmt(freq, 3) for freq in freqs)] for name, freqs in pit.items()]
-        lines += [f"## PIT histogram (all leads, {PIT_BINS} bins)", "", LABEL_NOTE, ""]
-        lines += [*_table(["model", *edges], body), ""]
-    return "\n".join(lines)
+    if not pit:
+        return []
+    edges = [f"{k / PIT_BINS:.1f}-{(k + 1) / PIT_BINS:.1f}" for k in range(PIT_BINS)]
+    body = [[name, *(_fmt(freq, 3) for freq in freqs)] for name, freqs in pit.items()]
+    lines = [f"## PIT histogram ({scope}, {PIT_BINS} bins)", "", LABEL_NOTE, ""]
+    return [*lines, *_table(["model", *edges], body), ""]
+
+
+def _nowcast_rule_line() -> str:
+    return (
+        "Win rule: nn CRPS below the bridge's at every checkpoint in "
+        f"{', '.join(WIN_CHECKPOINTS)} on the current-vintage table, and the first print table, "
+        f"wherever it has at least {FIRST_PRINT_MIN_ROWS} rows at a checkpoint, agrees in sign."
+    )
+
+
+def _nowcast_table(summary: pd.DataFrame) -> list[str]:
+    header = ["model", "checkpoint", "n", "CRPS", "skill vs bridge", "cover50", "cover90"]
+    body = [
+        [
+            str(r["model"]),
+            str(r["checkpoint"]),
+            str(int(r["n"])),
+            _fmt(r["crps"], 4),
+            _fmt(r["skill_vs_bridge"], 3),
+            _fmt(r["cover50"], 3),
+            _fmt(r["cover90"], 3),
+        ]
+        for r in summary.to_dict("records")
+    ]
+    return _table(header, body)
+
+
+def render_nowcast_report(summary: pd.DataFrame, extras: dict, win: tuple[bool, str] | None) -> str:
+    """The markdown report of a nowcast run; win None says that no verdict was asked for."""
+    protocol = extras["protocol"]
+    lines = [f"# GTM nowcast benchmark: {protocol} protocol", ""]
+    if protocol in NOWCAST_NOTES:
+        lines += [NOWCAST_NOTES[protocol].format(bridge_through=extras.get("bridge_through")), ""]
+    lines += [_nowcast_rule_line(), "", _verdict_line(win), ""]
+    lines += [PERSISTENCE_NOTE, "", CHECKPOINT_5_NOTE, ""]
+    lines += ["## CRPS and calibration by model and checkpoint", "", LABEL_NOTE, ""]
+    lines += [*_nowcast_table(summary), ""]
+    first = extras.get("first_print_summary")
+    first = pd.DataFrame() if first is None else pd.DataFrame(first)
+    lines += ["## Genuine first prints", "", FIRST_PRINT_NOTE, ""]
+    if len(first) and (first["n"] > 0).any():
+        lines += [*_nowcast_table(first), ""]
+    else:
+        lines += ["No genuine first print has been scored yet.", ""]
+    if "dropped_gap_rows" in extras:
+        dropped = extras["dropped_gap_rows"]
+        lines += [f"Test rows dropped for a gap day in the ERA5 series: {dropped}", ""]
+    skipped = extras.get("skipped_windows") or []
+    lines += ["Test years skipped: " + (", ".join(str(year) for year in skipped) or "none"), ""]
+    return "\n".join([*lines, *_pit_lines(extras, "all checkpoints")])
 
 
 # compare
@@ -213,8 +312,23 @@ def _seasonal_header() -> list[str]:
     return [*header, "win"]
 
 
+def _nowcast_header() -> list[str]:
+    cells = [f"cp{checkpoint}_{model}" for checkpoint, model in NOWCAST_COMPARE_CELLS]
+    return ["run", *cells, "win"]
+
+
+def _nowcast_cells(run_dir: Path, run: dict) -> list[str]:
+    summary = run["metrics"].get("summary", [])
+    crps = {(r["model"], r["checkpoint"]): r.get("crps") for r in summary}
+    cells = [_fmt(crps.get((model, checkpoint)), 4) for checkpoint, model in NOWCAST_COMPARE_CELLS]
+    return [_run_name(run_dir), *cells, _win_cell(run["metrics"].get("win"))]
+
+
 # run kind -> (table header, cells of one run)
-COMPARE_LAYOUTS = {KIND_SEASONAL: (_seasonal_header, _seasonal_cells)}
+COMPARE_LAYOUTS = {
+    KIND_SEASONAL: (_seasonal_header, _seasonal_cells),
+    KIND_NOWCAST: (_nowcast_header, _nowcast_cells),
+}
 
 
 def compare_runs(run_dirs: list[Path]) -> str:
