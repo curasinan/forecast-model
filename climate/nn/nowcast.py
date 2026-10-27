@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import calendar
+import math
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -79,6 +81,7 @@ _PREV_LABEL_LOOKBACK = 2
 
 _CHECKPOINT = re.compile(r"(\+?)([1-9][0-9]*)")
 _MONTH = re.compile(r"([0-9]{4})-(0[1-9]|1[0-2])")
+_ISO_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _month_span(target_month: str) -> tuple[date, date]:
@@ -101,6 +104,8 @@ def _require_daily(daily_K: pd.Series) -> None:
         raise ValueError("daily_K must be indexed by dates")
     if index.tz is not None:
         raise ValueError("daily_K must be indexed by timezone-naive dates")
+    if not index.normalize().equals(index):
+        raise ValueError("daily_K must be indexed by dates without a time of day")
     if not index.is_unique:
         raise ValueError("daily_K repeats a date")
 
@@ -243,6 +248,76 @@ def _previous_label(
     return float("nan"), "", decision
 
 
+@dataclass(frozen=True)
+class _Lookups:
+    """What every row reads besides the daily series: labels, print times, seasonal rows, codes."""
+
+    labels: dict[str, float]
+    printed: dict[str, datetime]
+    candidates: dict[str, list[_Candidate]]
+    month_of_year: dict[str, int]
+    year_frac: dict[str, float]
+
+
+def _lookups(
+    labels: dict[str, float],
+    months: list[str],
+    seasonal: pd.DataFrame,
+    ledger: pd.DataFrame | None,
+) -> _Lookups:
+    """The lookups of the given target months."""
+    printed = _print_times(months, ledger)
+    moy, year_frac = _month_encodings(months)
+    return _Lookups(labels, printed, _by_target(seasonal), moy, year_frac)
+
+
+def _month_rows(
+    daily_K: pd.Series, month: str, look: _Lookups, decisions: list[tuple[str, datetime]]
+) -> list[dict]:
+    """The untyped rows of one target month at the given (checkpoint, decision) pairs."""
+    first, end = _month_span(month)
+    length = (end - first).days + 1
+    values = _month_values(daily_K, first, length)
+    full_mean = float(values.mean()) if np.isfinite(values).all() else float("nan")
+    before = [str(pd.Period(month, freq="M") - lag) for lag in range(1, _PREV_LABEL_LOOKBACK + 1)]
+    seasonal_rows = look.candidates.get(month, [])
+    rows = []
+    for checkpoint, decision in decisions:
+        considered = _days_considered(first, end, last_era5_day_for(decision))
+        mean, used, gap, last = _summarise(values[:considered])
+        prev, prev_month, prev_printed = _previous_label(
+            before, decision, look.labels, look.printed
+        )
+        mu, sigma, init = _freshest(seasonal_rows, decision)
+        rows.append(
+            {
+                "target_month": month,
+                "checkpoint": checkpoint,
+                "decision_utc": decision,
+                "month_of_year": look.month_of_year[month],
+                "target_year_frac": look.year_frac[month],
+                "days_in_month": length,
+                "days_used": used,
+                "gap_days": gap,
+                "mtd_mean_K": mean,
+                "full_month_mean_K": full_mean,
+                "prev_label_C": prev,
+                "prev_label_month": prev_month,
+                "avail_prev_label_utc": prev_printed,
+                "seas_mu": mu,
+                "seas_sigma": sigma,
+                "seas_init": init,
+                "avail_seas_utc": seas5_available_on(init) if init else decision,
+                "avail_era5_utc": era5_available_on(first + timedelta(days=last))
+                if used
+                else decision,
+                "y_C": look.labels.get(month, float("nan")),
+                "avail_label_utc": look.printed[month],
+            }
+        )
+    return rows
+
+
 def _typed(frame: pd.DataFrame, bridge: Bridge) -> pd.DataFrame:
     """Set the column types, then add the columns that follow from the others."""
     for column in _TIME_COLUMNS:
@@ -276,49 +351,61 @@ def nowcast_frame(
     _require_daily(daily_K)
     labels = _label_lookup(noaa_C)
     target_months = _target_months(daily_K, months)
-    printed = _print_times(target_months, ledger)
-    moy, year_frac = _month_encodings(target_months)
-    candidates = _by_target(seasonal)
+    look = _lookups(labels, target_months, seasonal, ledger)
     rows = []
     for month in target_months:
-        first, end = _month_span(month)
-        length = (end - first).days + 1
-        values = _month_values(daily_K, first, length)
-        full_mean = float(values.mean()) if np.isfinite(values).all() else float("nan")
-        before = [
-            str(pd.Period(month, freq="M") - lag) for lag in range(1, _PREV_LABEL_LOOKBACK + 1)
-        ]
-        seasonal_rows = candidates.get(month, [])
-        for checkpoint in CHECKPOINTS:
-            decision = checkpoint_decision(month, checkpoint)
-            considered = _days_considered(first, end, last_era5_day_for(decision))
-            mean, used, gap, last = _summarise(values[:considered])
-            prev, prev_month, prev_printed = _previous_label(before, decision, labels, printed)
-            mu, sigma, init = _freshest(seasonal_rows, decision)
-            rows.append(
-                {
-                    "target_month": month,
-                    "checkpoint": checkpoint,
-                    "decision_utc": decision,
-                    "month_of_year": moy[month],
-                    "target_year_frac": year_frac[month],
-                    "days_in_month": length,
-                    "days_used": used,
-                    "gap_days": gap,
-                    "mtd_mean_K": mean,
-                    "full_month_mean_K": full_mean,
-                    "prev_label_C": prev,
-                    "prev_label_month": prev_month,
-                    "avail_prev_label_utc": prev_printed,
-                    "seas_mu": mu,
-                    "seas_sigma": sigma,
-                    "seas_init": init,
-                    "avail_seas_utc": seas5_available_on(init) if init else decision,
-                    "avail_era5_utc": era5_available_on(first + timedelta(days=last))
-                    if used
-                    else decision,
-                    "y_C": labels.get(month, float("nan")),
-                    "avail_label_utc": printed[month],
-                }
-            )
+        decisions = [(c, checkpoint_decision(month, c)) for c in CHECKPOINTS]
+        rows += _month_rows(daily_K, month, look, decisions)
     return _typed(pd.DataFrame(rows, columns=NOWCAST_COLUMNS), bridge)
+
+
+def _checkpoint_at(target_month: str, decision: datetime) -> str:
+    """The latest checkpoint decided at or before the decision; the first one when none is."""
+    reached = [c for c in CHECKPOINTS if checkpoint_decision(target_month, c) <= decision]
+    return reached[-1] if reached else CHECKPOINTS[0]
+
+
+def nowcast_row(
+    daily_K: pd.Series,
+    noaa_C: pd.Series,
+    seasonal: pd.DataFrame,
+    *,
+    bridge: Bridge,
+    ledger: pd.DataFrame | None = None,
+    target_month: str,
+    decision: datetime,
+) -> pd.Series:
+    """The frame's row of one target month at an exact decision time, not at a checkpoint."""
+    _require_daily(daily_K)
+    _require_aware(decision)
+    _month_span(target_month)
+    look = _lookups(_label_lookup(noaa_C), [target_month], seasonal, ledger)
+    checkpoint = _checkpoint_at(target_month, decision)
+    (row,) = _month_rows(daily_K, target_month, look, [(checkpoint, decision)])
+    return _typed(pd.DataFrame([row], columns=NOWCAST_COLUMNS), bridge).iloc[0]
+
+
+def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprint: str) -> dict:
+    """The JSON-ready nowcast of one row: its Gaussian, what it saw and whether it is usable."""
+    decision = pd.Timestamp(row["decision_utc"])
+    if decision.tzinfo is None:
+        raise ValueError("decision_utc must be a timezone-aware time")
+    decision = decision.tz_convert("UTC")
+    target_month = str(row["target_month"])
+    first, end = _month_span(target_month)
+    visible = last_era5_day_for(decision.to_pydatetime())
+    gap_days = int(row["gap_days"])
+    return {
+        "as_of": decision.strftime(_ISO_UTC),
+        "target_month": target_month,
+        "checkpoint": str(row["checkpoint"]),
+        "mu": float(mu) if math.isfinite(mu) else None,
+        "sigma": float(sigma) if math.isfinite(sigma) else None,
+        "days_used": int(row["days_used"]),
+        "gap_days": gap_days,
+        "last_era5_day": None if visible < first else min(visible, end).isoformat(),
+        "seas_init": str(row["seas_init"]),
+        "prev_label_month": str(row["prev_label_month"]),
+        "model_fingerprint": str(model_fingerprint),
+        "usable": gap_days == 0 and math.isfinite(mu),
+    }
