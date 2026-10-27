@@ -107,6 +107,7 @@ def test_the_frozen_rows_are_the_per_row_predictions_of_the_three_models(frozen_
     assert list(rows.columns) == [*ROW_COLUMNS, *prediction_columns]
     assert len(rows) == 3 * 72 and sorted(rows["test_year"].unique()) == [2006, 2007, 2008]
     assert extras["protocol"] == "frozen" and extras["excluded_rows"] == 0
+    assert extras["saved_model"] is None  # a frozen run carries no network
     assert extras["skipped_windows"] == []
     assert set(extras["pit_hist"]) == set(models)
     assert all(len(values) == 10 for values in extras["pit_hist"].values())
@@ -179,6 +180,7 @@ def test_strict_rows_carry_the_documented_columns_and_respect_each_windows_cutof
     assert list(rows.columns) == [*ROW_COLUMNS, *prediction_columns]
     assert len(rows) == 3 * (72 - 15)
     assert extras["protocol"] == "strict" and extras["skipped_windows"] == []
+    assert extras["saved_model"] is None  # no network in the run
     assert str(rows["decision_utc"].dtype).endswith("UTC]")
     for year, part in rows.groupby("test_year"):
         assert (part["decision_utc"] >= noaa_available_on(f"{year - 1}-12")).all()
@@ -342,6 +344,12 @@ def test_a_strict_run_prints_one_line_per_test_year_to_stderr(inputs, capsys):
         expected = f"test year {year}: n_train={len(window.train)}, n_test={len(window.test)}"
         assert line == f"{expected}, {outcome}"
     assert len(lines) == 4
+
+
+def test_the_rows_of_a_strict_run_over_one_window_carry_no_frame_attributes(inputs, tmp_path):
+    rows, summary, extras = run_seasonal(inputs, None, _strict(BASELINES, 2015, 2016))
+    assert rows["test_year"].unique().tolist() == [2015] and rows.attrs == {}
+    rows.to_parquet(tmp_path / "rows.parquet")  # the window frame's Bridge cannot be written
 
 
 def test_a_frozen_run_prints_nothing_to_stderr(inputs, capsys):
@@ -510,6 +518,12 @@ def test_the_last_windows_network_is_saved_and_its_rows_are_its_predictions(inpu
     assert saved.seeds == (0,) and saved.hidden == 16
     assert saved.validation_years == [2009, 2010, 2011]  # trained on the target years before 2012
     window = strict_windows(*inputs, first_test_year=2012, last_test_year=2012)[0]
+    assert extras["saved_model"] == {
+        "kind": "seasonal",
+        "test_year": 2012,
+        "labels_through": "2011-12",
+        "bridge": window.bridge.params,
+    }
     in_2012 = rows[rows["test_year"] == 2012]
     expected = saved.predict(window.test)
     np.testing.assert_allclose(in_2012["mu_nn"], expected["mu"], rtol=1e-5, atol=1e-6)

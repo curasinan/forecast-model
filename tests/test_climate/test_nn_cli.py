@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -14,7 +15,7 @@ import pandas as pd
 import pytest
 
 from analysis.gpu_budget import GpuBudgetError
-from climate.nn import benchmark
+from climate.nn import benchmark, nowcast_windows
 from climate.nn.benchmark import NowcastRun, SeasonalRun, run_nowcast, run_seasonal
 from climate.nn.report import compare_runs, read_run, write_run
 from climate.nn.seasonal_model import GtmNnModel
@@ -165,6 +166,32 @@ def test_a_strict_network_run_records_the_verdict_and_saves_the_weights(
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     verdict = "Verdict: win\n" if ok else f"Verdict: no win ({why})"
     assert verdict in report
+
+
+PROVENANCE_KEYS = {"kind", "test_year", "labels_through", "bridge"}
+
+
+def test_a_strict_network_run_writes_the_provenance_of_the_saved_network(tmp_path, synthetic_root):
+    pytest.importorskip("torch")
+    run_dir = tmp_path / "r"
+    argv = ["--protocol", "strict", "--models", "nn,emos", "--seeds", "0", "--hidden", "8"]
+    argv += ["--first-test-year", "2015", "--last-test-year", "2017"]  # 2016 and 2017 are skipped
+    assert main(_args(synthetic_root, run_dir, *argv)) == 0
+    provenance = json.loads((run_dir / "weights" / "provenance.json").read_text(encoding="utf-8"))
+    assert set(provenance) == PROVENANCE_KEYS and provenance["kind"] == "seasonal"
+    assert provenance["test_year"] == 2015  # the last scored window, not the last year asked for
+    assert provenance["labels_through"] == "2014-12"
+    assert provenance["bridge"]["fit_end"] == "2014-12" and "beta" in provenance["bridge"]
+    assert read_run(run_dir)["metrics"]["extras"]["saved_model"] == provenance
+
+
+def test_a_run_without_the_network_writes_no_provenance(tmp_path, synthetic_root):
+    run_dir = tmp_path / "r"
+    argv = ["--protocol", "strict", "--models", "emos,trend"]
+    argv += ["--first-test-year", "2006", "--last-test-year", "2007"]
+    assert main(_args(synthetic_root, run_dir, *argv)) == 0
+    assert not (run_dir / "weights").exists()
+    assert read_run(run_dir)["metrics"]["extras"]["saved_model"] is None
 
 
 def test_the_options_default_as_documented(tmp_path, synthetic_root, monkeypatch):
@@ -413,6 +440,35 @@ def test_a_nowcast_network_run_records_the_verdict_and_saves_the_weights(
     assert saved.validation_years == [2008, 2009, 2010]
     verdict = "Verdict: win\n" if ok else f"Verdict: no win ({why})"
     assert verdict in (run_dir / "report.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "extra, fit_end, protocol",
+    [([], "2010-12", "strict"), (["--bridge-through", "2011-11"], "2011-11", "frozen")],
+    ids=["strict", "frozen"],
+)
+def test_a_nowcast_network_run_writes_the_provenance_of_the_saved_network(
+    extra, fit_end, protocol, tmp_path, nowcast_root
+):
+    pytest.importorskip("torch")
+    run_dir = tmp_path / "r"
+    argv = ["--models", "nn,bridge", "--seeds", "0", "--hidden", "8", *extra]
+    argv += ["--first-test-year", "2010", "--last-test-year", "2012"]  # no data in 2012
+    assert nowcast_main(_args(nowcast_root, run_dir, *argv)) == 0
+    provenance = json.loads((run_dir / "weights" / "provenance.json").read_text(encoding="utf-8"))
+    assert set(provenance) == PROVENANCE_KEYS and provenance["kind"] == "nowcast"
+    assert provenance["test_year"] == 2011  # the last scored window
+    assert provenance["labels_through"] == "2010-12"  # the network's labels, whatever the bridge's
+    assert provenance["bridge"]["fit_end"] == fit_end
+    run = read_run(run_dir)
+    assert run["metrics"]["extras"]["saved_model"] == provenance
+    assert run["config"]["protocol"] == protocol
+
+
+def test_the_script_imports_the_month_pattern_of_the_windows_instead_of_defining_one():
+    source = Path(gtm_nowcast_benchmark.__file__).read_text(encoding="utf-8")
+    assert "re.compile" not in source
+    assert gtm_nowcast_benchmark.MONTH is nowcast_windows.MONTH
 
 
 def test_a_nowcast_run_with_a_bridge_month_is_a_frozen_run_without_a_verdict(
@@ -693,7 +749,8 @@ def test_the_compare_script_prints_the_nowcast_table_and_refuses_to_mix_the_kind
     runs = [tmp_path / "a", tmp_path / "b"]
     assert compare_main([str(run) for run in runs]) == 0
     printed = capsys.readouterr().out
-    assert printed == compare_runs(runs) and printed.startswith("| run | cp10_nn | cp10_bridge |")
+    assert printed == compare_runs(runs)
+    assert printed.startswith("| run | protocol | cp10_nn | cp10_bridge |")
     assert compare_main([str(tmp_path / "a"), str(tmp_path / "seasonal")]) == 2
     assert "different kinds" in capsys.readouterr().err
 

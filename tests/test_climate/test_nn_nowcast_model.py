@@ -36,7 +36,7 @@ def _frames(through: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def _train(frame: pd.DataFrame, last_year: int) -> pd.DataFrame:
-    """The labelled rows without a gap day through the target year `last_year`."""
+    """The labelled rows through the target year `last_year`; the model drops the gap rows."""
     return frame[(target_year(frame) <= last_year) & np.isfinite(frame["y_C"])]
 
 
@@ -48,6 +48,15 @@ def _same_weights(a, b) -> bool:
 def frame():
     """The nowcast frame with the bridge fitted through 2009; the tests only read it."""
     return _frames(2009)[1]
+
+
+@pytest.fixture(scope="module")
+def seasonal_fitted():
+    """A seasonal model of the same setup as `fitted` (one seed, width 8) on the seasonal frame."""
+    rows = _frames(2009)[0]
+    return GtmNnModel(seeds=(0,), hidden=8).fit(
+        rows[(target_year(rows) <= 2009) & np.isfinite(rows["y_C"])]
+    )
 
 
 @pytest.fixture(scope="module")
@@ -201,6 +210,25 @@ def test_the_fingerprint_differs_from_a_seasonal_models_with_the_same_setup(fram
     assert seasonal.validation_years == nowcast.validation_years  # the setup is the same
     assert (seasonal.seeds, seasonal.hidden) == (nowcast.seeds, nowcast.hidden)
     assert seasonal.fingerprint() != nowcast.fingerprint()
+
+
+def test_a_nowcast_model_refuses_the_weights_of_a_seasonal_model_at_load(tmp_path, seasonal_fitted):
+    seasonal_fitted.save(tmp_path / "m")
+    with pytest.raises(ValueError, match=r"GtmNowcastModel.*mtd_mean_C.*fc_mean_C"):
+        GtmNowcastModel.load(tmp_path / "m")
+
+
+def test_a_seasonal_model_refuses_the_weights_of_a_nowcast_model_at_load(tmp_path, fitted):
+    fitted.save(tmp_path / "m")
+    with pytest.raises(ValueError, match=r"GtmNnModel.*fc_mean_C.*mtd_mean_C"):
+        GtmNnModel.load(tmp_path / "m")
+
+
+def test_each_class_loads_its_own_weights(tmp_path, fitted, seasonal_fitted):
+    fitted.save(tmp_path / "nowcast")
+    seasonal_fitted.save(tmp_path / "seasonal")
+    assert GtmNowcastModel.load(tmp_path / "nowcast").features == NOWCAST_FEATURES
+    assert GtmNnModel.load(tmp_path / "seasonal").features == SEASONAL_FEATURES
 
 
 def test_an_unfitted_model_refuses_to_predict_save_or_fingerprint(tmp_path):

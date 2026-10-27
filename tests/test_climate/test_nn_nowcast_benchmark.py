@@ -251,7 +251,7 @@ def test_bridge_and_persistence_are_scored_per_checkpoint(synthetic_nowcast):
     assert full < early
 
 
-def test_the_first_print_summary_is_restricted_to_genuine_months(synthetic_nowcast):
+def test_first_print_summary_is_restricted_to_genuine_months(synthetic_nowcast):
     daily, noaa_C, seasonal, ledger = synthetic_nowcast  # the ledger has two live first prints
     cfg = NowcastRun(("bridge",), 2011, 2011, (), 32, "cpu")
     rows, summary, extras = run_nowcast(daily, noaa_C, seasonal, ledger, cfg)
@@ -367,6 +367,7 @@ def test_the_pit_histograms_are_the_ten_bin_frequencies_of_each_models_rows(base
 def test_the_extras_name_the_protocol_the_kind_and_what_was_dropped_or_skipped(baseline_run):
     rows, summary, extras = baseline_run
     assert extras["protocol"] == "strict" and extras["kind"] == "nowcast"
+    assert extras["saved_model"] is None  # no network in the run
     assert extras["bridge_through"] is None and extras["dropped_gap_rows"] == 0
     assert extras["excluded_rows"] == 4 and extras["skipped_windows"] == []
     assert set(extras) >= {"first_print_summary", "pit_hist"}
@@ -552,6 +553,28 @@ def test_the_saved_network_is_the_last_scored_windows_when_a_later_year_is_skipp
     rows, summary, extras = run_nowcast(*inputs, cfg, model_dir=tmp_path / "m")
     assert extras["skipped_windows"] == [2012]  # the data end in 2011
     assert GtmNowcastModel.load(tmp_path / "m").validation_years == [2008, 2009, 2010]
+    saved = extras["saved_model"]
+    assert (saved["kind"], saved["test_year"], saved["labels_through"]) == (
+        "nowcast",
+        2011,
+        "2010-12",
+    )
+    (window,) = _windows(inputs, 2011, 2011)
+    assert saved["bridge"] == window.bridge.params and set(saved) == {
+        "kind",
+        "test_year",
+        "labels_through",
+        "bridge",
+    }
+
+
+def test_the_saved_model_of_a_frozen_run_names_the_bridge_it_was_built_with(inputs):
+    pytest.importorskip("torch")
+    cfg = _cfg(("nn",), 2010, 2011, seeds=(0,), hidden=8)
+    rows, summary, extras = run_nowcast(*inputs, cfg, bridge_through="2011-11")
+    saved = extras["saved_model"]
+    assert saved["test_year"] == 2011 and saved["labels_through"] == "2010-12"
+    assert saved["bridge"]["fit_end"] == "2011-11"  # the network's labels end earlier
 
 
 def test_the_network_is_built_with_the_seeds_width_and_device_of_the_run(inputs, monkeypatch):
@@ -674,6 +697,37 @@ def test_a_summary_without_the_network_or_the_bridge_has_no_win_and_does_not_rai
     reason = "the summary needs both nn and bridge rows"
     assert nowcast_win(summary[summary.model != "nn"], _empty_summary()) == (False, reason)
     assert nowcast_win(summary[summary.model != "bridge"], _empty_summary()) == (False, reason)
+
+
+def test_the_verdict_is_the_same_for_frames_and_for_the_records_of_metrics_json():
+    current = _summary(WIN_CHECKPOINTS)
+    cases = [
+        (_summary(WIN_CHECKPOINTS, n=5), (True, "")),
+        (_summary([], n=5), (False, "first print table disagrees at 10")),
+        (_empty_summary(), (True, "")),
+    ]
+    for first, expected in cases:
+        assert nowcast_win(current, first) == expected
+        assert nowcast_win(current.to_dict("records"), first.to_dict("records")) == expected
+        assert nowcast_win(current, first.to_dict("records")) == expected
+        assert nowcast_win(current.to_dict("records"), first) == expected
+
+
+def test_a_json_null_in_the_records_is_a_missing_score_and_nothing_is_a_missing_summary():
+    records = _summary(WIN_CHECKPOINTS).to_dict("records")
+    for record in records:
+        if record["model"] == "nn" and record["checkpoint"] == "+1":
+            record["crps"] = None  # metrics.json writes NaN as null
+    assert nowcast_win(records, []) == (False, "nn does not beat bridge at +1")
+    unscored = _summary(WIN_CHECKPOINTS).to_dict("records")
+    for record in unscored:
+        if record["model"] == "nn":
+            record["crps"], record["n"] = None, 0  # a network without a single score
+    assert nowcast_win(unscored, []) == (False, "nn does not beat bridge at 10")
+    for record in unscored:
+        record["crps"] = None  # not a single score in the whole table
+    assert nowcast_win(unscored, []) == (False, "nn does not beat bridge at 10")
+    assert nowcast_win([], []) == (False, "the summary needs both nn and bridge rows")
 
 
 def test_the_first_print_table_must_agree_wherever_it_has_three_rows_at_a_checkpoint():

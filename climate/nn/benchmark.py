@@ -151,7 +151,7 @@ def run_nowcast(
     )
     for window in windows:
         _assert_clean(window, NOWCAST_AVAILABILITY)
-    skipped, blocks, last_net = [], [], None
+    skipped, blocks, last_net, last_window = [], [], None, None
     for window in windows:
         year = window.test_year
         if len(window.test) == 0 or _short_of_years(window, NOWCAST_FEATURES):
@@ -160,7 +160,8 @@ def run_nowcast(
             continue
         block, net = _predict_nowcast_window(window, models, cfg)
         blocks.append(block)
-        last_net = net
+        if net is not None:
+            last_net, last_window = net, window
         _progress(year, window, "scored")
     if model_dir is not None and last_net is not None:
         last_net.save(model_dir)
@@ -176,13 +177,14 @@ def run_nowcast(
         "dropped_gap_rows": int(sum(window.dropped_gap_rows for window in windows)),
         "skipped_windows": skipped,
         "pit_hist": pit_histograms(rows, models),
+        "saved_model": None if last_net is None else _saved_model("nowcast", last_window),
         "first_print_summary": _nowcast_summary(rows[rows["target_month"].isin(genuine)], models),
     }
     return rows, _nowcast_summary(rows, models), extras
 
 
-def nowcast_win(summary: pd.DataFrame, first_print_summary: pd.DataFrame) -> tuple[bool, str]:
-    """(True, "") when nn wins on both tables, else (False, the first reason found)."""
+def nowcast_win(summary, first_print_summary) -> tuple[bool, str]:
+    """(True, "") when nn wins on both tables, else (False, why); a table may be records."""
     nn, bridge = _by_checkpoint(summary, "nn"), _by_checkpoint(summary, "bridge")
     if nn.empty or bridge.empty:
         return False, "the summary needs both nn and bridge rows"
@@ -215,7 +217,7 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
     for window in windows:
         _assert_clean(window, SEASONAL_AVAILABILITY)
     made = {window.test_year: window for window in windows}
-    skipped, blocks, last_net = [], [], None
+    skipped, blocks, last_net, last_window = [], [], None, None
     for year in range(cfg.first_test_year, cfg.last_test_year + 1):
         window = made.get(year)
         if window is None or len(window.test) == 0 or _short_of_years(window, SEASONAL_FEATURES):
@@ -224,7 +226,8 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
             continue
         block, net = _predict_window(window, models, cfg)
         blocks.append(block)
-        last_net = net if net is not None else last_net
+        if net is not None:
+            last_net, last_window = net, window
         _progress(year, window, "scored")
     if model_dir is not None and last_net is not None:
         last_net.save(model_dir)
@@ -234,11 +237,22 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
         "excluded_rows": int(sum(window.excluded for window in windows)),
         "skipped_windows": skipped,
         "pit_hist": pit_histograms(rows, models),
+        "saved_model": None if last_net is None else _saved_model("seasonal", last_window),
     }
     summary = summarise(
         rows, models, key="lead_month", key_values=LEADS, references=SEASONAL_REFERENCES
     )
     return rows, summary, extras
+
+
+def _saved_model(kind: str, window) -> dict:
+    """Where the saved network came from: its test year, the labels it saw and its bridge."""
+    return {
+        "kind": kind,
+        "test_year": window.test_year,
+        "labels_through": f"{window.test_year - 1}-12",
+        "bridge": window.bridge.params,
+    }
 
 
 def _progress(year: int, window, outcome: str) -> None:
@@ -269,6 +283,7 @@ def _short_of_years(window: Window | NowcastWindow, features: list[str]) -> bool
 def _predict_window(window: Window, models, cfg: SeasonalRun):
     """The window's test rows with (mu, sigma) of every model, and the fitted network if any."""
     block = window.test[["lead_month", "target_month", "decision_utc", "y_C"]].copy()
+    block.attrs.clear()  # the frame's bridge stays out of the rows, parquet cannot hold it
     block.insert(0, "test_year", window.test_year)
     net = None
     for name in models:
@@ -314,6 +329,7 @@ def _run_frozen(inputs, cfg: SeasonalRun):
         "excluded_rows": 0,
         "skipped_windows": [y for y in range(first, last + 1) if y not in scored],
         "pit_hist": pit_histograms(rows, FROZEN_MODELS),
+        "saved_model": None,
     }
     return rows, _frozen_summary(by_lead), extras
 
@@ -391,11 +407,14 @@ def _nowcast_summary(rows: pd.DataFrame, models) -> pd.DataFrame:
     )
 
 
-def _by_checkpoint(summary: pd.DataFrame, model: str) -> pd.DataFrame:
-    """The model's summary rows indexed by checkpoint; empty when the summary has none."""
-    if "model" not in summary:
+def _by_checkpoint(summary, model: str) -> pd.DataFrame:
+    """The model's summary rows indexed by checkpoint, scores as numbers; empty without any."""
+    frame = pd.DataFrame(summary)
+    if "model" not in frame:
         return pd.DataFrame()
-    return summary[summary["model"] == model].set_index("checkpoint")
+    part = frame[frame["model"] == model].set_index("checkpoint")
+    scores = pd.to_numeric(part["crps"], errors="coerce")
+    return part.assign(crps=scores, n=pd.to_numeric(part["n"], errors="coerce").fillna(0))
 
 
 def _rows_at(by_checkpoint: pd.DataFrame, checkpoint: str) -> int:

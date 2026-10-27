@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from analysis.gpu_budget import GpuBudgetError
-from climate.nn.report import git_commit, write_run
+from climate.nn.report import git_commit, write_provenance, write_run
 from climate.nn.seasonal_model import SEEDS
 from climate.nn.torch_model import configure_device
 from climate.nn.windows import FIRST_TEST_YEAR
@@ -174,9 +174,18 @@ def base_config(
 
 
 def write_and_report(
-    run_dir: Path, *, config: dict, metrics: dict, rows, report_md: str, model_dir: Path
+    run_dir: Path,
+    *,
+    config: dict,
+    metrics: dict,
+    rows,
+    report_md: str,
+    model_dir: Path,
+    saved_model: dict | None = None,
 ) -> None:
-    """Write the run directory, with the saved model if the run made one, and print the report."""
+    """Write the run directory, with the saved model and its provenance if any, and print it."""
+    if saved_model is not None and model_dir.exists():
+        write_provenance(model_dir, saved_model)
     write_run(
         run_dir,
         config=config,

@@ -15,7 +15,7 @@ from climate.nn.availability import noaa_available_on
 from climate.nn.features import seasonal_frame
 from climate.nn.nowcast import nowcast_frame
 
-_MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
+MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 
 
 class WindowError(ValueError):
@@ -63,7 +63,7 @@ def nowcast_windows(
     bridge_through: str | None = None,
 ) -> list[NowcastWindow]:
     """One NowcastWindow per test year, the frame rebuilt with the window's own bridge."""
-    if bridge_through is not None and not _MONTH.fullmatch(bridge_through):
+    if bridge_through is not None and not MONTH.fullmatch(bridge_through):
         raise ValueError(f"bridge_through must be YYYY-MM, got {bridge_through!r}")
     monthly = monthly_means(daily_K)
     series_months = _series_months(daily_K)

@@ -139,8 +139,14 @@ class GtmNnModel:
         """Rebuild the model that save wrote to dir_path."""
         dir_path = Path(dir_path)
         manifest = json.loads((dir_path / "manifest.json").read_text(encoding="utf-8"))
+        features = list(manifest["features"])
+        if features != list(cls.FEATURES):
+            raise ValueError(
+                f"{cls.__name__} uses the features {cls.FEATURES}, "
+                f"the saved model was fitted on {features}"
+            )
         model = cls(seeds=tuple(manifest["seeds"]), hidden=manifest["hidden"])
-        model.features = list(manifest["features"])
+        model.features = features
         model.standardiser = Standardiser.from_dict(manifest["standardiser"])
         model.validation_years = [int(year) for year in manifest["validation_years"]]
         model.history = {int(seed): record for seed, record in manifest["history"].items()}

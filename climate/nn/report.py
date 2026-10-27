@@ -112,6 +112,11 @@ def write_run(
         raise
 
 
+def write_provenance(model_dir: Path, provenance: dict) -> None:
+    """Write provenance.json beside the manifest of the saved model in model_dir."""
+    _write_json(Path(model_dir) / "provenance.json", provenance)
+
+
 def read_run(run_dir: Path) -> dict:
     """The run's config.json and metrics.json under the keys 'config' and 'metrics'."""
     run_dir = Path(run_dir)
@@ -280,7 +285,8 @@ def render_nowcast_report(summary: pd.DataFrame, extras: dict, win: tuple[bool, 
         lines += [f"Rows excluded by the strict rule: {extras['excluded_rows']}", ""]
     if "dropped_gap_rows" in extras:
         dropped = extras["dropped_gap_rows"]
-        lines += [f"Test rows dropped for a gap day in the ERA5 series: {dropped}", ""]
+        what = "a missing ERA5 day (a gap, or a checkpoint after the series ends)"
+        lines += [f"Test rows dropped for {what}: {dropped}", ""]
     skipped = extras.get("skipped_windows") or []
     lines += ["Test years skipped: " + (", ".join(str(year) for year in skipped) or "none"), ""]
     return "\n".join([*lines, *_pit_lines(extras, "all checkpoints")])
@@ -318,14 +324,15 @@ def _seasonal_header() -> list[str]:
 
 def _nowcast_header() -> list[str]:
     cells = [f"cp{checkpoint}_{model}" for checkpoint, model in NOWCAST_COMPARE_CELLS]
-    return ["run", *cells, "win"]
+    return ["run", "protocol", *cells, "win"]
 
 
 def _nowcast_cells(run_dir: Path, run: dict) -> list[str]:
     summary = run["metrics"].get("summary", [])
     crps = {(r["model"], r["checkpoint"]): r.get("crps") for r in summary}
     cells = [_fmt(crps.get((model, checkpoint)), 4) for checkpoint, model in NOWCAST_COMPARE_CELLS]
-    return [_run_name(run_dir), *cells, _win_cell(run["metrics"].get("win"))]
+    protocol = str(run["config"].get("protocol", "-"))
+    return [_run_name(run_dir), protocol, *cells, _win_cell(run["metrics"].get("win"))]
 
 
 # run kind -> (table header, cells of one run)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -22,14 +21,13 @@ from climate.nn.benchmark import (  # noqa: E402
 )
 from climate.nn.leakage import LeakageError  # noqa: E402
 from climate.nn.nowcast import load_daily  # noqa: E402
-from climate.nn.nowcast_windows import WindowError  # noqa: E402
+from climate.nn.nowcast_windows import MONTH, WindowError  # noqa: E402
 from climate.nn.report import render_nowcast_report  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.storage import ledger_path, load_ledger  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
 
 DEFAULT_MODELS = "nn,bridge,persistence"
-MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 
 
 def _month(text: str) -> str:
@@ -128,6 +126,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             rows=rows,
             report_md=report_md,
             model_dir=model_dir,
+            saved_model=extras["saved_model"],
         )
     return 0
 

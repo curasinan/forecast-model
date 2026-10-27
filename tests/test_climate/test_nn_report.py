@@ -20,6 +20,7 @@ from climate.nn.report import (
     read_run,
     render_nowcast_report,
     render_seasonal_report,
+    write_provenance,
     write_run,
 )
 
@@ -136,6 +137,28 @@ def test_a_frame_in_the_metrics_is_written_as_a_list_of_records(tmp_path):
         {"model": "nn", "n": 3, "crps": 0.05},
         {"model": "bridge", "n": 0, "crps": None},
     ]
+
+
+def test_the_provenance_is_written_beside_the_saved_model_and_is_strict_json(tmp_path):
+    model = tmp_path / "model"
+    (model / "weights").mkdir(parents=True)
+    provenance = {
+        "kind": "nowcast",
+        "test_year": np.int64(2011),
+        "labels_through": "2010-12",
+        "bridge": {"beta": np.float64(0.9), "r2": float("nan"), "alpha": {"1": 0.1}},
+    }
+    write_provenance(model, provenance)
+    text = (model / "provenance.json").read_text(encoding="utf-8")
+    assert json.loads(text) == {
+        **provenance,
+        "test_year": 2011,
+        "bridge": {"beta": 0.9, "r2": None, "alpha": {"1": 0.1}},
+    }
+    write_run(
+        tmp_path / "r", config={}, metrics={}, rows=pd.DataFrame(), report_md="", model_dir=model
+    )
+    assert (tmp_path / "r" / "weights" / "provenance.json").read_text(encoding="utf-8") == text
 
 
 def test_a_saved_model_directory_is_copied_to_weights_and_the_original_is_left_alone(tmp_path):
@@ -451,7 +474,8 @@ def test_the_report_is_valid_markdown_tables_with_matching_column_counts():
 # nowcast runs: compare and report
 
 NOWCAST_HEADER = (
-    "| run | cp10_nn | cp10_bridge | cp25_nn | cp25_bridge | cp+3_nn | cp+3_bridge | win |"
+    "| run | protocol | cp10_nn | cp10_bridge | cp25_nn | cp25_bridge | "
+    "cp+3_nn | cp+3_bridge | win |"
 )
 
 
@@ -491,10 +515,10 @@ def test_the_nowcast_compare_table_has_the_documented_columns_and_four_decimals(
     _write_nowcast_run(tmp_path / "b", nn_crps=0.06123456, bridge_crps=0.05, win=False)
     lines = compare_runs([tmp_path / "a", tmp_path / "b"]).splitlines()
     assert lines[0] == NOWCAST_HEADER
-    assert lines[1] == "|" + "---|" * 8
-    assert lines[2] == "| a | " + " | ".join(["0.0400", "0.0500"] * 3) + " | yes |"
+    assert lines[1] == "|" + "---|" * 9
+    assert lines[2] == "| a | strict | " + " | ".join(["0.0400", "0.0500"] * 3) + " | yes |"
     expected = " | ".join(["0.0612", "0.0500"] * 3)
-    assert lines[3] == f"| b | {expected} | no: nn does not beat bridge at 10 |"
+    assert lines[3] == f"| b | strict | {expected} | no: nn does not beat bridge at 10 |"
     assert len(lines) == 4
 
 
@@ -503,7 +527,27 @@ def test_a_nowcast_run_without_a_verdict_or_a_model_prints_dashes(tmp_path):
         tmp_path / "base", nn_crps=None, bridge_crps=0.05, win=None, protocol="frozen"
     )
     line = compare_runs([tmp_path / "base"]).splitlines()[2]
-    assert line == "| base | " + " | ".join(["-", "0.0500"] * 3) + " | - |"
+    assert line == "| base | frozen | " + " | ".join(["-", "0.0500"] * 3) + " | - |"
+
+
+def test_a_nowcast_run_without_a_protocol_in_its_config_prints_a_dash_for_it(tmp_path):
+    write_run(
+        tmp_path / "bare",
+        config={"kind": "nowcast"},
+        metrics={"summary": _nowcast_records(), "win": None},
+        rows=pd.DataFrame(),
+        report_md="",
+    )
+    assert compare_runs([tmp_path / "bare"]).splitlines()[2].startswith("| bare | - | 0.0400 |")
+
+
+def test_a_frozen_nowcast_run_is_told_apart_from_a_strict_one_in_the_compare_table(tmp_path):
+    _write_nowcast_run(tmp_path / "strict", nn_crps=0.04, bridge_crps=0.05, win=True)
+    _write_nowcast_run(
+        tmp_path / "frozen", nn_crps=0.04, bridge_crps=0.05, win=None, protocol="frozen"
+    )
+    lines = compare_runs([tmp_path / "strict", tmp_path / "frozen"]).splitlines()
+    assert lines[2].startswith("| strict | strict |") and lines[3].startswith("| frozen | frozen |")
 
 
 def test_runs_of_one_kind_are_compared_and_the_nowcast_kind_does_not_mix_with_the_seasonal_one(
@@ -629,7 +673,10 @@ def test_the_nowcast_report_counts_the_excluded_rows_in_a_strict_and_in_a_frozen
 
 def test_the_nowcast_report_counts_the_dropped_rows_and_lists_the_skipped_years():
     clean = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
-    assert "Test rows dropped for a gap day in the ERA5 series: 3" in clean
+    assert (
+        "Test rows dropped for a missing ERA5 day (a gap, or a checkpoint after the series ends): 3"
+        in clean
+    )
     assert "Test years skipped: none" in clean
     skipped = render_nowcast_report(
         _nowcast_summary(), _nowcast_extras(skipped_windows=[2002, 2003]), (True, "")

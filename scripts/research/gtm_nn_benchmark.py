@@ -103,6 +103,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             rows=rows,
             report_md=report_md,
             model_dir=model_dir,
+            saved_model=extras["saved_model"],
         )
     return 0
 
