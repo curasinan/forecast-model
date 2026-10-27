@@ -27,16 +27,6 @@ from climate.nn.seasonal_model import GtmNnModel  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.storage import ledger_path  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
-from scripts.research.gtm_nowcast import (  # noqa: E402
-    ISO_UTC,
-    bridge_of,
-    load_model,
-    month_text,
-    parse_as_of,
-    read_provenance,
-    resolve_as_of,
-    training_note,
-)
 
 TABLE_HEADER = "strike | p_yes_emos | p_yes_nn"
 TABLE_SEPARATOR = "|---|---|---|"
@@ -67,10 +57,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root", default=None, help="climate data root (default: CLIMATE_DATA_ROOT)"
     )
-    parser.add_argument("--target-month", required=True, type=month_text, help="YYYY-MM")
+    parser.add_argument("--target-month", required=True, type=nn_cli.month_text, help="YYYY-MM")
     parser.add_argument(
         "--as-of",
-        type=parse_as_of,
+        type=nn_cli.parse_as_of,
         default=None,
         help="the pricing time as 2026-10-27T12:00:00Z, with an offset or Z (default: now)",
     )
@@ -110,7 +100,9 @@ def _freshest_init(nn_frame: pd.DataFrame, month: str, as_of: datetime) -> tuple
     """(init month, lead) of the freshest SEAS5 init of the target month public at as_of."""
     public = nn_frame[(nn_frame["target_month"] == month) & (nn_frame["decision_utc"] <= as_of)]
     if public.empty:
-        raise nn_cli.UsageError(f"no SEAS5 init of {month} was public at {as_of.strftime(ISO_UTC)}")
+        raise nn_cli.UsageError(
+            f"no SEAS5 init of {month} was public at {as_of.strftime(nn_cli.ISO_UTC)}"
+        )
     best = public.loc[public["decision_utc"].idxmax()]
     return str(best["init_month"]), int(best["lead_month"])
 
@@ -137,11 +129,11 @@ def _number(value: float) -> str:
 
 def _price(args: argparse.Namespace) -> int:
     nn_cli.require_torch(("nn",))
-    as_of = resolve_as_of(args.as_of)
+    as_of = nn_cli.resolve_as_of(args.as_of)
     nn_dir = Path(args.nn_dir).expanduser()
-    provenance = read_provenance(nn_dir, "seasonal")
-    bridge = bridge_of(provenance, nn_dir)
-    net = load_model(GtmNnModel, nn_dir)
+    provenance = nn_cli.read_provenance(nn_dir, "seasonal")
+    bridge = nn_cli.bridge_of(provenance, nn_dir)
+    net = nn_cli.load_model(GtmNnModel, nn_dir)
     emos = _load_emos(Path(args.emos).expanduser())
     seas5, era5_K, noaa_C = _read_inputs(root_path(args.root))
     month = args.target_month
@@ -160,9 +152,9 @@ def _price(args: argparse.Namespace) -> int:
         f"{name} mu={_number(mu)} sigma={_number(sigma)}"
         for name, (mu, sigma) in (("emos", emos_gaussian), ("nn", nn_gaussian))
     )
+    when, note = as_of.strftime(nn_cli.ISO_UTC), nn_cli.training_note(provenance)
     print(
-        f"target {month} as of {as_of.strftime(ISO_UTC)}, init {init} (lead {lead}), {shown}; "
-        f"nn {training_note(provenance)}",
+        f"target {month} as of {when}, init {init} (lead {lead}), {shown}; nn {note}",
         file=sys.stderr,
     )
     print(TABLE_HEADER)

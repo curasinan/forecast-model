@@ -386,19 +386,19 @@ def nowcast_row(
 
 
 def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprint: str) -> dict:
-    """The JSON-ready nowcast of one row: its Gaussian, what it saw and whether it is usable."""
+    """A row's JSON-ready nowcast; checkpoint 5 is never usable: no training row has so few days."""
     decision = pd.Timestamp(row["decision_utc"])
     if decision.tzinfo is None:
         raise ValueError("decision_utc must be a timezone-aware time")
     decision = decision.tz_convert("UTC")
-    target_month = str(row["target_month"])
+    target_month, checkpoint = str(row["target_month"]), str(row["checkpoint"])
     first, end = _month_span(target_month)
     visible = last_era5_day_for(decision.to_pydatetime())
     gap_days = int(row["gap_days"])
     return {
         "as_of": decision.strftime(_ISO_UTC),
         "target_month": target_month,
-        "checkpoint": str(row["checkpoint"]),
+        "checkpoint": checkpoint,
         "mu": float(mu) if math.isfinite(mu) else None,
         "sigma": float(sigma) if math.isfinite(sigma) else None,
         "days_used": int(row["days_used"]),
@@ -407,5 +407,5 @@ def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprin
         "seas_init": str(row["seas_init"]),
         "prev_label_month": str(row["prev_label_month"]),
         "model_fingerprint": str(model_fingerprint),
-        "usable": gap_days == 0 and math.isfinite(mu),
+        "usable": gap_days == 0 and math.isfinite(mu) and checkpoint != "5",
     }

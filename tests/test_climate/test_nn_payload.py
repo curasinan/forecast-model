@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -34,7 +36,7 @@ from climate.nn.nowcast_model import GtmNowcastModel
 from climate.nn.nowcast_windows import monthly_means
 from climate.nn.seasonal_model import GtmNnModel
 from climate.storage import LEDGER_COLUMNS, VINTAGE_LIVE, load_ledger
-from scripts.research import gtm_nowcast, nn_cli
+from scripts.research import gtm_nn_price, gtm_nowcast, nn_cli
 from scripts.research.gtm_nn_price import main as price_main
 from scripts.research.gtm_nowcast import main as nowcast_main
 
@@ -194,6 +196,15 @@ def test_a_nan_gaussian_is_null_and_unusable_and_the_payload_is_strict_json():
     assert json.loads(json.dumps(p, allow_nan=False)) == p
 
 
+def test_a_nan_gaussian_makes_a_checkpoint_after_5_unusable_too():
+    row = _nowcast_row(
+        target="2026-10", checkpoint="15", decision=datetime(2026, 10, 15, tzinfo=UTC)
+    )
+    p = nowcast_payload(row, float("nan"), float("nan"), model_fingerprint="abc")
+    assert (p["checkpoint"], p["days_used"], p["gap_days"]) == ("15", 10, 0)
+    assert p["mu"] is None and p["sigma"] is None and p["usable"] is False
+
+
 def test_a_gap_makes_the_payload_unusable_whatever_the_gaussian():
     daily = _daily("2026-08-01", "2026-12-31").drop(pd.Timestamp("2026-10-04"))
     row = nowcast_row(
@@ -207,6 +218,22 @@ def test_a_gap_makes_the_payload_unusable_whatever_the_gaussian():
     p = nowcast_payload(row, 1.2, 0.1, model_fingerprint="abc")
     assert p["gap_days"] == 1 and p["days_used"] == 9
     assert p["mu"] == 1.2 and p["usable"] is False
+
+
+def test_checkpoint_5_is_not_usable_with_days_used_and_a_finite_gaussian():
+    row = _nowcast_row(target="2026-10", checkpoint="5", decision=datetime(2026, 10, 8, tzinfo=UTC))
+    p = nowcast_payload(row, 1.21, 0.04, model_fingerprint="abc")
+    assert (p["checkpoint"], p["days_used"], p["gap_days"]) == ("5", 3, 0)
+    assert p["mu"] == 1.21 and p["sigma"] == 0.04 and p["usable"] is False
+
+
+@pytest.mark.parametrize("checkpoint", CHECKPOINTS)
+def test_every_checkpoint_but_5_is_usable_with_a_finite_gaussian_and_no_gap(checkpoint):
+    decision = checkpoint_decision("2026-10", checkpoint)
+    row = _nowcast_row(target="2026-10", checkpoint=checkpoint, decision=decision)
+    p = nowcast_payload(row, 1.21, 0.04, model_fingerprint="abc")
+    assert p["gap_days"] == 0 and p["mu"] == 1.21
+    assert p["usable"] is (checkpoint != "5")
 
 
 @pytest.mark.parametrize(
@@ -610,19 +637,56 @@ def test_a_past_target_month_is_read_at_plus_10_and_capped_at_its_last_day(
     assert payload["seas_init"] == "2011-04" and payload["prev_label_month"] == "2011-03"
 
 
+REACHED_10 = (
+    "not usable: checkpoint 10 not reached, {} day(s) used; the network trained on 5 or more"
+)
+
+
 @pytest.mark.parametrize(
-    "as_of, last_day, days",
-    [("2011-06-05T23:59:59Z", None, 0), ("2011-06-06T00:00:00Z", "2011-06-01", 1)],
+    "as_of, last_day, days, why",
+    [
+        ("2011-06-05T23:59:59Z", None, 0, "not usable: no day of 2011-06 is public yet"),
+        ("2011-06-06T00:00:00Z", "2011-06-01", 1, REACHED_10.format(1)),
+    ],
 )
 def test_no_day_is_visible_until_the_sixth_and_the_payload_says_so(
-    as_of, last_day, days, tmp_path, synthetic_root_with_daily, saved_nowcast_model
+    as_of, last_day, days, why, tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
 ):
     rc, payload = _nowcast(
         tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", as_of
     )
+    assert rc == 3 and payload["usable"] is False
     assert payload["checkpoint"] == "5" and payload["gap_days"] == 0
     assert payload["last_era5_day"] == last_day and payload["days_used"] == days
-    assert (rc, payload["mu"] is None) == ((3, True) if days == 0 else (0, False))
+    assert (payload["mu"] is None) == (days == 0)  # a finite mu from the first public day on
+    assert capsys.readouterr().err.strip().splitlines()[-1] == why
+
+
+@pytest.mark.parametrize(
+    "as_of, checkpoint, days, rc",
+    [
+        ("2011-06-08T00:00:00Z", "5", 3, 3),
+        ("2011-06-09T23:59:59Z", "5", 4, 3),
+        ("2011-06-10T00:00:00Z", "10", 5, 0),
+    ],
+)
+def test_a_nowcast_is_usable_only_from_checkpoint_10_and_says_why_before_it(
+    as_of, checkpoint, days, rc, tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    code, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", as_of
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == payload  # the payload is printed whatever the verdict
+    assert code == rc and payload["usable"] is (rc == 0)
+    assert (payload["checkpoint"], payload["days_used"], payload["gap_days"]) == (
+        checkpoint,
+        days,
+        0,
+    )
+    assert np.isfinite(payload["mu"]) and payload["sigma"] > 0
+    notes = captured.err.strip().splitlines()
+    assert notes[1:] == ([REACHED_10.format(days)] if rc else [])
 
 
 @pytest.mark.parametrize("as_of", ["2012-01-03T00:00:00Z", "2012-01-05T23:59:59Z"])
@@ -653,6 +717,20 @@ def test_the_target_month_defaults_to_the_month_of_the_as_of(
     assert default == explicit
 
 
+def test_the_default_month_is_the_utc_month_of_an_as_of_in_another_zone(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model
+):
+    _, payload = _nowcast(
+        tmp_path,
+        synthetic_root_with_daily,
+        saved_nowcast_model,
+        "--as-of",
+        "2011-07-01T01:00:00+02:00",
+    )
+    assert payload["as_of"] == "2011-06-30T23:00:00Z" and payload["target_month"] == "2011-06"
+    assert payload["checkpoint"] == "25" and payload["days_used"] == 25
+
+
 def test_the_as_of_may_carry_any_offset_and_is_reported_in_utc(
     tmp_path, synthetic_root_with_daily, saved_nowcast_model
 ):
@@ -678,6 +756,65 @@ def test_the_payload_is_written_to_out_with_its_directories_and_matches_what_is_
     assert capsys.readouterr().out == printed
 
 
+def _publish(folder, root, model_dir) -> int:
+    """The nowcast script's exit code with --out in the folder (payload.json)."""
+    argv = ["--root", str(root), "--model-dir", str(model_dir), "--as-of", "2011-06-20T00:00:00Z"]
+    return nowcast_main([*argv, "--out", str(folder / "payload.json")])
+
+
+def test_the_payload_is_written_through_a_temporary_file_that_replaces_the_old_one(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, monkeypatch
+):
+    folder = tmp_path / "published"
+    folder.mkdir()
+    out = folder / "payload.json"
+    out.write_text("old", encoding="utf-8")
+    seen, real = [], os.replace
+
+    def read(name):
+        return Path(name).read_text(encoding="utf-8")
+
+    def spy(source, target):
+        seen.append((Path(source), Path(target), read(source), read(target)))
+        real(source, target)
+
+    monkeypatch.setattr(os, "replace", spy)
+    assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 0
+    ((source, target, staged, kept),) = seen
+    assert (source, target) == (out.with_name("payload.json.tmp"), out)
+    assert kept == "old" and json.loads(staged)["target_month"] == "2011-06"  # whole until the swap
+    assert json.loads(out.read_text(encoding="utf-8")) == json.loads(staged)
+    assert sorted(os.listdir(folder)) == ["payload.json"]  # no .tmp is left beside the payload
+
+
+def test_a_failed_replace_keeps_the_old_payload_and_leaves_no_temporary_file(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, monkeypatch, capsys
+):
+    folder = tmp_path / "published"
+    folder.mkdir()
+    (folder / "payload.json").write_text("old", encoding="utf-8")
+
+    def refuse(source, target):
+        raise PermissionError("the payload is open elsewhere")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 2
+    captured = capsys.readouterr()
+    assert "cannot write" in captured.err and captured.out == ""
+    assert (folder / "payload.json").read_text(encoding="utf-8") == "old"
+    assert sorted(os.listdir(folder)) == ["payload.json"]
+
+
+def test_an_out_that_is_a_directory_exits_2_and_leaves_no_temporary_file(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    folder = tmp_path / "published"
+    (folder / "payload.json").mkdir(parents=True)
+    assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 2
+    assert "cannot write" in capsys.readouterr().err
+    assert sorted(os.listdir(folder)) == ["payload.json"] and (folder / "payload.json").is_dir()
+
+
 def _frozen_clock(moment: datetime):
     """A datetime class whose now() answers the moment and counts the reads."""
 
@@ -692,11 +829,18 @@ def _frozen_clock(moment: datetime):
     return Clock
 
 
+def _freeze_clock(monkeypatch, moment: datetime):
+    """The frozen clock installed in every module that could read the time."""
+    clock = _frozen_clock(moment)
+    for module in (nn_cli, gtm_nowcast, gtm_nn_price):
+        monkeypatch.setattr(module, "datetime", clock)
+    return clock
+
+
 def test_the_clock_is_read_once_and_only_without_an_as_of(
     tmp_path, synthetic_root_with_daily, saved_nowcast_model, monkeypatch
 ):
-    clock = _frozen_clock(datetime(2011, 6, 20, 12, 30, 45, 999999, tzinfo=UTC))
-    monkeypatch.setattr(gtm_nowcast, "datetime", clock)
+    clock = _freeze_clock(monkeypatch, datetime(2011, 6, 20, 12, 30, 45, 999999, tzinfo=UTC))
     _, payload = _nowcast(tmp_path, synthetic_root_with_daily, saved_nowcast_model)
     assert clock.reads == 1
     assert payload["as_of"] == "2011-06-20T12:30:45Z" and payload["target_month"] == "2011-06"
@@ -798,7 +942,8 @@ def test_a_model_directory_that_misses_its_files_exits_2_and_names_the_problem(
     )
     captured = capsys.readouterr()
     assert rc == 2 and payload is None and captured.out == ""
-    assert "cannot load the model" in captured.err and "Traceback" not in captured.err
+    assert f"cannot load the model in {broken}" in captured.err
+    assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize("damage", ["garbage", "width", "keys", "features", "json"])
@@ -823,7 +968,8 @@ def test_a_damaged_model_directory_exits_2_instead_of_a_traceback(
     )
     captured = capsys.readouterr()
     assert rc == 2 and payload is None and captured.out == ""
-    assert "cannot load the model" in captured.err and "Traceback" not in captured.err
+    assert f"cannot load the model in {broken}" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_a_model_directory_that_does_not_exist_exits_2(tmp_path, synthetic_root_with_daily, capsys):
@@ -848,7 +994,8 @@ def test_a_provenance_without_a_usable_bridge_exits_2(
         tmp_path, synthetic_root_with_daily, broken, "--as-of", "2011-06-20T00:00:00Z"
     )
     captured = capsys.readouterr()
-    assert rc == 2 and payload is None and "bridge" in captured.err and captured.out == ""
+    assert rc == 2 and payload is None and captured.out == ""
+    assert f"{broken / 'provenance.json'} " in captured.err and "bridge" in captured.err
 
 
 def test_a_root_without_the_research_files_exits_2_and_names_the_daily_file(
@@ -915,9 +1062,7 @@ def test_the_decision_is_whole_seconds_so_the_reported_as_of_is_the_time_that_wa
     ledger.loc[may, "vintage"] = VINTAGE_LIVE
     ledger.loc[may, "first_seen_utc"] = "2011-06-14T00:00:00.500000+00:00"
     ledger.to_parquet(path, index=False)
-    monkeypatch.setattr(
-        gtm_nowcast, "datetime", _frozen_clock(datetime(2011, 6, 14, 0, 0, 0, 900000, tzinfo=UTC))
-    )
+    _freeze_clock(monkeypatch, datetime(2011, 6, 14, 0, 0, 0, 900000, tzinfo=UTC))
     argv = ["--target-month", "2011-06"] + ([] if given is None else ["--as-of", given])
     _, payload = _nowcast(tmp_path, synthetic_root_with_daily, saved_nowcast_model, *argv)
     assert payload["as_of"] == "2011-06-14T00:00:00Z"
@@ -1287,8 +1432,7 @@ def test_the_clock_is_read_once_by_the_price_script_and_only_without_an_as_of(
     synthetic_root, saved_models, capsys, monkeypatch
 ):
     emos_json, nn_dir = saved_models
-    clock = _frozen_clock(datetime(2012, 1, 20, 0, 0, 0, 999999, tzinfo=UTC))
-    monkeypatch.setattr(gtm_nowcast, "datetime", clock)
+    clock = _freeze_clock(monkeypatch, datetime(2012, 1, 20, 0, 0, 0, 999999, tzinfo=UTC))
     argv = ["--target-month", "2012-03", "--strikes", "0.4", "0.5"]
     assert _price(synthetic_root, emos_json, nn_dir, *argv) == 0
     now_out = capsys.readouterr().out
@@ -1427,6 +1571,62 @@ def test_the_price_script_refuses_without_torch_before_reading_anything(tmp_path
 def test_the_price_script_prints_its_usage_for_help(capsys):
     assert price_main(["--help"]) == 0
     assert "usage" in capsys.readouterr().out.lower()
+
+
+# the helpers both scripts share
+
+SHARED_HELPERS = (
+    "parse_as_of",
+    "resolve_as_of",
+    "month_text",
+    "read_provenance",
+    "bridge_of",
+    "training_note",
+    "load_model",
+)
+
+
+def test_the_helpers_of_both_scripts_live_in_nn_cli_and_no_script_borrows_from_another():
+    for name in SHARED_HELPERS:
+        assert getattr(nn_cli, name).__module__ == nn_cli.__name__
+    for module in (gtm_nowcast, gtm_nn_price):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert [name for name in SHARED_HELPERS if f"def {name}" in source] == []
+    assert "gtm_nowcast" not in Path(gtm_nn_price.__file__).read_text(encoding="utf-8")
+
+
+def test_parse_as_of_takes_z_and_any_offset_and_refuses_a_time_without_one():
+    noon = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    assert nn_cli.parse_as_of("2026-10-27T12:00:00Z") == noon
+    assert nn_cli.parse_as_of("2026-10-27T14:00:00+02:00") == noon
+    for text in ("2026-10-27", "2026-10-27T12:00:00", "noon", ""):
+        with pytest.raises(argparse.ArgumentTypeError, match="offset or Z"):
+            nn_cli.parse_as_of(text)
+
+
+def test_resolve_as_of_is_utc_in_whole_seconds_and_reads_the_clock_only_without_a_time(
+    monkeypatch,
+):
+    clock = _freeze_clock(monkeypatch, datetime(2026, 10, 27, 12, 30, 45, 999999, tzinfo=UTC))
+    zoned = datetime(2026, 10, 27, 14, 0, 0, 500000, tzinfo=timezone(timedelta(hours=2)))
+    assert nn_cli.resolve_as_of(zoned) == datetime(2026, 10, 27, 12, tzinfo=UTC)
+    assert nn_cli.resolve_as_of(zoned).utcoffset() == timedelta(0) and clock.reads == 0
+    assert nn_cli.resolve_as_of(None) == datetime(2026, 10, 27, 12, 30, 45, tzinfo=UTC)
+    assert nn_cli.resolve_as_of(None).utcoffset() == timedelta(0) and clock.reads == 2
+
+
+def test_month_text_takes_a_month_and_refuses_anything_else():
+    assert nn_cli.month_text("2026-10") == "2026-10"
+    for text in ("2026-13", "2026-1", "2026-10-01", "October", ""):
+        with pytest.raises(argparse.ArgumentTypeError, match="YYYY-MM"):
+            nn_cli.month_text(text)
+
+
+def test_training_note_names_the_labels_the_network_saw_and_admits_when_it_does_not_know():
+    assert nn_cli.training_note({"labels_through": "2010-12"}) == (
+        "trained on labels through 2010-12"
+    )
+    assert nn_cli.training_note({}) == "trained on labels through an unknown month"
 
 
 # without torch
