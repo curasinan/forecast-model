@@ -528,6 +528,7 @@ def _nowcast_extras(**more):
         "kind": "nowcast",
         "bridge_through": None,
         "dropped_gap_rows": 3,
+        "excluded_rows": 4,
         "skipped_windows": [],
         "pit_hist": pit,
         "first_print_summary": _first_print(),
@@ -603,6 +604,7 @@ def test_the_nowcast_report_says_why_checkpoint_five_has_no_prediction():
 def test_the_strict_nowcast_report_describes_the_windows_and_the_frozen_one_the_bridge_month():
     strict = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
     assert "Expanding windows by target year" in strict and "never the headline" not in strict
+    assert "decided on or after the publication of the last training label" in strict
     frozen = render_nowcast_report(
         _nowcast_summary(),
         _nowcast_extras(protocol="frozen", bridge_through="2025-12"),
@@ -611,6 +613,18 @@ def test_the_strict_nowcast_report_describes_the_windows_and_the_frozen_one_the_
     assert frozen.startswith("# GTM nowcast benchmark: frozen protocol")
     assert "2025-12" in frozen and "never the headline" in frozen
     assert "Expanding windows by target year" not in frozen
+    assert "same admission rule" in frozen
+
+
+def test_the_nowcast_report_counts_the_excluded_rows_in_a_strict_and_in_a_frozen_run():
+    strict = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""))
+    assert "Rows excluded by the strict rule: 4" in strict
+    frozen = _nowcast_extras(protocol="frozen", bridge_through="2025-12")
+    assert "Rows excluded by the strict rule: 4" in render_nowcast_report(
+        _nowcast_summary(), frozen, None
+    )
+    bare = render_nowcast_report(_nowcast_summary(), {"protocol": "strict"}, (True, ""))
+    assert "Rows excluded" not in bare
 
 
 def test_the_nowcast_report_counts_the_dropped_rows_and_lists_the_skipped_years():

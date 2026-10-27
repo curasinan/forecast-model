@@ -172,6 +172,7 @@ def run_nowcast(
         "protocol": "strict" if bridge_through is None else "frozen",
         "kind": "nowcast",
         "bridge_through": bridge_through,
+        "excluded_rows": int(sum(window.excluded for window in windows)),
         "dropped_gap_rows": int(sum(window.dropped_gap_rows for window in windows)),
         "skipped_windows": skipped,
         "pit_hist": pit_histograms(rows, models),

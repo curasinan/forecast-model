@@ -55,11 +55,13 @@ NOWCAST_NOTES = {
     "strict": (
         "Expanding windows by target year: for each test year the bridge is refit on the labels "
         "through the year before, the seasonal input is rebuilt with it, and a test row counts "
-        "only when every ERA5 day it uses is in the series."
+        "only when it was decided on or after the publication of the last training label and "
+        "every ERA5 day it uses is in the series."
     ),
     "frozen": (
         "One bridge, fitted through {bridge_through} for every window, so it has seen labels from "
-        "after the test years. This run shows that the baselines are the same code, is never the "
+        "after the test years; a test row still counts only under the same admission rule as in "
+        "the strict run. This run shows that the baselines are the same code, is never the "
         "headline and carries no verdict."
     ),
 }
@@ -274,6 +276,8 @@ def render_nowcast_report(summary: pd.DataFrame, extras: dict, win: tuple[bool, 
         lines += [*_nowcast_table(first), ""]
     else:
         lines += ["No genuine first print has been scored yet.", ""]
+    if "excluded_rows" in extras:
+        lines += [f"Rows excluded by the strict rule: {extras['excluded_rows']}", ""]
     if "dropped_gap_rows" in extras:
         dropped = extras["dropped_gap_rows"]
         lines += [f"Test rows dropped for a gap day in the ERA5 series: {dropped}", ""]

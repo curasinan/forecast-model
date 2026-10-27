@@ -22,6 +22,7 @@ from climate.nn.benchmark import (  # noqa: E402
 )
 from climate.nn.leakage import LeakageError  # noqa: E402
 from climate.nn.nowcast import load_daily  # noqa: E402
+from climate.nn.nowcast_windows import WindowError  # noqa: E402
 from climate.nn.report import render_nowcast_report  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.storage import ledger_path, load_ledger  # noqa: E402
@@ -87,15 +88,18 @@ def _benchmark(args: argparse.Namespace) -> int:
     cfg = NowcastRun(models, args.first_test_year, last_year, args.seeds, args.hidden, device)
     with tempfile.TemporaryDirectory() as scratch:
         model_dir = Path(scratch) / "model"
-        rows, summary, extras = run_nowcast(
-            daily_K,
-            noaa_C,
-            seas5,
-            ledger,
-            cfg,
-            bridge_through=args.bridge_through,
-            model_dir=model_dir,
-        )
+        try:
+            rows, summary, extras = run_nowcast(
+                daily_K,
+                noaa_C,
+                seas5,
+                ledger,
+                cfg,
+                bridge_through=args.bridge_through,
+                model_dir=model_dir,
+            )
+        except WindowError as exc:
+            raise nn_cli.UsageError(str(exc)) from exc
         if not (summary["n"] > 0).any():
             raise nn_cli.UsageError("no test row could be scored: check --root and the test years")
         judged = args.bridge_through is None and {"nn", "bridge"} <= set(models)

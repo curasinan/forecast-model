@@ -382,9 +382,11 @@ def test_a_nowcast_baseline_run_needs_no_torch_records_its_options_and_no_verdic
     assert metrics["win"] is None and len(metrics["summary"]) == 18
     assert metrics["extras"]["protocol"] == "strict" and metrics["extras"]["kind"] == "nowcast"
     assert len(metrics["extras"]["first_print_summary"]) == 18
-    assert len(pd.read_parquet(run_dir / "rows.parquet")) == 2 * 12 * 9
+    assert len(pd.read_parquet(run_dir / "rows.parquet")) == 2 * (12 * 9 - 2)
+    assert metrics["extras"]["excluded_rows"] == 4
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     assert report.startswith("# GTM nowcast benchmark: strict protocol")
+    assert "Rows excluded by the strict rule: 4" in report
     assert "Verdict: none" in report and not (run_dir / "weights").exists()
     printed = capsys.readouterr()
     assert printed.out.startswith("# GTM nowcast benchmark") and str(run_dir) in printed.out
@@ -575,6 +577,24 @@ def test_an_existing_run_directory_is_refused_and_left_alone_by_the_nowcast_scri
     assert nowcast_main(_args(nowcast_root, tmp_path / "r", *argv)) == 2
     assert [p.name for p in (tmp_path / "r").iterdir()] == ["keep.txt"]
     assert "exists" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "first, last, message",
+    [
+        ("2000", "2000", "test year 2000: bridge fit needs"),
+        ("2002", "2003", "no test row could be scored"),
+    ],
+    ids=["no-bridge", "no-window-with-four-training-years"],
+)
+def test_a_first_test_year_too_early_for_a_window_exits_2_with_a_one_line_message(
+    first, last, message, tmp_path, nowcast_root, capsys
+):
+    argv = ["--models", "bridge", "--first-test-year", first, "--last-test-year", last]
+    assert nowcast_main(_args(nowcast_root, tmp_path / "r", *argv)) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and message in err.splitlines()[-1]
+    assert not (tmp_path / "r").exists()
 
 
 def test_nothing_to_score_exits_2_and_writes_nothing_in_the_nowcast_script(

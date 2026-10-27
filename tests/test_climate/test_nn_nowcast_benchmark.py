@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,7 +17,8 @@ from climate.nn.benchmark import NowcastRun, nowcast_win, run_nowcast
 from climate.nn.features import seasonal_frame
 from climate.nn.leakage import LeakageError
 from climate.nn.nowcast import CHECKPOINTS, WIN_CHECKPOINTS, nowcast_frame
-from climate.nn.nowcast_windows import monthly_means, nowcast_windows
+from climate.nn.nowcast_windows import WindowError, monthly_means, nowcast_windows
+from climate.storage import LEDGER_COLUMNS, VINTAGE_LIVE
 from tests.test_climate import nn_fixtures
 
 BASELINES = ("bridge", "persistence")
@@ -97,7 +100,9 @@ def test_a_window_trains_on_the_labelled_gapless_rows_before_its_year_and_tests_
         assert np.isfinite(window.train["y_C"]).all() and (window.train["gap_days"] == 0).all()
         assert len(window.train) == (year - 2000) * 12 * 9
         assert (window.test["target_month"].str.slice(0, 4) == str(year)).all()
-        assert len(window.test) == 12 * 9 and window.dropped_gap_rows == 0
+        assert len(window.test) == 12 * 9 - 2 and window.dropped_gap_rows == 0
+        assert window.excluded == 2  # January's checkpoints 5 and 10 come before the 12th
+        assert window.cutoff_utc == datetime(year, 1, 12, tzinfo=timezone.utc)
         assert window.train.index.tolist() == list(range(len(window.train)))
         assert window.test.index.tolist() == list(range(len(window.test)))
 
@@ -116,13 +121,21 @@ def test_the_frame_of_a_window_is_the_seasonal_and_nowcast_frames_built_with_its
     monthly = monthly_means(daily_K)
     seasonal = seasonal_frame(seas5, monthly, noaa_C, bridge=window.bridge)
     frame = nowcast_frame(daily_K, noaa_C, seasonal, bridge=window.bridge, ledger=ledger)
-    in_year = frame[frame["target_month"].str.startswith("2010")].reset_index(drop=True)
-    pd.testing.assert_frame_equal(window.test, in_year)
+    in_year = frame[frame["target_month"].str.startswith("2010")]
+    decided = in_year[in_year["decision_utc"] >= pd.Timestamp("2010-01-12", tz="UTC")]
+    pd.testing.assert_frame_equal(window.test, decided.reset_index(drop=True))
+
+
+def _in_2009_as_admitted(train):
+    """The 2009 rows of a training set without the two January rows 2009's own window excludes."""
+    in_2009 = train[train["target_month"].str.startswith("2009")]
+    january = (in_2009["target_month"] == "2009-01") & in_2009["checkpoint"].isin(["5", "10"])
+    return in_2009[~january].reset_index(drop=True)
 
 
 def test_every_window_rebuilds_the_bridge_dependent_columns_with_its_own_bridge(inputs):
     early, late = _windows(inputs, 2009, 2010)
-    in_2009 = late.train[late.train["target_month"].str.startswith("2009")].reset_index(drop=True)
+    in_2009 = _in_2009_as_admitted(late.train)
     assert len(in_2009) == len(early.test) and in_2009["target_month"].equals(
         early.test["target_month"]
     )
@@ -153,7 +166,7 @@ def test_a_gap_day_drops_the_rows_that_see_it_from_the_training_set_and_counts_t
     (window,) = _windows((gappy, noaa_C, seas5, ledger), 2010, 2010)
     assert window.dropped_gap_rows == 8
     may_2010 = window.test[window.test["target_month"] == "2010-05"]
-    assert may_2010["checkpoint"].tolist() == ["5"] and len(window.test) == 12 * 9 - 8
+    assert may_2010["checkpoint"].tolist() == ["5"] and len(window.test) == 12 * 9 - 8 - 2
     may_2008 = window.train[window.train["target_month"] == "2008-05"]
     assert may_2008["checkpoint"].tolist() == ["5"] and (window.train["gap_days"] == 0).all()
     assert window.train.index.tolist() == list(range(len(window.train)))  # rows were dropped
@@ -172,21 +185,21 @@ def test_a_test_year_beyond_the_data_has_an_empty_test_set_and_the_labelled_mont
     inputs,
 ):
     (window,) = _windows(inputs, 2012, 2012)
-    assert len(window.test) == 0 and window.dropped_gap_rows == 0
+    assert len(window.test) == 0 and window.dropped_gap_rows == 0 and window.excluded == 0
     assert window.train["target_month"].max() == "2011-11" and len(window.train) == 143 * 9
 
 
 def test_a_test_year_without_enough_overlap_for_the_bridge_names_the_year(inputs):
-    with pytest.raises(ValueError, match="test year 2000"):
+    with pytest.raises(WindowError, match="test year 2000"):
         _windows(inputs, 2000, 2000)
+    assert issubclass(WindowError, ValueError)
 
 
 def test_a_given_bridge_month_fits_one_bridge_for_every_window(inputs):
     early, late = _windows(inputs, 2009, 2010, bridge_through="2011-11")
     assert early.bridge.fit_end == late.bridge.fit_end == "2011-11"
     assert early.bridge.params == late.bridge.params
-    in_2009 = late.train[late.train["target_month"].str.startswith("2009")].reset_index(drop=True)
-    pd.testing.assert_frame_equal(in_2009, early.test)
+    pd.testing.assert_frame_equal(_in_2009_as_admitted(late.train), early.test)
 
 
 @pytest.mark.parametrize("month", ["2011", "2011-13", "2011-1", "11-2011", ""])
@@ -212,8 +225,8 @@ def test_the_dropped_gap_rows_are_counted_over_every_window(inputs):
     gappy = daily_K.drop([pd.Timestamp("2009-05-04"), pd.Timestamp("2010-07-04")])
     cfg = _cfg(BASELINES, 2009, 2010)
     rows, summary, extras = run_nowcast(gappy, noaa_C, seas5, ledger, cfg)
-    assert extras["dropped_gap_rows"] == 16
-    assert len(rows) == 2 * 12 * 9 - 16
+    assert extras["dropped_gap_rows"] == 16 and extras["excluded_rows"] == 4
+    assert len(rows) == 2 * (12 * 9 - 2) - 16
 
 
 def test_unlabelled_rows_are_predicted_but_not_scored(synthetic_nowcast):
@@ -225,7 +238,7 @@ def test_unlabelled_rows_are_predicted_but_not_scored(synthetic_nowcast):
     finite = np.isfinite(running["mu_nn"])
     assert finite.drop("5").all() and not finite["5"]  # no ERA5 day is visible at "5"
     nn = summary[summary.model == "nn"].set_index("checkpoint")
-    assert nn.at["10", "n"] == 23  # 24 months minus the unlabelled one
+    assert nn.at["10", "n"] == 21  # 24 months minus the unlabelled one and two Januaries
     assert nn.at["5", "n"] == 0 and np.isnan(nn.at["5", "crps"])
 
 
@@ -249,7 +262,7 @@ def test_the_rows_carry_the_documented_columns_in_the_order_of_the_models(baseli
     rows, summary, extras = baseline_run
     prediction_columns = [f"{kind}_{model}" for model in BASELINES for kind in ("mu", "sigma")]
     assert list(rows.columns) == [*ROW_COLUMNS, *prediction_columns]
-    assert len(rows) == 2 * 12 * 9 and sorted(rows["test_year"].unique()) == [2010, 2011]
+    assert len(rows) == 2 * (12 * 9 - 2) and sorted(rows["test_year"].unique()) == [2010, 2011]
     assert str(rows["decision_utc"].dtype).endswith("UTC]")
     assert rows["target_month"].str.slice(0, 4).astype(int).eq(rows["test_year"]).all()
     assert rows["y_C"].isna().sum() == 9  # 2011-12 stays in the rows, unlabelled
@@ -355,8 +368,76 @@ def test_the_extras_name_the_protocol_the_kind_and_what_was_dropped_or_skipped(b
     rows, summary, extras = baseline_run
     assert extras["protocol"] == "strict" and extras["kind"] == "nowcast"
     assert extras["bridge_through"] is None and extras["dropped_gap_rows"] == 0
-    assert extras["skipped_windows"] == []
+    assert extras["excluded_rows"] == 4 and extras["skipped_windows"] == []
     assert set(extras) >= {"first_print_summary", "pit_hist"}
+
+
+def test_the_january_rows_decided_before_the_december_print_are_excluded_and_counted(inputs):
+    rows, summary, extras = run_nowcast(*inputs, _cfg(BASELINES, 2010, 2010))
+    january = rows[rows["target_month"] == "2010-01"]
+    assert january["checkpoint"].tolist() == list(CHECKPOINTS[2:])  # "5" and "10" are absent
+    february = rows[rows["target_month"] == "2010-02"]
+    assert february["checkpoint"].tolist() == list(CHECKPOINTS)
+    assert extras["excluded_rows"] == 2 and len(rows) == 12 * 9 - 2
+    assert (rows["decision_utc"] >= pd.Timestamp("2010-01-12", tz="UTC")).all()
+
+
+def test_a_row_is_either_excluded_or_dropped_for_a_gap_never_counted_twice(inputs):
+    daily_K, noaa_C, seas5, ledger = inputs
+    gappy = daily_K.drop(pd.Timestamp("2010-01-03"))  # every January checkpoint from "10" sees it
+    rows, summary, extras = run_nowcast(gappy, noaa_C, seas5, ledger, _cfg(BASELINES, 2010, 2010))
+    assert extras["excluded_rows"] == 2  # "5" and "10", decided before the 12th
+    assert extras["dropped_gap_rows"] == 7  # "15" to "+10"; "10" is already excluded
+    assert rows[rows["target_month"] == "2010-01"].empty and len(rows) == 12 * 9 - 2 - 7
+
+
+def test_the_excluded_januaries_leave_the_checkpoint_counts_of_the_summary(baseline_run):
+    rows, summary, extras = baseline_run
+    bridge = summary[summary.model == "bridge"].set_index("checkpoint")
+    # 24 months, minus the two Januaries at "10", minus the unlabelled 2011-12
+    assert bridge.at["10", "n"] == 21 and bridge.at["15", "n"] == 23
+
+
+def _with_a_december_first_print(ledger, seen):
+    first_print = {
+        "series": "gtm",
+        "period": "2009-12",
+        "value": 0.5,
+        "first_seen_utc": seen,
+        "vintage": VINTAGE_LIVE,
+        "is_revision": False,
+        "source_url": "",
+    }
+    return pd.concat(
+        [ledger, pd.DataFrame([first_print], columns=LEDGER_COLUMNS)], ignore_index=True
+    )
+
+
+@pytest.mark.parametrize(
+    "seen, first_admitted, excluded",
+    [
+        ("2010-01-08T00:00:00+00:00", "10", 1),
+        ("2010-01-10T00:00:00+00:00", "10", 1),
+        ("2010-01-16T00:00:00+00:00", "20", 3),
+    ],
+    ids=["early", "at-checkpoint-10", "late"],
+)
+def test_a_genuine_first_print_of_december_moves_the_cutoff(inputs, seen, first_admitted, excluded):
+    daily_K, noaa_C, seas5, ledger = inputs
+    moved = _with_a_december_first_print(ledger, seen)
+    rows, summary, extras = run_nowcast(daily_K, noaa_C, seas5, moved, _cfg(BASELINES, 2010, 2010))
+    january = rows[rows["target_month"] == "2010-01"]["checkpoint"].tolist()
+    assert january == list(CHECKPOINTS[CHECKPOINTS.index(first_admitted) :])
+    assert extras["excluded_rows"] == excluded
+    (window,) = _windows((daily_K, noaa_C, seas5, moved), 2010, 2010)
+    assert window.cutoff_utc == pd.Timestamp(seen).to_pydatetime()
+
+
+def test_a_frozen_run_keeps_the_admission_rule(inputs):
+    cfg = _cfg(("bridge",), 2010, 2010)
+    rows, summary, extras = run_nowcast(*inputs, cfg, bridge_through="2011-11")
+    assert extras["protocol"] == "frozen" and extras["excluded_rows"] == 2
+    assert rows[rows["target_month"] == "2010-01"]["checkpoint"].tolist() == list(CHECKPOINTS[2:])
 
 
 def test_a_given_bridge_month_makes_it_a_frozen_run_that_says_so(inputs):
@@ -375,6 +456,7 @@ def test_a_window_trained_on_fewer_than_four_target_years_is_skipped_for_every_m
 ):
     rows, summary, extras = run_nowcast(*inputs, _cfg(BASELINES, 2002, 2004))
     assert extras["skipped_windows"] == [2002, 2003]  # 2 and 3 usable training years
+    assert extras["excluded_rows"] == 6  # two January rows in each window, skipped ones too
     assert sorted(rows["test_year"].unique()) == [2004]
     bridge = summary[summary.model == "bridge"].set_index("checkpoint")
     assert bridge.at["+3", "n"] == 12
