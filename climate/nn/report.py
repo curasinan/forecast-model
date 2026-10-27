@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from climate.nn.benchmark import COVER50_BAND, COVER90_BAND, LEADS, PIT_BINS, WIN_MIN_LEADS
+from climate.nn.benchmark import COVER50_BAND, COVER90_BAND, LEADS, WIN_MIN_LEADS
+from climate.nn.scoring import PIT_BINS
 
+KIND_SEASONAL = "seasonal"
 COMPARE_MODELS: tuple[str, ...] = ("nn", "emos")
 LABEL_NOTE = (
     "Labels are NOAA's current vintage for history (genuine first prints exist only since "
@@ -44,15 +48,24 @@ def write_run(
     report_md: str,
     model_dir: Path | None = None,
 ) -> None:
-    """Write a new run directory; FileExistsError when it is there already."""
+    """Write a new run directory in one step; FileExistsError when it is there already."""
     run_dir = Path(run_dir)
-    run_dir.mkdir(parents=True)
-    _write_json(run_dir / "config.json", config)
-    _write_json(run_dir / "metrics.json", metrics)
-    rows.to_parquet(run_dir / "rows.parquet", engine="pyarrow", index=False)
-    (run_dir / "report.md").write_text(report_md, encoding="utf-8", newline="\n")
-    if model_dir is not None:
-        shutil.copytree(model_dir, run_dir / "weights")
+    if run_dir.exists():
+        raise FileExistsError(f"the run directory exists already: {run_dir}")
+    run_dir.parent.mkdir(parents=True, exist_ok=True)
+    scratch = run_dir.with_name(f".{run_dir.name}.{uuid.uuid4().hex[:8]}.partial")
+    scratch.mkdir()
+    try:
+        _write_json(scratch / "config.json", config)
+        _write_json(scratch / "metrics.json", metrics)
+        rows.to_parquet(scratch / "rows.parquet", engine="pyarrow", index=False)
+        (scratch / "report.md").write_text(report_md, encoding="utf-8", newline="\n")
+        if model_dir is not None:
+            shutil.copytree(model_dir, scratch / "weights")
+        os.rename(scratch, run_dir)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
 
 
 def read_run(run_dir: Path) -> dict:
@@ -136,7 +149,7 @@ def render_seasonal_report(
     summary: pd.DataFrame, extras: dict, win: tuple[bool, str] | None
 ) -> str:
     """The markdown report of a seasonal run; win None says that no verdict was asked for."""
-    protocol = extras.get("protocol", "strict")
+    protocol = extras["protocol"]
     lines = [f"# GTM seasonal benchmark: {protocol} protocol", ""]
     if protocol in PROTOCOL_NOTES:
         lines += [PROTOCOL_NOTES[protocol], ""]
@@ -182,19 +195,41 @@ def _win_cell(win) -> str:
     return f"no: {why}" if why else "no"
 
 
-def _compare_cells(run_dir: Path) -> list[str]:
-    run = read_run(run_dir)
+def _run_name(run_dir: Path) -> str:
+    return run_dir.name or run_dir.resolve().name
+
+
+def _seasonal_cells(run_dir: Path, run: dict) -> list[str]:
     summary = run["metrics"].get("summary", [])
     crps = {(r["model"], r["lead_month"]): r.get("crps") for r in summary}
-    cells = [run_dir.name or run_dir.resolve().name, str(run["config"].get("protocol", "-"))]
+    cells = [_run_name(run_dir), str(run["config"].get("protocol", "-"))]
     cells += [_fmt(crps.get((model, lead)), 4) for model in COMPARE_MODELS for lead in LEADS]
     return [*cells, _win_cell(run["metrics"].get("win"))]
 
 
-def compare_runs(run_dirs: list[Path]) -> str:
-    """One markdown table, a row per run: the CRPS of nn and emos per lead and the verdict."""
+def _seasonal_header() -> list[str]:
     header = ["run", "protocol"]
     header += [f"lead{lead}_{model}" for model in COMPARE_MODELS for lead in LEADS]
-    header.append("win")
-    body = [_compare_cells(Path(run_dir)) for run_dir in run_dirs]
-    return "\n".join(_table(header, body)) + "\n"
+    return [*header, "win"]
+
+
+# run kind -> (table header, cells of one run)
+COMPARE_LAYOUTS = {KIND_SEASONAL: (_seasonal_header, _seasonal_cells)}
+
+
+def compare_runs(run_dirs: list[Path]) -> str:
+    """One markdown table, a row per run, laid out by the runs' kind; ValueError for a mixed set."""
+    runs = [(Path(run_dir), read_run(run_dir)) for run_dir in run_dirs]
+    kinds = {run["config"].get("kind", KIND_SEASONAL) for _, run in runs}
+    if len(kinds) > 1:
+        listed = ", ".join(
+            f"{_run_name(run_dir)} ({run['config'].get('kind', KIND_SEASONAL)})"
+            for run_dir, run in runs
+        )
+        raise ValueError(f"cannot compare runs of different kinds: {listed}")
+    kind = kinds.pop() if kinds else KIND_SEASONAL
+    if kind not in COMPARE_LAYOUTS:
+        raise ValueError(f"unknown run kind {kind!r}; choose from {', '.join(COMPARE_LAYOUTS)}")
+    header, cells = COMPARE_LAYOUTS[kind]
+    body = [cells(run_dir, run) for run_dir, run in runs]
+    return "\n".join(_table(header(), body)) + "\n"

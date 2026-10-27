@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -49,10 +51,10 @@ def _summary_records(nn_crps, emos_crps):
     ]
 
 
-def _write_synthetic_run(run_dir, *, nn_crps, emos_crps, win, protocol="strict"):
+def _write_synthetic_run(run_dir, *, nn_crps, emos_crps, win, protocol="strict", kind=None):
     verdict = None if win is None else [win, "" if win else "nn beats emos at 0 of 6 leads"]
     metrics = {"summary": _summary_records(nn_crps, emos_crps), "extras": {}, "win": verdict}
-    config = {"protocol": protocol}
+    config = {"protocol": protocol} if kind is None else {"protocol": protocol, "kind": kind}
     rows = pd.DataFrame({"a": [1]})
     write_run(run_dir, config=config, metrics=metrics, rows=rows, report_md="# r")
 
@@ -147,6 +149,66 @@ def test_a_run_directory_is_never_reused(tmp_path):
     assert read_run(tmp_path / "r")["config"] == {"n": 1}
 
 
+def test_a_refused_run_directory_leaves_no_scratch_directory_beside_it(tmp_path):
+    (tmp_path / "r").mkdir()
+    with pytest.raises(FileExistsError):
+        write_run(tmp_path / "r", config={}, metrics={}, rows=pd.DataFrame(), report_md="")
+    assert [p.name for p in tmp_path.iterdir()] == ["r"]
+
+
+def test_a_finished_run_leaves_only_the_run_directory_beside_the_others(tmp_path):
+    for name in ("a", "b"):
+        write_run(tmp_path / name, config={}, metrics={}, rows=pd.DataFrame(), report_md="")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a", "b"]
+
+
+def test_the_run_directory_does_not_exist_until_every_file_is_in_it(tmp_path, monkeypatch):
+    seen = []
+    real = report._write_json
+
+    def spy(path, payload):
+        seen.append(((tmp_path / "r").exists(), path.parent != tmp_path / "r"))
+        real(path, payload)
+
+    monkeypatch.setattr(report, "_write_json", spy)
+    write_run(tmp_path / "r", config={}, metrics={}, rows=pd.DataFrame(), report_md="")
+    assert seen == [(False, True), (False, True)]
+    assert (tmp_path / "r" / "metrics.json").exists()
+
+
+def test_a_failure_while_writing_leaves_no_run_directory_and_no_scratch_directory(
+    tmp_path, monkeypatch
+):
+    def disk_full(self, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", disk_full)
+    run_dir = tmp_path / "runs" / "r"
+    with pytest.raises(OSError, match="disk full"):
+        write_run(run_dir, config={"n": 1}, metrics={}, rows=pd.DataFrame(), report_md="")
+    assert list((tmp_path / "runs").iterdir()) == []
+
+
+def test_a_failed_copy_of_the_weights_leaves_nothing_behind(tmp_path, monkeypatch):
+    model = tmp_path / "model"
+    model.mkdir()
+
+    def broken_copy(*args, **kwargs):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(report.shutil, "copytree", broken_copy)
+    with pytest.raises(OSError, match="copy failed"):
+        write_run(
+            tmp_path / "r",
+            config={},
+            metrics={},
+            rows=pd.DataFrame(),
+            report_md="",
+            model_dir=model,
+        )
+    assert [p.name for p in tmp_path.iterdir()] == ["model"]
+
+
 def test_parents_of_a_new_run_directory_are_created(tmp_path):
     run_dir = tmp_path / "runs" / "deeper" / "r"
     write_run(run_dir, config={}, metrics={}, rows=pd.DataFrame(), report_md="")
@@ -162,6 +224,13 @@ def test_reading_a_directory_that_is_not_a_run_raises_file_not_found(tmp_path):
 # git_commit
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.skipif(
+    shutil.which("git") is None or not (REPO_ROOT / ".git").exists(),
+    reason="needs git and a git checkout",
+)
 def test_git_commit_is_the_short_hash_of_this_checkout():
     assert re.fullmatch(r"[0-9a-f]{7,40}", git_commit())
 
@@ -232,6 +301,26 @@ def test_the_win_cell_accepts_a_bare_boolean_and_a_missing_verdict(tmp_path):
     lines = compare_runs([tmp_path / "bare", tmp_path / "none"]).splitlines()
     assert lines[2].startswith("| bare | - | -") and lines[2].endswith("| yes |")
     assert lines[3].startswith("| none | - | -") and lines[3].endswith("| - |")
+
+
+def test_a_run_directory_with_the_seasonal_kind_is_compared_like_one_without_a_kind(tmp_path):
+    _write_synthetic_run(tmp_path / "plain", nn_crps=0.04, emos_crps=0.05, win=True)
+    _write_synthetic_run(tmp_path / "kind", nn_crps=0.04, emos_crps=0.05, win=True, kind="seasonal")
+    lines = compare_runs([tmp_path / "plain", tmp_path / "kind"]).splitlines()
+    assert lines[2].split(" | ")[1:] == lines[3].split(" | ")[1:]
+
+
+def test_runs_of_different_kinds_are_refused_and_name_the_runs_and_their_kinds(tmp_path):
+    _write_synthetic_run(tmp_path / "a", nn_crps=0.04, emos_crps=0.05, win=True, kind="seasonal")
+    _write_synthetic_run(tmp_path / "b", nn_crps=0.04, emos_crps=0.05, win=True, kind="nowcast")
+    with pytest.raises(ValueError, match=r"different kinds.*a.*seasonal.*b.*nowcast"):
+        compare_runs([tmp_path / "a", tmp_path / "b"])
+
+
+def test_a_run_of_an_unknown_kind_is_refused(tmp_path):
+    _write_synthetic_run(tmp_path / "a", nn_crps=0.04, emos_crps=0.05, win=True, kind="gbm")
+    with pytest.raises(ValueError, match="unknown run kind 'gbm'"):
+        compare_runs([tmp_path / "a"])
 
 
 def test_runs_are_listed_in_the_order_given(tmp_path):
@@ -322,9 +411,14 @@ def test_a_model_without_pit_frequencies_prints_dashes():
 
 
 def test_the_report_needs_none_of_the_optional_extras():
-    text = render_seasonal_report(_records(), {}, (True, ""))
+    text = render_seasonal_report(_records(), {"protocol": "strict"}, (True, ""))
     assert text.startswith("# GTM seasonal benchmark: strict protocol")
     assert "Test years skipped: none" in text
+
+
+def test_the_report_does_not_assume_a_protocol_the_run_did_not_name():
+    with pytest.raises(KeyError, match="protocol"):
+        render_seasonal_report(_records(), {}, (True, ""))
 
 
 def test_the_report_is_valid_markdown_tables_with_matching_column_counts():

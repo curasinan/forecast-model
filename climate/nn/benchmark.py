@@ -2,29 +2,24 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from climate.dataset import build_frame_from_inputs
 from climate.emos import (
-    crps_gaussian,
-    crps_skill_score,
     expanding_window_predictions,
     expanding_window_scores,
-    interval_coverage,
-    pit,
-    pit_histogram,
     summarise_scores,
-    target_year,
 )
 from climate.nn.availability import seas5_available_on
 from climate.nn.baselines import emos_baseline, raw_ensemble, trend_climatology
 from climate.nn.features import SEASONAL_FEATURES
 from climate.nn.leakage import LeakageError, assert_no_leakage
-from climate.nn.seasonal_model import VALIDATION_YEARS, GtmNnModel
+from climate.nn.scoring import pit_histograms, summarise, summary_columns
+from climate.nn.seasonal_model import VALIDATION_YEARS, GtmNnModel, usable_target_years
 from climate.nn.windows import Window, strict_windows
 
 PROTOCOLS: tuple[str, ...] = ("strict", "frozen")
@@ -32,22 +27,13 @@ STRICT_MODELS: tuple[str, ...] = ("nn", "emos", "raw", "trend")
 FROZEN_MODELS: tuple[str, ...] = ("emos", "trend", "clim")
 LEADS: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
 MIN_TRAIN_YEARS: int = VALIDATION_YEARS + 1
-PIT_BINS: int = 10
 WIN_MIN_LEADS: int = 4
 COVER50_BAND: tuple[float, float] = (0.35, 0.65)
 COVER90_BAND: tuple[float, float] = (0.75, 0.98)
 
 ROW_COLUMNS = ["test_year", "lead_month", "target_month", "decision_utc", "y_C"]
-SUMMARY_COLUMNS = [
-    "model",
-    "lead_month",
-    "n",
-    "crps",
-    "skill_vs_trend",
-    "skill_vs_emos",
-    "cover50",
-    "cover90",
-]
+SEASONAL_REFERENCES = {"skill_vs_trend": "trend", "skill_vs_emos": "emos"}
+SUMMARY_COLUMNS = summary_columns("lead_month", SEASONAL_REFERENCES)
 
 
 @dataclass
@@ -63,13 +49,15 @@ class SeasonalRun:
     device: str
 
 
-def check_models(models: tuple[str, ...]) -> tuple[str, ...]:
-    """The models of a strict run; ValueError for none, an unknown name or a name listed twice."""
+def check_models(
+    models: tuple[str, ...], allowed: tuple[str, ...] = STRICT_MODELS
+) -> tuple[str, ...]:
+    """The models of a run; ValueError for none, an unknown name or a name listed twice."""
     if len(models) == 0:
         raise ValueError("models must name at least one model")
     for name in models:
-        if name not in STRICT_MODELS:
-            raise ValueError(f"unknown model {name!r}; choose from {', '.join(STRICT_MODELS)}")
+        if name not in allowed:
+            raise ValueError(f"unknown model {name!r}; choose from {', '.join(allowed)}")
         if models.count(name) > 1:
             raise ValueError(f"model {name!r} is listed twice")
     return models
@@ -127,26 +115,39 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
     )
     for window in windows:
         _assert_clean(window)
-    made = {window.test_year for window in windows}
-    skipped = [y for y in range(cfg.first_test_year, cfg.last_test_year + 1) if y not in made]
-    blocks, last_net = [], None
-    for window in windows:
-        if len(window.test) == 0 or _training_years(window.train) < MIN_TRAIN_YEARS:
-            skipped.append(window.test_year)
+    made = {window.test_year: window for window in windows}
+    skipped, blocks, last_net = [], [], None
+    for year in range(cfg.first_test_year, cfg.last_test_year + 1):
+        window = made.get(year)
+        if window is None or len(window.test) == 0 or _short_of_years(window):
+            skipped.append(year)
+            _progress(year, window, "skipped")
             continue
         block, net = _predict_window(window, models, cfg)
         blocks.append(block)
         last_net = net if net is not None else last_net
+        _progress(year, window, "scored")
     if model_dir is not None and last_net is not None:
         last_net.save(model_dir)
     rows = pd.concat(blocks, ignore_index=True) if blocks else _empty_rows(models)
     extras = {
         "protocol": "strict",
         "excluded_rows": int(sum(window.excluded for window in windows)),
-        "skipped_windows": sorted(skipped),
-        "pit_hist": _pit_histograms(rows, models),
+        "skipped_windows": skipped,
+        "pit_hist": pit_histograms(rows, models),
     }
-    return rows, _summarise(rows, models), extras
+    summary = summarise(
+        rows, models, key="lead_month", key_values=LEADS, references=SEASONAL_REFERENCES
+    )
+    return rows, summary, extras
+
+
+def _progress(year: int, window, outcome: str) -> None:
+    """One stderr line per test year; a year without a window has no rows."""
+    n_train = 0 if window is None else len(window.train)
+    n_test = 0 if window is None else len(window.test)
+    line = f"test year {year}: n_train={n_train}, n_test={n_test}, {outcome}"
+    print(line, file=sys.stderr, flush=True)
 
 
 def _assert_clean(window: Window) -> None:
@@ -159,9 +160,11 @@ def _assert_clean(window: Window) -> None:
 
 def _training_years(train: pd.DataFrame) -> int:
     """Distinct target years among the training rows the network can use."""
-    X = train[SEASONAL_FEATURES].to_numpy(dtype=float)
-    usable = np.isfinite(X).all(axis=1) & np.isfinite(train["y_C"].to_numpy(dtype=float))
-    return len(np.unique(target_year(train[usable])))
+    return len(usable_target_years(train, SEASONAL_FEATURES))
+
+
+def _short_of_years(window: Window) -> bool:
+    return _training_years(window.train) < MIN_TRAIN_YEARS
 
 
 def _predict_window(window: Window, models, cfg: SeasonalRun):
@@ -196,58 +199,6 @@ def _prediction_columns(models) -> list[str]:
     return [f"{kind}_{name}" for name in models for kind in ("mu", "sigma")]
 
 
-# scoring
-
-
-def _row_crps(part: pd.DataFrame, model: str) -> np.ndarray:
-    """Per-row CRPS of a model; NaN where the label, mu or sigma is not finite."""
-    y = part["y_C"].to_numpy(dtype=float)
-    mu = part[f"mu_{model}"].to_numpy(dtype=float)
-    sigma = part[f"sigma_{model}"].to_numpy(dtype=float)
-    scorable = np.isfinite(y) & np.isfinite(mu) & np.isfinite(sigma)
-    crps = np.full(len(part), np.nan)
-    crps[scorable] = crps_gaussian(y[scorable], mu[scorable], sigma[scorable])
-    return crps
-
-
-def _skill(crps: np.ndarray, reference: np.ndarray | None) -> float:
-    return float("nan") if reference is None else crps_skill_score(crps, reference)
-
-
-def _summarise(rows: pd.DataFrame, models) -> pd.DataFrame:
-    """One row per (model, lead): n, mean CRPS, skill against trend and emos, coverage."""
-    parts = {lead: rows[rows["lead_month"] == lead] for lead in LEADS}
-    crps = {(name, lead): _row_crps(parts[lead], name) for name in models for lead in LEADS}
-    records = []
-    for name in models:
-        for lead in LEADS:
-            part, own = parts[lead], crps[name, lead]
-            scored = own[np.isfinite(own)]
-            cover = interval_coverage(part["y_C"], part[f"mu_{name}"], part[f"sigma_{name}"])
-            records.append(
-                {
-                    "model": name,
-                    "lead_month": lead,
-                    "n": len(scored),
-                    "crps": float(scored.mean()) if len(scored) else float("nan"),
-                    "skill_vs_trend": _skill(own, crps.get(("trend", lead))),
-                    "skill_vs_emos": _skill(own, crps.get(("emos", lead))),
-                    "cover50": cover[0.5],
-                    "cover90": cover[0.9],
-                }
-            )
-    return pd.DataFrame(records, columns=SUMMARY_COLUMNS)
-
-
-def _pit_histograms(rows: pd.DataFrame, models) -> dict[str, list[float]]:
-    """Per model the PIT histogram frequencies over all leads; NaN where nothing was scorable."""
-    histograms = {}
-    for name in models:
-        values = pit(rows["y_C"], rows[f"mu_{name}"], rows[f"sigma_{name}"])
-        histograms[name] = pit_histogram(values, PIT_BINS)["frac"].tolist()
-    return histograms
-
-
 # frozen protocol
 
 
@@ -263,7 +214,7 @@ def _run_frozen(inputs, cfg: SeasonalRun):
         "protocol": "frozen",
         "excluded_rows": 0,
         "skipped_windows": [y for y in range(first, last + 1) if y not in scored],
-        "pit_hist": _pit_histograms(rows, FROZEN_MODELS),
+        "pit_hist": pit_histograms(rows, FROZEN_MODELS),
     }
     return rows, _frozen_summary(by_lead), extras
 

@@ -17,10 +17,10 @@ from analysis.gpu_budget import GpuBudgetError
 from climate.nn.benchmark import SeasonalRun, run_seasonal
 from climate.nn.report import compare_runs, read_run, write_run
 from climate.nn.seasonal_model import GtmNnModel
-from climate.nn.windows import strict_windows as real_strict_windows
-from scripts.research import gtm_nn_benchmark
+from scripts.research import gtm_nn_benchmark, nn_cli
 from scripts.research.gtm_nn_benchmark import main
 from scripts.research.gtm_nn_compare import main as compare_main
+from tests.test_climate import nn_fixtures
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "scripts" / "research"
@@ -39,14 +39,6 @@ def no_torch(monkeypatch):
     """A machine without torch: the import machinery refuses it, whatever was imported before."""
     monkeypatch.delitem(sys.modules, "torch", raising=False)
     monkeypatch.setattr(sys, "meta_path", [_BlockTorch(), *sys.meta_path])
-
-
-def _windows_with_a_late_input(*args, **kwargs):
-    """strict_windows with the last window's first test row public a day after its decision."""
-    windows = real_strict_windows(*args, **kwargs)
-    test = windows[-1].test
-    test.loc[0, "avail_seas5_utc"] = test.loc[0, "decision_utc"] + pd.Timedelta(days=1)
-    return windows
 
 
 def _args(root, run_dir, *more):
@@ -102,7 +94,8 @@ def test_the_frozen_cli_run_needs_no_torch_and_records_its_options_and_the_libra
     assert main(_args(synthetic_root, run_dir, *argv)) == 0
     run = read_run(run_dir)
     config = run["config"]
-    assert config["protocol"] == "frozen" and config["models"] == ["emos", "trend", "clim"]
+    assert config["kind"] == "seasonal" and config["protocol"] == "frozen"
+    assert config["models"] == ["emos", "trend", "clim"]
     assert (config["first_test_year"], config["last_test_year"]) == (2006, 2008)
     assert config["seeds"] == [0, 1, 2, 3, 4] and config["hidden"] == 32
     assert config["gpu_budget"] is None and config["device"] == "cpu"
@@ -120,7 +113,9 @@ def test_the_frozen_cli_run_needs_no_torch_and_records_its_options_and_the_libra
 
 
 def test_benchmark_cli_exits_3_on_leakage(tmp_path, synthetic_root, monkeypatch, capsys):
-    monkeypatch.setattr("climate.nn.benchmark.strict_windows", _windows_with_a_late_input)
+    monkeypatch.setattr(
+        "climate.nn.benchmark.strict_windows", nn_fixtures.windows_with_a_late_input
+    )
     argv = ["--protocol", "strict", "--models", "emos"]
     argv += ["--first-test-year", "2006", "--last-test-year", "2006"]
     rc = main(_args(synthetic_root, tmp_path / "r", *argv))
@@ -150,7 +145,7 @@ def test_a_strict_network_run_records_the_verdict_and_saves_the_weights(
     tmp_path, synthetic_root, monkeypatch
 ):
     pytest.importorskip("torch")
-    monkeypatch.setattr(gtm_nn_benchmark, "configure_device", _device_must_not_be_configured)
+    monkeypatch.setattr(nn_cli, "configure_device", _device_must_not_be_configured)
     run_dir = tmp_path / "r"
     argv = ["--protocol", "strict", "--models", "nn,emos", "--seeds", "0", "--hidden", "16"]
     argv += ["--first-test-year", "2010", "--last-test-year", "2011"]
@@ -171,13 +166,34 @@ def test_a_strict_network_run_records_the_verdict_and_saves_the_weights(
 
 
 def test_the_options_default_as_documented(tmp_path, synthetic_root, monkeypatch):
-    monkeypatch.setattr(gtm_nn_benchmark, "_torch_available", lambda: True)
-    monkeypatch.setattr(gtm_nn_benchmark, "configure_device", _device_must_not_be_configured)
+    monkeypatch.setattr(nn_cli, "torch_available", lambda: True)
+    monkeypatch.setattr(nn_cli, "configure_device", _device_must_not_be_configured)
     seen = _spy_on_run_seasonal(monkeypatch)
     assert main(_args(synthetic_root, tmp_path / "r")) == 0
     last_year = datetime.now(timezone.utc).year
     models = ("nn", "emos", "raw", "trend")
     assert seen == [SeasonalRun("strict", models, 2001, last_year, (0, 1, 2, 3, 4), 32, "cpu")]
+
+
+@pytest.mark.parametrize("models", ["nn,raw", "nn,trend", "emos,raw,trend"])
+def test_a_strict_run_without_both_the_network_and_emos_records_no_verdict(
+    models, tmp_path, synthetic_root, monkeypatch
+):
+    monkeypatch.setattr(nn_cli, "torch_available", lambda: True)
+    _spy_on_run_seasonal(monkeypatch)  # the run is a cheap frozen one, whatever the models say
+    assert main(_args(synthetic_root, tmp_path / "r", "--models", models, *FAST_YEARS)) == 0
+    assert read_run(tmp_path / "r")["metrics"]["win"] is None
+    assert "Verdict: none" in (tmp_path / "r" / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_strict_run_with_the_network_and_emos_records_a_verdict(
+    tmp_path, synthetic_root, monkeypatch
+):
+    monkeypatch.setattr(nn_cli, "torch_available", lambda: True)
+    _spy_on_run_seasonal(monkeypatch)
+    assert main(_args(synthetic_root, tmp_path / "r", "--models", "emos,nn", *FAST_YEARS)) == 0
+    ok, why = read_run(tmp_path / "r")["metrics"]["win"]
+    assert ok is False and "needs both" in why  # the frozen stand-in has no network rows
 
 
 @pytest.mark.parametrize(
@@ -194,8 +210,8 @@ def test_the_device_comes_from_configure_device_only_when_a_budget_is_given(
         asked.append(budget)
         return "cuda:test"
 
-    monkeypatch.setattr(gtm_nn_benchmark, "_torch_available", lambda: True)
-    monkeypatch.setattr(gtm_nn_benchmark, "configure_device", configure)
+    monkeypatch.setattr(nn_cli, "torch_available", lambda: True)
+    monkeypatch.setattr(nn_cli, "configure_device", configure)
     seen = _spy_on_run_seasonal(monkeypatch)
     argv = ["--models", "nn,emos", *FAST_YEARS, *flags]
     assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 0
@@ -207,7 +223,7 @@ def test_the_device_comes_from_configure_device_only_when_a_budget_is_given(
 def test_the_budget_is_not_applied_to_a_run_without_the_network(
     tmp_path, synthetic_root, monkeypatch
 ):
-    monkeypatch.setattr(gtm_nn_benchmark, "configure_device", _device_must_not_be_configured)
+    monkeypatch.setattr(nn_cli, "configure_device", _device_must_not_be_configured)
     argv = ["--protocol", "frozen", "--first-test-year", "2006", "--last-test-year", "2007"]
     argv += ["--gpu-budget", "4"]
     assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 0
@@ -220,8 +236,8 @@ def test_a_refused_gpu_budget_exits_2_before_anything_is_written(
     def refuse(budget):
         raise GpuBudgetError("budget_gib=64 asks for more than the launcher's 8")
 
-    monkeypatch.setattr(gtm_nn_benchmark, "_torch_available", lambda: True)
-    monkeypatch.setattr(gtm_nn_benchmark, "configure_device", refuse)
+    monkeypatch.setattr(nn_cli, "torch_available", lambda: True)
+    monkeypatch.setattr(nn_cli, "configure_device", refuse)
     argv = ["--models", "nn,emos", "--gpu-budget", "64", *FAST_YEARS]
     rc = main(_args(synthetic_root, tmp_path / "r", *argv))
     assert rc == 2 and not (tmp_path / "r").exists()
@@ -359,8 +375,10 @@ class BlockTorch:
 sys.meta_path.insert(0, BlockTorch())
 import climate.nn.benchmark
 import climate.nn.report
+import climate.nn.scoring
 import scripts.research.gtm_nn_benchmark
 import scripts.research.gtm_nn_compare
+import scripts.research.nn_cli
 """
 
 

@@ -26,6 +26,17 @@ SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
 VALIDATION_YEARS: int = 3
 
 
+def usable_rows(frame: pd.DataFrame, features: list[str]) -> np.ndarray:
+    """Mask of the rows with a finite label and every feature finite: the rows a fit can use."""
+    X = frame[features].to_numpy(dtype=float)
+    return np.isfinite(X).all(axis=1) & np.isfinite(frame["y_C"].to_numpy(dtype=float))
+
+
+def usable_target_years(frame: pd.DataFrame, features: list[str]) -> np.ndarray:
+    """The distinct target years of the usable rows, ascending."""
+    return np.unique(target_year(frame[usable_rows(frame, features)]))
+
+
 class GtmNnModel:
     """One small Gaussian network per seed on the seasonal features, collapsed to one Gaussian."""
 
@@ -45,10 +56,9 @@ class GtmNnModel:
 
     def fit(self, frame: pd.DataFrame) -> GtmNnModel:
         """Fit a network per seed on the usable rows; the last three target years validate."""
-        X = frame[self.features].to_numpy(dtype=float)
-        y = frame["y_C"].to_numpy(dtype=float)
-        usable = np.isfinite(X).all(axis=1) & np.isfinite(y)
-        X, y = X[usable], y[usable]
+        usable = usable_rows(frame, self.features)
+        X = frame[self.features].to_numpy(dtype=float)[usable]
+        y = frame["y_C"].to_numpy(dtype=float)[usable]
         years = target_year(frame[usable])
         distinct = np.unique(years)
         if len(distinct) <= VALIDATION_YEARS:

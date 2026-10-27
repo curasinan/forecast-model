@@ -15,10 +15,13 @@ from climate.nn.report import compare_runs  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Compare run directories: the CRPS of nn and emos per lead and the verdict."
+        description="Compare run directories of one kind: the CRPS of the network and its reference per lead or checkpoint and the verdict."
     )
     parser.add_argument(
-        "run_dir", nargs="+", type=Path, help="run directories written by gtm_nn_benchmark.py"
+        "run_dir",
+        nargs="+",
+        type=Path,
+        help="run directories written by gtm_nn_benchmark.py or gtm_nowcast_benchmark.py",
     )
     try:
         args = parser.parse_args(argv)
@@ -27,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         table = compare_runs(args.run_dir)
     except (OSError, ValueError) as exc:
-        print(f"cannot read a run directory: {exc}", file=sys.stderr)
+        print(f"cannot compare these run directories: {exc}", file=sys.stderr)
         return 2
     print(table, end="")
     return 0

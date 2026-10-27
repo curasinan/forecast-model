@@ -14,13 +14,15 @@ from climate.emos import (
     pit,
     pit_histogram,
     summarise_scores,
+    target_year,
 )
-from climate.nn import benchmark
+from climate.nn import benchmark, scoring
 from climate.nn.availability import noaa_available_on, seas5_available_on
 from climate.nn.baselines import emos_baseline, raw_ensemble, trend_climatology
 from climate.nn.benchmark import SeasonalRun, run_seasonal, seasonal_win
+from climate.nn.features import SEASONAL_FEATURES
 from climate.nn.leakage import LeakageError
-from climate.nn.seasonal_model import GtmNnModel
+from climate.nn.seasonal_model import GtmNnModel, usable_rows, usable_target_years
 from climate.nn.windows import strict_windows
 from climate.storage import LEDGER_COLUMNS, VINTAGE_LIVE
 from tests.test_climate import nn_fixtures
@@ -41,14 +43,6 @@ SUMMARY_COLUMNS = [
 
 def _strict(models, first, last, seeds=(), hidden=32):
     return SeasonalRun("strict", tuple(models), first, last, tuple(seeds), hidden, "cpu")
-
-
-def _windows_with_a_late_input(*args, **kwargs):
-    """strict_windows with the last window's first test row public a day after its decision."""
-    windows = strict_windows(*args, **kwargs)
-    test = windows[-1].test
-    test.loc[0, "avail_seas5_utc"] = test.loc[0, "decision_utc"] + pd.Timedelta(days=1)
-    return windows
 
 
 @pytest.fixture(scope="module")
@@ -139,6 +133,25 @@ def test_the_frozen_rows_reproduce_the_frozen_summary(frozen_run):
             cell = summary[(summary.model == model) & (summary.lead_month == lead)].iloc[0]
             assert cell["n"] == len(part)
             assert cell["crps"] == pytest.approx(crps.mean(), rel=0, abs=1e-12)
+
+
+def test_the_strict_scorer_on_the_frozen_rows_reproduces_the_frozen_summary(frozen_run):
+    rows, summary, extras = frozen_run
+    again = scoring.summarise(
+        rows,
+        benchmark.FROZEN_MODELS,
+        key="lead_month",
+        key_values=benchmark.LEADS,
+        references=benchmark.SEASONAL_REFERENCES,
+    )
+    assert list(again.columns) == list(summary.columns)
+    assert again["n"].tolist() == summary["n"].tolist()
+    for column in ("crps", "skill_vs_trend", "skill_vs_emos"):
+        np.testing.assert_allclose(again[column], summary[column], rtol=0, atol=1e-12)
+    for column in ("cover50", "cover90"):
+        emos = again["model"] == "emos"  # the frozen summary tabulates coverage for emos only
+        np.testing.assert_allclose(again[emos][column], summary[emos][column], rtol=0, atol=1e-12)
+        assert summary[~emos][column].isna().all()
 
 
 def test_a_frozen_year_without_test_rows_is_listed_as_skipped(inputs):
@@ -293,11 +306,54 @@ def test_only_training_rows_with_a_label_and_every_feature_count_towards_the_fou
     assert sorted(rows["test_year"].unique()) == [2002]
 
 
+def test_the_usable_rows_have_a_finite_label_and_every_feature_finite():
+    frame = pd.DataFrame(
+        {
+            "target_year_frac": [2001.5, 2001.5, 2002.5, 2002.5, 2003.5, 2004.5, 2004.5],
+            "x": [1.0, 2.0, np.nan, 4.0, np.inf, 6.0, 7.0],
+            "z": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            "y_C": [0.1, np.nan, 0.3, 0.4, 0.5, 0.6, 0.7],
+        }
+    )
+    mask = usable_rows(frame, ["x", "z", "target_year_frac"])
+    assert mask.tolist() == [True, False, False, True, False, True, True]
+    assert usable_target_years(frame, ["x", "z"]).tolist() == [2001, 2002, 2004]
+    assert usable_target_years(frame, ["z"]).tolist() == [2001, 2002, 2003, 2004]
+    assert usable_target_years(frame.iloc[:0], ["x"]).tolist() == []
+
+
+def test_the_benchmark_counts_training_years_with_the_rule_the_network_fits_by(inputs):
+    train = strict_windows(*inputs, first_test_year=2006, last_test_year=2006)[0].train.copy()
+    every_year = benchmark._training_years(train)
+    train.loc[target_year(train) <= 2002, "q50_C"] = np.nan  # those years no longer count
+    expected = len(usable_target_years(train, SEASONAL_FEATURES))
+    assert benchmark._training_years(train) == expected < every_year
+
+
+def test_a_strict_run_prints_one_line_per_test_year_to_stderr(inputs, capsys):
+    windows = strict_windows(*inputs, first_test_year=1997, last_test_year=2000)
+    run_seasonal(inputs, None, _strict(BASELINES, 1997, 2000))
+    lines = capsys.readouterr().err.splitlines()
+    by_year = {window.test_year: window for window in windows}
+    # 1997 is dropped by strict_windows, 1998 and 1999 train on too few target years
+    assert lines[0] == "test year 1997: n_train=0, n_test=0, skipped"
+    for line, year, outcome in zip(lines[1:], (1998, 1999, 2000), ("skipped",) * 2 + ("scored",)):
+        window = by_year[year]
+        expected = f"test year {year}: n_train={len(window.train)}, n_test={len(window.test)}"
+        assert line == f"{expected}, {outcome}"
+    assert len(lines) == 4
+
+
+def test_a_frozen_run_prints_nothing_to_stderr(inputs, capsys):
+    run_seasonal(inputs, None, SeasonalRun("frozen", ("emos",), 2006, 2007, (), 32, "cpu"))
+    assert capsys.readouterr().err == ""
+
+
 def test_a_late_input_raises_a_leakage_error_before_anything_is_fitted(inputs, monkeypatch):
     def must_not_run(train, test, trend=True):
         raise AssertionError("fitted before the leakage check finished")
 
-    monkeypatch.setattr(benchmark, "strict_windows", _windows_with_a_late_input)
+    monkeypatch.setattr(benchmark, "strict_windows", nn_fixtures.windows_with_a_late_input)
     monkeypatch.setattr(benchmark, "emos_baseline", must_not_run)
     with pytest.raises(LeakageError, match=r"2007.*row 0.*avail_seas5_utc"):
         run_seasonal(inputs, None, _strict(("emos",), 2006, 2007))

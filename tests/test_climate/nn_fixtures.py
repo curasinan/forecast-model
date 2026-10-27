@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from climate.dataset import month_of_year, target_month, target_year_frac
+from climate.nn.windows import strict_windows
 
 FIRST_INIT = "1996-01-01"
 LAST_INIT = "2015-12-01"
@@ -88,3 +89,11 @@ def nowcast_rows(
             "target_year_frac": target_year_frac(labels).to_numpy(),
         }
     )
+
+
+def windows_with_a_late_input(*args, **kwargs):
+    """strict_windows with the last window's first test row public a day after its decision."""
+    windows = strict_windows(*args, **kwargs)
+    test = windows[-1].test
+    test.loc[0, "avail_seas5_utc"] = test.loc[0, "decision_utc"] + pd.Timedelta(days=1)
+    return windows
