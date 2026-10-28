@@ -7,7 +7,6 @@ import contextlib
 import io
 import re
 import sys
-import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -15,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from climate.cds import CdsSoftTimeout  # noqa: E402
 from climate.nn.daily import (  # noqa: E402
     DAILY_PARQUET,
     daily_month_task,
@@ -37,7 +37,7 @@ DEFAULT_JOBS = 2
 DEFAULT_SOFT_TIMEOUT = 7200.0
 DAY_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 REFRESH_HINT = "rerun with --refresh"
-DELETE_HINT = "delete it to fetch it again"
+ZIP_MAGIC = b"PK\x03\x04"
 
 
 def _years(text: str) -> list[int]:
@@ -140,22 +140,35 @@ def _bad_delivery(path: Path) -> str | None:
     """What is wrong with a delivery of a kind that is known to go wrong, or None."""
     if path.stat().st_size == 0:
         return "empty download"
-    if zipfile.is_zipfile(path):
-        return "the CDS returned a zip, not a netCDF"
+    with path.open("rb") as handle:
+        if handle.read(len(ZIP_MAGIC)) == ZIP_MAGIC:
+            return "the CDS returned a zip, not a netCDF"
     return None
 
 
-def _report_failures(failures: list[tuple[Path, BaseException]], refreshing: set[Path]) -> None:
-    """report_failures, the last line of each failure of a refreshed month ending in a hint."""
+def _remedy(path: Path, month: str | None) -> str:
+    """What fetches a failed item again: a raw file stays cached, so a plain rerun would not."""
+    return f"{REFRESH_HINT} --months {month}" if month else f"delete {path} and rerun"
+
+
+def _report_failures(
+    failures: list[tuple[Path, BaseException]], refreshing: dict[Path, str]
+) -> None:
+    """report_failures, each failure of a refreshed month ending in its one remedy instead."""
     for failure in failures:
-        if failure[0] not in refreshing:
+        path, exc = failure
+        if path not in refreshing:
             report_failures([failure])
+            continue
+        remedy = _remedy(path, refreshing[path])
+        if isinstance(exc, CdsSoftTimeout):
+            print(f"submitted/queued, not complete: {path.name} -- {remedy}")
             continue
         shown = io.StringIO()
         with contextlib.redirect_stdout(shown):
             report_failures([failure])
         *first, last = shown.getvalue().splitlines()
-        print(*first, f"{last} -- {REFRESH_HINT}", sep="\n")
+        print(*first, f"{last} -- {remedy}", sep="\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -172,12 +185,21 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
 
-    available = [month for month in args.months if has_era5_day(month, today=today)]
+    try:
+        available = [month for month in args.months if has_era5_day(month, today=today)]
+    except OverflowError:
+        print(
+            f"--today {today} is too early to count the ERA5 lag back from: give a later date",
+            file=sys.stderr,
+        )
+        return 2
     skipped = [month for month in args.months if month not in available]
     month_tasks = [daily_month_task(root, month, today=today) for month in available]
     tasks = [daily_task(root, year) for year in args.years] + month_tasks
     labels = [str(year) for year in args.years] + available
     position = {path: index for index, (_, _, path) in enumerate(tasks)}
+    months = {path: month for (_, _, path), month in zip(month_tasks, available, strict=True)}
+    requested = {path: len(request["day"]) for _, request, path in month_tasks}
     refreshed = set()
     if args.refresh:
         for _, _, path in month_tasks:
@@ -194,32 +216,34 @@ def main(argv: list[str] | None = None) -> int:
     deleted = f", {len(refreshed)} deleted for refresh" if args.refresh else ""
     print(f"climate data root: {root}")
     print(f"daily ERA5: {', '.join(scope)}, {len(cached)} raw files already present{deleted}")
+    for month in skipped:
+        print(f"{month}: no ERA5 day available by {today}, skipped")
     completed, failures = run_tasks(tasks, args.soft_timeout, args.jobs)
 
     replace = {path for _, _, path in month_tasks} if args.refresh else set()
     reduced, total, unreadable = 0, None, 0
     for path in sorted(completed, key=position.__getitem__):
         label = labels[position[path]]
-        again = f"; {REFRESH_HINT}" if path in replace else ""
+        remedy = _remedy(path, months.get(path))
         bad = _bad_delivery(path)
         if bad is not None:
-            tail = again or f"; {DELETE_HINT}"
-            print(f"{label}: FAILED to reduce {path.name}: {bad}{tail}")
+            print(f"{label}: FAILED to reduce {path.name}: {bad}; {remedy}")
             unreadable += 1
             continue
         try:
             added, total = reduce_era5_daily_file(path, root, replace=path in replace)
         except (ValueError, KeyError, OSError) as exc:  # one bad file must not hide the others
-            print(f"{label}: FAILED to reduce {path.name}: {exc!r}{again}")
+            print(f"{label}: FAILED to reduce {path.name}: {exc!r}; {remedy}")
             unreadable += 1
             continue
         reduced += 1
         how = "refreshed" if path in refreshed else "cached" if path in cached else "downloaded"
         size = path.stat().st_size
-        print(f"{label}: {path.name} {how} ({size} bytes), +{added} rows, {total} total")
-    for month in skipped:
-        print(f"{month}: no ERA5 day available by {today}, skipped")
-    _report_failures(failures, replace)
+        line = f"{label}: {path.name} {how} ({size} bytes), +{added} rows, {total} total"
+        if path in replace and added < requested[path]:
+            line += f", {added} of {requested[path]} requested days delivered"
+        print(line)
+    _report_failures(failures, {path: months[path] for path in replace})
     unit = (
         "years and months" if args.years and args.months else "months" if args.months else "years"
     )

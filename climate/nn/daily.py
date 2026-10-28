@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import calendar
+import contextlib
+import os
 import re
+import tempfile
 from collections.abc import Iterable
 from datetime import date, timedelta
 from pathlib import Path
@@ -122,12 +125,32 @@ def reduce_era5_daily_file(
     if frame.empty:
         raise ValueError(f"no complete day in {nc_path}")
     path = root / DAILY_PARQUET[0] / DAILY_PARQUET[1]
-    if replace and path.exists():
-        stored = pd.read_parquet(path, engine="pyarrow")
-        months = frame["date"].dt.to_period("M").unique()
-        kept = stored[~stored["date"].dt.to_period("M").isin(months)]
-        kept.reset_index(drop=True).to_parquet(path, engine="pyarrow", index=False)
-    return append_parquet(frame, path, DAILY_KEYS)
+    if not (replace and path.exists()):
+        return append_parquet(frame, path, DAILY_KEYS)
+    stored = pd.read_parquet(path, engine="pyarrow")
+    months = frame["date"].dt.to_period("M").unique()
+    kept = stored[~stored["date"].dt.to_period("M").isin(months)]
+    merged = (
+        pd.concat([kept, frame], ignore_index=True)
+        .drop_duplicates(subset=DAILY_KEYS, keep="first")
+        .sort_values(DAILY_KEYS)
+        .reset_index(drop=True)
+    )
+    _write_whole(merged, path)
+    return len(merged) - len(kept), len(merged)
+
+
+def _write_whole(frame: pd.DataFrame, path: Path) -> None:
+    """Write the parquet through a temporary file beside it; the old one stays whole until then."""
+    handle, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(handle)
+    try:
+        frame.to_parquet(name, engine="pyarrow", index=False)
+        os.replace(name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(name)
+        raise
 
 
 def daily_task(root: Path, year: int) -> tuple[str, dict, Path]:
