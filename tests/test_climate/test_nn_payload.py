@@ -918,6 +918,41 @@ def test_a_model_directory_of_another_kind_exits_2_and_names_the_kind(
     assert "nowcast" in captured.err and len(captured.err.strip().splitlines()) == 1
 
 
+@pytest.mark.parametrize("protocol", ["frozen", None], ids=["frozen", "missing"])
+def test_a_model_directory_of_a_run_that_is_not_strict_exits_2_and_says_so(
+    protocol, tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    other = _copy_model(saved_nowcast_model, tmp_path, "other")
+    provenance = _provenance(other)
+    if protocol is None:
+        del provenance["protocol"]
+    else:
+        provenance["protocol"] = protocol
+    (other / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+    rc, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, other, "--as-of", "2011-06-20T00:00:00Z"
+    )
+    captured = capsys.readouterr()
+    assert rc == 2 and payload is None and captured.out == ""
+    run = "a frozen run" if protocol else "a run whose provenance names no protocol"
+    assert captured.err.strip() == (
+        f"{other} is the weights/ of {run}; the payload and pricing scripts take a strict run only"
+    )
+
+
+def test_the_price_script_refuses_the_weights_of_a_frozen_run(
+    tmp_path, synthetic_root, saved_models, capsys
+):
+    emos_json, nn_dir = saved_models
+    frozen = _copy_model(nn_dir, tmp_path, "frozen")
+    provenance = _provenance(frozen) | {"protocol": "frozen"}
+    (frozen / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+    argv = ["--target-month", "2012-03", "--as-of", "2012-01-20T00:00:00Z", "--strikes", "0.4"]
+    assert _price(synthetic_root, emos_json, frozen, *argv) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "of a frozen run; the payload and pricing" in captured.err
+
+
 def test_a_seasonal_models_directory_is_refused_by_the_nowcast_script(
     tmp_path, synthetic_root_with_daily, saved_models, capsys
 ):

@@ -59,7 +59,7 @@ def _read_inputs(root: Path):
         if inputs[2].empty:
             raise FileNotFoundError(f"no gtm labels in {ledger_path(root)}")
         return inputs, load_ledger(root)
-    except OSError as exc:
+    except (OSError, ValueError, KeyError) as exc:
         raise nn_cli.UsageError(f"cannot read the research inputs under {root}: {exc}") from exc
 
 
@@ -84,7 +84,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             raise nn_cli.UsageError("no test row could be scored: check --root and the test years")
         judged = args.protocol == "strict" and {"nn", "emos"} <= set(models)
         win = seasonal_win(summary) if judged else None
-        report_md = render_seasonal_report(summary, extras, win)
+        report_md = render_seasonal_report(summary, extras, win, ledger=ledger)
         config = nn_cli.base_config(
             args,
             kind="seasonal",

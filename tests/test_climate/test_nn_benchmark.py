@@ -494,6 +494,32 @@ def test_a_summary_without_the_network_or_emos_has_no_win_and_does_not_raise():
     assert not ok and "emos" in why
 
 
+def test_an_unpaired_lead_gives_no_verdict_and_names_the_lead_and_both_counts():
+    summary = _summary([1, 2, 3, 4], 0.5, 0.9)
+    summary.loc[(summary.model == "nn") & (summary.lead_month == 3), "n"] = 28
+    assert seasonal_win(summary) == (None, "unpaired rows at lead 3: nn has 28, emos 30")
+    losing = _summary([1], 0.5, 0.9)
+    losing.loc[(losing.model == "emos") & (losing.lead_month == 6), "n"] = 31
+    assert seasonal_win(losing) == (None, "unpaired rows at lead 6: nn has 30, emos 31")
+
+
+def test_the_seasonal_verdict_is_the_same_for_frames_and_for_the_records_of_metrics_json():
+    cases = [
+        (_summary([1, 2, 3, 4], 0.5, 0.9), (True, "")),
+        (_summary([1, 2, 3], 0.5, 0.9), (False, "nn beats emos at 3 of 6 leads")),
+        (_summary([1, 2, 3, 4], 0.7, 0.9), (False, "cover50 at lead 1")),
+    ]
+    for summary, expected in cases:
+        assert seasonal_win(summary) == expected
+        assert seasonal_win(summary.to_dict("records")) == expected
+    records = _summary([1, 2, 3, 4], 0.5, 0.9).to_dict("records")
+    for record in records:
+        if record["model"] == "nn" and record["lead_month"] == 2:
+            record["cover90"] = None  # metrics.json writes NaN as null
+    assert seasonal_win(records) == (False, "cover90 at lead 2")
+    assert seasonal_win([]) == (False, "the summary needs both nn and emos rows")
+
+
 # the network
 
 
@@ -520,6 +546,7 @@ def test_the_last_windows_network_is_saved_and_its_rows_are_its_predictions(inpu
     window = strict_windows(*inputs, first_test_year=2012, last_test_year=2012)[0]
     assert extras["saved_model"] == {
         "kind": "seasonal",
+        "protocol": "strict",
         "test_year": 2012,
         "labels_through": "2011-12",
         "bridge": window.bridge.params,

@@ -33,6 +33,7 @@ class NowcastWindow:
     dropped_gap_rows: int
     excluded: int
     cutoff_utc: datetime
+    dropped_gap_rows_train: int
 
 
 def monthly_means(daily_K: pd.Series) -> pd.Series:
@@ -43,6 +44,20 @@ def monthly_means(daily_K: pd.Series) -> pd.Series:
     means = grouped.mean().where(counts.to_numpy() == counts.index.days_in_month.to_numpy())
     means.index = means.index.astype(str)
     return means
+
+
+def daily_coverage(daily_K: pd.Series) -> dict:
+    """First and last day with a value and the calendar days between them without one."""
+    days = daily_K.index[np.isfinite(daily_K.to_numpy(dtype=float))]
+    if days.empty:
+        return {"first_day": None, "last_day": None, "missing_days": 0}
+    first, last = days.min(), days.max()
+    missing = (last - first).days + 1 - days.nunique()
+    return {
+        "first_day": first.date().isoformat(),
+        "last_day": last.date().isoformat(),
+        "missing_days": int(missing),
+    }
 
 
 def _series_months(daily_K: pd.Series) -> list[str]:
@@ -85,15 +100,17 @@ def nowcast_windows(
         cutoff = noaa_available_on(f"{year - 1}-12", ledger)
         decided = (frame["decision_utc"] >= cutoff).to_numpy()
         in_year = years == year
+        trained = (years < year) & labelled
         windows.append(
             NowcastWindow(
                 test_year=year,
-                train=frame[(years < year) & labelled & gapless].reset_index(drop=True),
+                train=frame[trained & gapless].reset_index(drop=True),
                 test=frame[in_year & decided & gapless].reset_index(drop=True),
                 bridge=bridge,
                 dropped_gap_rows=int(np.count_nonzero(in_year & decided & ~gapless)),
                 excluded=int(np.count_nonzero(in_year & ~decided)),
                 cutoff_utc=cutoff,
+                dropped_gap_rows_train=int(np.count_nonzero(trained & ~gapless)),
             )
         )
     return windows

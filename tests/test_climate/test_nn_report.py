@@ -17,12 +17,14 @@ from climate.nn.nowcast import CHECKPOINTS
 from climate.nn.report import (
     compare_runs,
     git_commit,
+    label_note,
     read_run,
     render_nowcast_report,
     render_seasonal_report,
     write_provenance,
     write_run,
 )
+from climate.storage import LEDGER_COLUMNS, VINTAGE_BACKFILL, VINTAGE_LIVE
 
 LEADS = range(1, 7)
 HEADER = (
@@ -462,6 +464,68 @@ def test_the_report_does_not_assume_a_protocol_the_run_did_not_name():
         render_seasonal_report(_records(), {}, (True, ""))
 
 
+def _ledger(live: dict[str, str], backfill=()) -> pd.DataFrame:
+    """GTM ledger rows: genuine first prints (period -> first_seen_utc) and backfilled periods."""
+    rows = [(period, seen, VINTAGE_LIVE) for period, seen in live.items()]
+    rows += [(period, "2026-01-01T00:00:00+00:00", VINTAGE_BACKFILL) for period in backfill]
+    records = [
+        {
+            "series": "gtm",
+            "period": period,
+            "value": 1.0,
+            "first_seen_utc": seen,
+            "vintage": vintage,
+            "is_revision": False,
+            "source_url": "",
+        }
+        for period, seen, vintage in rows
+    ]
+    return pd.DataFrame(records, columns=LEDGER_COLUMNS)
+
+
+NO_FIRST_PRINT = (
+    "Labels are NOAA's current vintage for history (the ledger holds no genuine first print), "
+    "so a score carries later revisions."
+)
+
+
+def test_the_label_note_names_the_ledgers_first_genuine_first_print_and_no_magnitude():
+    ledger = _ledger(
+        {"2026-09": "2026-10-10T13:30:00+00:00", "2026-08": "2026-09-11T13:30:00+00:00"},
+        backfill=("2020-01",),
+    )
+    assert label_note(ledger) == (
+        "Labels are NOAA's current vintage for history (genuine first prints exist only since "
+        "2026-08), so a score carries later revisions."
+    )
+    assert label_note(None) == label_note(_ledger({}, backfill=("2020-01",))) == NO_FIRST_PRINT
+
+
+def test_both_reports_take_the_label_note_from_the_ledger_they_are_given():
+    ledger = _ledger({"2011-09": "2011-10-13T00:00:00+00:00"})
+    texts = [
+        render_seasonal_report(_records(), _extras(), (True, ""), ledger=ledger),
+        render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (True, ""), ledger=ledger),
+    ]
+    for text in texts:
+        assert text.count(label_note(ledger)) == 2  # the scores table and the PIT table
+        assert "2026-08" not in text and "hundredths" not in text
+    assert render_seasonal_report(_records(), _extras(), (True, "")).count(NO_FIRST_PRINT) == 2
+
+
+def test_a_verdict_withheld_for_unpaired_rows_says_why_and_is_a_dash_in_compare(tmp_path):
+    why = "unpaired rows at lead 3: nn has 28, emos 30"
+    text = render_seasonal_report(_records(), _extras(), (None, why))
+    assert f"Verdict: none ({why})\n" in text and "Verdict: no win" not in text
+    checkpoint = "unpaired rows at 20: nn has 29, bridge 30"
+    nowcast = render_nowcast_report(_nowcast_summary(), _nowcast_extras(), (None, checkpoint))
+    assert f"Verdict: none ({checkpoint})\n" in nowcast
+    metrics = {"summary": _summary_records(0.04, 0.05), "extras": {}, "win": [None, why]}
+    config = {"protocol": "strict"}
+    write_run(tmp_path / "a", config=config, metrics=metrics, rows=pd.DataFrame(), report_md="")
+    assert compare_runs([tmp_path / "a"]).splitlines()[2].endswith(" | - |")
+
+
 def test_the_report_is_valid_markdown_tables_with_matching_column_counts():
     text = render_seasonal_report(_records(), _extras(), (False, "cover50 at lead 2"))
     tables = [block for block in text.split("\n\n") if block.startswith("|")]
@@ -682,6 +746,18 @@ def test_the_nowcast_report_counts_the_dropped_rows_and_lists_the_skipped_years(
         _nowcast_summary(), _nowcast_extras(skipped_windows=[2002, 2003]), (True, "")
     )
     assert "Test years skipped: 2002, 2003" in skipped
+
+
+def test_the_nowcast_report_counts_the_dropped_training_rows_and_states_the_daily_coverage():
+    coverage = {"first_day": "2000-01-01", "last_day": "2011-12-31", "missing_days": 2}
+    extras = _nowcast_extras(dropped_gap_rows_train=16, daily_coverage=coverage)
+    lines = render_nowcast_report(_nowcast_summary(), extras, (True, "")).splitlines()
+    trained = "Training rows dropped for a missing ERA5 day, in every window that trains on them"
+    assert lines.count(f"{trained}: 16") == 1
+    span = "2000-01-01 to 2011-12-31, 2 day(s) missing in between"
+    assert lines.count(f"Daily ERA5 series: {span}") == 1
+    bare = render_nowcast_report(_nowcast_summary(), {"protocol": "strict"}, (True, ""))
+    assert "Training rows dropped" not in bare and "Daily ERA5 series" not in bare
 
 
 def test_every_nowcast_table_carries_the_label_vintage_note_and_the_pit_table_has_ten_bins():

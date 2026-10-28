@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from analysis.gpu_budget import GpuBudgetError
-from climate.nn import benchmark, nowcast_windows
+from climate.nn import benchmark
 from climate.nn.benchmark import NowcastRun, SeasonalRun, run_nowcast, run_seasonal
 from climate.nn.report import compare_runs, read_run, write_run
 from climate.nn.seasonal_model import GtmNnModel
@@ -142,6 +142,7 @@ def test_a_strict_baseline_run_needs_no_torch_and_records_no_verdict(
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     assert report.startswith("# GTM seasonal benchmark: strict protocol")
     assert "Verdict: none" in report and not (run_dir / "weights").exists()
+    assert report.count("(the ledger holds no genuine first print)") == 2  # a backfilled ledger
 
 
 def test_a_strict_network_run_records_the_verdict_and_saves_the_weights(
@@ -168,7 +169,7 @@ def test_a_strict_network_run_records_the_verdict_and_saves_the_weights(
     assert verdict in report
 
 
-PROVENANCE_KEYS = {"kind", "test_year", "labels_through", "bridge"}
+PROVENANCE_KEYS = {"kind", "protocol", "test_year", "labels_through", "bridge"}
 
 
 def test_a_strict_network_run_writes_the_provenance_of_the_saved_network(tmp_path, synthetic_root):
@@ -179,6 +180,7 @@ def test_a_strict_network_run_writes_the_provenance_of_the_saved_network(tmp_pat
     assert main(_args(synthetic_root, run_dir, *argv)) == 0
     provenance = json.loads((run_dir / "weights" / "provenance.json").read_text(encoding="utf-8"))
     assert set(provenance) == PROVENANCE_KEYS and provenance["kind"] == "seasonal"
+    assert provenance["protocol"] == "strict"
     assert provenance["test_year"] == 2015  # the last scored window, not the last year asked for
     assert provenance["labels_through"] == "2014-12"
     assert provenance["bridge"]["fit_end"] == "2014-12" and "beta" in provenance["bridge"]
@@ -330,6 +332,29 @@ def test_a_root_without_the_research_files_exits_2_and_names_it(tmp_path, capsys
     assert "nothing" in capsys.readouterr().err
 
 
+def _damage(path, how: str) -> None:
+    """A research parquet that misses its columns, or a file that is no parquet at all."""
+    if how == "column":
+        pd.DataFrame({"unrelated": [1.0]}).to_parquet(path, index=False)
+    else:
+        path.write_bytes(b"not a parquet file")
+
+
+@pytest.mark.parametrize("how", ["column", "corrupt"])
+@pytest.mark.parametrize(
+    "parts", [("forecasts", "seas5_global_mean.parquet"), ("reference", "era5_global_mean.parquet")]
+)
+def test_a_research_file_that_does_not_read_exits_2_with_one_line(
+    parts, how, tmp_path, synthetic_root, capsys
+):
+    _damage(synthetic_root.joinpath(*parts), how)
+    argv = ["--protocol", "frozen", "--first-test-year", "2006", "--last-test-year", "2007"]
+    assert main(_args(synthetic_root, tmp_path / "r", *argv)) == 2
+    err = capsys.readouterr().err
+    assert "cannot read the research inputs under" in err and len(err.strip().splitlines()) == 1
+    assert not (tmp_path / "r").exists()
+
+
 def test_a_root_without_labels_exits_2(tmp_path, synthetic_root, capsys):
     (synthetic_root / "labels" / "labels_ledger.parquet").unlink()
     argv = ["--protocol", "frozen", "--first-test-year", "2006", "--last-test-year", "2007"]
@@ -432,6 +457,7 @@ def test_a_nowcast_baseline_run_needs_no_torch_records_its_options_and_no_verdic
     assert report.startswith("# GTM nowcast benchmark: strict protocol")
     assert "Rows excluded by the strict rule: 4" in report
     assert "Verdict: none" in report and not (run_dir / "weights").exists()
+    assert report.count("genuine first prints exist only since 2011-09") == 2  # the ledger's
     printed = capsys.readouterr()
     assert printed.out.startswith("# GTM nowcast benchmark") and str(run_dir) in printed.out
     assert "test year 2010: n_train=" in printed.err and "test year 2011" in printed.err
@@ -474,6 +500,7 @@ def test_a_nowcast_network_run_writes_the_provenance_of_the_saved_network(
     assert nowcast_main(_args(nowcast_root, run_dir, *argv)) == 0
     provenance = json.loads((run_dir / "weights" / "provenance.json").read_text(encoding="utf-8"))
     assert set(provenance) == PROVENANCE_KEYS and provenance["kind"] == "nowcast"
+    assert provenance["protocol"] == protocol
     assert provenance["test_year"] == 2011  # the last scored window
     assert provenance["labels_through"] == "2010-12"  # the network's labels, whatever the bridge's
     assert provenance["bridge"]["fit_end"] == fit_end
@@ -482,10 +509,15 @@ def test_a_nowcast_network_run_writes_the_provenance_of_the_saved_network(
     assert run["config"]["protocol"] == protocol
 
 
-def test_the_script_imports_the_month_pattern_of_the_windows_instead_of_defining_one():
+def test_the_script_parses_its_bridge_month_with_the_shared_month_type():
     source = Path(gtm_nowcast_benchmark.__file__).read_text(encoding="utf-8")
-    assert "re.compile" not in source
-    assert gtm_nowcast_benchmark.MONTH is nowcast_windows.MONTH
+    assert "re.compile" not in source and "def _month" not in source
+    (bridge_through,) = [
+        action
+        for action in gtm_nowcast_benchmark._parser()._actions
+        if action.dest == "bridge_through"
+    ]
+    assert bridge_through.type is nn_cli.month_text
 
 
 def test_a_nowcast_run_with_a_bridge_month_is_a_frozen_run_without_a_verdict(
@@ -632,6 +664,22 @@ def test_a_nowcast_root_without_the_daily_series_exits_2_and_names_the_file(
     argv = ["--models", "bridge", *NOWCAST_YEARS]
     assert nowcast_main(_args(nowcast_root, tmp_path / "r", *argv)) == 2
     assert "era5_daily_global_mean" in capsys.readouterr().err and not (tmp_path / "r").exists()
+
+
+@pytest.mark.parametrize("how", ["column", "corrupt"])
+@pytest.mark.parametrize(
+    "parts",
+    [("forecasts", "seas5_global_mean.parquet"), ("reference", "era5_daily_global_mean.parquet")],
+)
+def test_a_nowcast_research_file_that_does_not_read_exits_2_with_one_line(
+    parts, how, tmp_path, nowcast_root, capsys
+):
+    _damage(nowcast_root.joinpath(*parts), how)
+    argv = ["--models", "bridge", *NOWCAST_YEARS]
+    assert nowcast_main(_args(nowcast_root, tmp_path / "r", *argv)) == 2
+    err = capsys.readouterr().err
+    assert "cannot read the research inputs under" in err and len(err.strip().splitlines()) == 1
+    assert not (tmp_path / "r").exists()
 
 
 def test_a_nowcast_root_without_labels_exits_2(tmp_path, nowcast_root, capsys):

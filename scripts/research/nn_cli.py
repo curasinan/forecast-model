@@ -243,7 +243,7 @@ def month_text(text: str) -> str:
 
 
 def read_provenance(model_dir: Path, kind: str) -> dict:
-    """The provenance.json of a saved model of that kind; UsageError if it is not one."""
+    """The provenance.json of a saved model of that kind from a strict run; else UsageError."""
     if not model_dir.is_dir():
         raise UsageError(f"{model_dir} is not a directory")
     path = model_dir / "provenance.json"
@@ -259,6 +259,14 @@ def read_provenance(model_dir: Path, kind: str) -> dict:
     found = provenance.get("kind") if isinstance(provenance, dict) else None
     if found != kind:
         raise UsageError(f"{path} is of a {found!r} model, this script needs a {kind!r} one")
+    protocol = provenance.get("protocol")
+    if protocol != "strict":
+        named = isinstance(protocol, str) and protocol
+        run = f"a {protocol} run" if named else "a run whose provenance names no protocol"
+        raise UsageError(
+            f"{model_dir} is the weights/ of {run}; "
+            "the payload and pricing scripts take a strict run only"
+        )
     return provenance
 
 

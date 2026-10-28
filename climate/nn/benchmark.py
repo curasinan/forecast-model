@@ -26,7 +26,7 @@ from climate.nn.features import SEASONAL_FEATURES
 from climate.nn.leakage import LeakageError, assert_no_leakage
 from climate.nn.nowcast import CHECKPOINTS, NOWCAST_FEATURES, WIN_CHECKPOINTS
 from climate.nn.nowcast_model import GtmNowcastModel
-from climate.nn.nowcast_windows import NowcastWindow, nowcast_windows
+from climate.nn.nowcast_windows import NowcastWindow, daily_coverage, nowcast_windows
 from climate.nn.scoring import pit_histograms, summarise, summary_columns
 from climate.nn.seasonal_model import VALIDATION_YEARS, GtmNnModel, usable_target_years
 from climate.nn.windows import Window, strict_windows
@@ -107,12 +107,14 @@ def run_seasonal(
     raise ValueError(f"unknown protocol {cfg.protocol!r}; choose from {', '.join(PROTOCOLS)}")
 
 
-def seasonal_win(summary: pd.DataFrame) -> tuple[bool, str]:
-    """(True, "") when nn wins on this summary, else (False, the first reason found)."""
-    nn = summary[summary["model"] == "nn"].set_index("lead_month")
-    emos = summary[summary["model"] == "emos"].set_index("lead_month")
+def seasonal_win(summary) -> tuple[bool | None, str]:
+    """(True, "") when nn wins, (False, why), (None, why) when unpaired; a table may be records."""
+    nn, emos = _by_key(summary, "nn", "lead_month"), _by_key(summary, "emos", "lead_month")
     if nn.empty or emos.empty:
         return False, "the summary needs both nn and emos rows"
+    unpaired = _unpaired(nn, emos, LEADS, "emos", "rows at lead ")
+    if unpaired:
+        return None, unpaired
     beats = sum(
         1
         for lead in LEADS
@@ -169,33 +171,48 @@ def run_nowcast(
         pd.concat(blocks, ignore_index=True) if blocks else _empty_rows(models, NOWCAST_ROW_COLUMNS)
     )
     genuine = genuine_first_print_months(ledger) if ledger is not None else set()
+    protocol = "strict" if bridge_through is None else "frozen"
+    saved = None if last_net is None else _saved_model("nowcast", last_window, protocol)
     extras = {
-        "protocol": "strict" if bridge_through is None else "frozen",
+        "protocol": protocol,
         "kind": "nowcast",
         "bridge_through": bridge_through,
         "excluded_rows": int(sum(window.excluded for window in windows)),
         "dropped_gap_rows": int(sum(window.dropped_gap_rows for window in windows)),
+        "dropped_gap_rows_train": int(sum(window.dropped_gap_rows_train for window in windows)),
+        "daily_coverage": daily_coverage(daily_K),
         "skipped_windows": skipped,
         "pit_hist": pit_histograms(rows, models),
-        "saved_model": None if last_net is None else _saved_model("nowcast", last_window),
+        "saved_model": saved,
         "first_print_summary": _nowcast_summary(rows[rows["target_month"].isin(genuine)], models),
     }
     return rows, _nowcast_summary(rows, models), extras
 
 
-def nowcast_win(summary, first_print_summary) -> tuple[bool, str]:
-    """(True, "") when nn wins on both tables, else (False, why); a table may be records."""
-    nn, bridge = _by_checkpoint(summary, "nn"), _by_checkpoint(summary, "bridge")
+def nowcast_win(summary, first_print_summary) -> tuple[bool | None, str]:
+    """(True, "") when nn wins on both tables, (False, why), (None, why) unpaired; or records."""
+    nn, bridge = _by_key(summary, "nn", "checkpoint"), _by_key(summary, "bridge", "checkpoint")
     if nn.empty or bridge.empty:
         return False, "the summary needs both nn and bridge rows"
+    unpaired = _unpaired(nn, bridge, WIN_CHECKPOINTS, "bridge", "rows at ")
+    if unpaired:
+        return None, unpaired
     for checkpoint in WIN_CHECKPOINTS:
         if not _beats(nn, bridge, checkpoint):
             return False, f"nn does not beat bridge at {checkpoint}"
-    first_nn = _by_checkpoint(first_print_summary, "nn")
-    first_bridge = _by_checkpoint(first_print_summary, "bridge")
-    for checkpoint in WIN_CHECKPOINTS:
-        enough = min(_rows_at(first_nn, checkpoint), _rows_at(first_bridge, checkpoint))
-        if enough >= FIRST_PRINT_MIN_ROWS and not _beats(first_nn, first_bridge, checkpoint):
+    first_nn = _by_key(first_print_summary, "nn", "checkpoint")
+    first_bridge = _by_key(first_print_summary, "bridge", "checkpoint")
+    read = [
+        checkpoint
+        for checkpoint in WIN_CHECKPOINTS
+        if min(_rows_at(first_nn, checkpoint), _rows_at(first_bridge, checkpoint))
+        >= FIRST_PRINT_MIN_ROWS
+    ]
+    unpaired = _unpaired(first_nn, first_bridge, read, "bridge", "first print rows at ")
+    if unpaired:
+        return None, unpaired
+    for checkpoint in read:
+        if not _beats(first_nn, first_bridge, checkpoint):
             return False, f"first print table disagrees at {checkpoint}"
     return True, ""
 
@@ -232,12 +249,13 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
     if model_dir is not None and last_net is not None:
         last_net.save(model_dir)
     rows = pd.concat(blocks, ignore_index=True) if blocks else _empty_rows(models)
+    saved = None if last_net is None else _saved_model("seasonal", last_window, "strict")
     extras = {
         "protocol": "strict",
         "excluded_rows": int(sum(window.excluded for window in windows)),
         "skipped_windows": skipped,
         "pit_hist": pit_histograms(rows, models),
-        "saved_model": None if last_net is None else _saved_model("seasonal", last_window),
+        "saved_model": saved,
     }
     summary = summarise(
         rows, models, key="lead_month", key_values=LEADS, references=SEASONAL_REFERENCES
@@ -245,10 +263,11 @@ def _run_strict(inputs, ledger, cfg: SeasonalRun, model_dir: Path | None):
     return rows, summary, extras
 
 
-def _saved_model(kind: str, window) -> dict:
-    """Where the saved network came from: its test year, the labels it saw and its bridge."""
+def _saved_model(kind: str, window, protocol: str) -> dict:
+    """Where the saved network came from: its protocol, test year, labels seen and its bridge."""
     return {
         "kind": kind,
+        "protocol": protocol,
         "test_year": window.test_year,
         "labels_through": f"{window.test_year - 1}-12",
         "bridge": window.bridge.params,
@@ -407,18 +426,31 @@ def _nowcast_summary(rows: pd.DataFrame, models) -> pd.DataFrame:
     )
 
 
-def _by_checkpoint(summary, model: str) -> pd.DataFrame:
-    """The model's summary rows indexed by checkpoint, scores as numbers; empty without any."""
+def _by_key(summary, model: str, key: str) -> pd.DataFrame:
+    """The model's summary rows indexed by the key, scores as numbers; empty without any."""
     frame = pd.DataFrame(summary)
     if "model" not in frame:
         return pd.DataFrame()
-    part = frame[frame["model"] == model].set_index("checkpoint")
-    scores = pd.to_numeric(part["crps"], errors="coerce")
-    return part.assign(crps=scores, n=pd.to_numeric(part["n"], errors="coerce").fillna(0))
+    part = frame[frame["model"] == model].set_index(key)
+    numbers = {
+        column: pd.to_numeric(part[column], errors="coerce")
+        for column in ("crps", "cover50", "cover90")
+        if column in part
+    }
+    return part.assign(**numbers, n=pd.to_numeric(part["n"], errors="coerce").fillna(0))
 
 
-def _rows_at(by_checkpoint: pd.DataFrame, checkpoint: str) -> int:
-    return int(by_checkpoint.at[checkpoint, "n"]) if checkpoint in by_checkpoint.index else 0
+def _rows_at(by_key: pd.DataFrame, key) -> int:
+    return int(by_key.at[key, "n"]) if key in by_key.index else 0
+
+
+def _unpaired(nn: pd.DataFrame, other: pd.DataFrame, keys, name: str, where: str) -> str:
+    """Why nn and the other model are not scored on as many rows at every key; '' when they are."""
+    for key in keys:
+        n_nn, n_other = _rows_at(nn, key), _rows_at(other, key)
+        if n_nn != n_other:
+            return f"unpaired {where}{key}: nn has {n_nn}, {name} {n_other}"
+    return ""
 
 
 def _beats(nn: pd.DataFrame, bridge: pd.DataFrame, checkpoint: str) -> bool:

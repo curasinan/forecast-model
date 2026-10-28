@@ -172,6 +172,38 @@ def test_a_gap_day_drops_the_rows_that_see_it_from_the_training_set_and_counts_t
     assert window.train.index.tolist() == list(range(len(window.train)))  # rows were dropped
 
 
+def test_a_window_counts_the_training_rows_it_drops_for_a_gap(inputs):
+    daily_K, noaa_C, seas5, ledger = inputs
+    gappy = daily_K.drop(pd.Timestamp("2008-05-04"))
+    (window,) = _windows((gappy, noaa_C, seas5, ledger), 2010, 2010)
+    assert window.dropped_gap_rows_train == 8  # every 2008-05 checkpoint that sees May 4
+    assert window.dropped_gap_rows == 0  # no test row sees the hole
+    (clean,) = _windows(inputs, 2010, 2010)
+    assert clean.dropped_gap_rows_train == 0
+    assert len(clean.train) - len(window.train) == 8
+
+
+def test_the_run_sums_the_dropped_training_rows_and_states_the_daily_coverage(inputs):
+    daily_K, noaa_C, seas5, ledger = inputs
+    gappy = daily_K.drop([pd.Timestamp("2009-05-04"), pd.Timestamp("2009-05-05")])
+    rows, summary, extras = run_nowcast(gappy, noaa_C, seas5, ledger, _cfg(BASELINES, 2010, 2011))
+    assert extras["dropped_gap_rows"] == 0 and extras["dropped_gap_rows_train"] == 16
+    assert extras["daily_coverage"] == {
+        "first_day": "2000-01-01",
+        "last_day": "2011-12-31",
+        "missing_days": 2,
+    }
+
+
+def test_a_day_without_a_finite_value_is_missing_from_the_coverage(inputs):
+    daily_K, noaa_C, seas5, ledger = inputs
+    holed = daily_K.copy()
+    holed[pd.Timestamp("2011-03-03")] = np.nan
+    rows, summary, extras = run_nowcast(holed, noaa_C, seas5, ledger, _cfg(BASELINES, 2011, 2011))
+    assert extras["daily_coverage"]["missing_days"] == 1
+    assert extras["dropped_gap_rows"] == 8  # every 2011-03 checkpoint that sees the 3rd
+
+
 def test_the_monthly_means_the_bridge_is_fitted_on_leave_out_the_months_with_a_gap(inputs):
     daily_K, noaa_C, seas5, ledger = inputs
     gappy = daily_K.drop(pd.Timestamp("2008-05-04"))
@@ -376,6 +408,12 @@ def test_the_extras_name_the_protocol_the_kind_and_what_was_dropped_or_skipped(b
     assert extras["protocol"] == "strict" and extras["kind"] == "nowcast"
     assert extras["saved_model"] is None  # no network in the run
     assert extras["bridge_through"] is None and extras["dropped_gap_rows"] == 0
+    assert extras["dropped_gap_rows_train"] == 0
+    assert extras["daily_coverage"] == {
+        "first_day": "2000-01-01",
+        "last_day": "2011-12-31",
+        "missing_days": 0,
+    }
     assert extras["excluded_rows"] == 4 and extras["skipped_windows"] == []
     assert set(extras) >= {"first_print_summary", "pit_hist"}
 
@@ -569,10 +607,12 @@ def test_the_saved_network_is_the_last_scored_windows_when_a_later_year_is_skipp
     (window,) = _windows(inputs, 2011, 2011)
     assert saved["bridge"] == window.bridge.params and set(saved) == {
         "kind",
+        "protocol",
         "test_year",
         "labels_through",
         "bridge",
     }
+    assert saved["protocol"] == "strict"
 
 
 def test_the_saved_model_of_a_frozen_run_names_the_bridge_it_was_built_with(inputs):
@@ -582,6 +622,7 @@ def test_the_saved_model_of_a_frozen_run_names_the_bridge_it_was_built_with(inpu
     saved = extras["saved_model"]
     assert saved["test_year"] == 2011 and saved["labels_through"] == "2010-12"
     assert saved["bridge"]["fit_end"] == "2011-11"  # the network's labels end earlier
+    assert saved["protocol"] == "frozen"
 
 
 def test_the_network_is_built_with_the_seeds_width_and_device_of_the_run(inputs, monkeypatch):
@@ -730,10 +771,36 @@ def test_a_json_null_in_the_records_is_a_missing_score_and_nothing_is_a_missing_
     for record in unscored:
         if record["model"] == "nn":
             record["crps"], record["n"] = None, 0  # a network without a single score
-    assert nowcast_win(unscored, []) == (False, "nn does not beat bridge at 10")
+    unpaired = (None, "unpaired rows at 10: nn has 0, bridge 30")
+    assert nowcast_win(unscored, []) == unpaired
     for record in unscored:
         record["crps"] = None  # not a single score in the whole table
-    assert nowcast_win(unscored, []) == (False, "nn does not beat bridge at 10")
+    assert nowcast_win(unscored, []) == unpaired
+
+
+def test_an_unpaired_win_checkpoint_gives_no_verdict_and_names_it_with_both_counts():
+    summary = _summary(WIN_CHECKPOINTS)
+    summary.loc[(summary.model == "nn") & (summary.checkpoint == "20"), "n"] = 29
+    assert nowcast_win(summary, _empty_summary()) == (
+        None,
+        "unpaired rows at 20: nn has 29, bridge 30",
+    )
+    assert nowcast_win(summary.to_dict("records"), []) == nowcast_win(summary, _empty_summary())
+    outside = _summary(WIN_CHECKPOINTS)
+    outside.loc[(outside.model == "nn") & (outside.checkpoint == "+6"), "n"] = 29
+    assert nowcast_win(outside, _empty_summary()) == (True, "")  # +6 is not a win checkpoint
+
+
+def test_an_unpaired_first_print_checkpoint_the_rule_reads_gives_no_verdict():
+    first = _summary(WIN_CHECKPOINTS, n=4)
+    first.loc[(first.model == "nn") & (first.checkpoint == "15"), "n"] = 3
+    assert nowcast_win(_summary(WIN_CHECKPOINTS), first) == (
+        None,
+        "unpaired first print rows at 15: nn has 3, bridge 4",
+    )
+    unread = _summary(WIN_CHECKPOINTS, n=3)
+    unread.loc[(unread.model == "nn") & (unread.checkpoint == "15"), "n"] = 2  # fewer than 3
+    assert nowcast_win(_summary(WIN_CHECKPOINTS), unread) == (True, "")
     assert nowcast_win([], []) == (False, "the summary needs both nn and bridge rows")
 
 

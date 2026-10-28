@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from climate.nn.availability import genuine_first_print_months
 from climate.nn.benchmark import (
     COVER50_BAND,
     COVER90_BAND,
@@ -34,10 +35,6 @@ NOWCAST_COMPARE_CELLS = (
     ("25", "bridge"),
     ("+3", "nn"),
     ("+3", "bridge"),
-)
-LABEL_NOTE = (
-    "Labels are NOAA's current vintage for history (genuine first prints exist only since "
-    "2026-08), so a score carries a revision of a few hundredths of a degree."
 )
 PROTOCOL_NOTES = {
     "strict": (
@@ -78,6 +75,20 @@ FIRST_PRINT_NOTE = (
     "Months whose first print was seen live, scored against that first print. The win rule reads "
     f"this table at a checkpoint only where it has at least {FIRST_PRINT_MIN_ROWS} rows."
 )
+
+
+def label_note(ledger: pd.DataFrame | None) -> str:
+    """The vintage note of the score tables, naming the ledger's first genuine first print."""
+    months = genuine_first_print_months(ledger) if ledger is not None else set()
+    since = (
+        f"genuine first prints exist only since {min(months)}"
+        if months
+        else "the ledger holds no genuine first print"
+    )
+    return (
+        f"Labels are NOAA's current vintage for history ({since}), "
+        "so a score carries later revisions."
+    )
 
 
 # run directories
@@ -189,23 +200,29 @@ def _rule_line() -> str:
     )
 
 
-def _verdict_line(win: tuple[bool, str] | None) -> str:
+def _verdict_line(win: tuple[bool | None, str] | None) -> str:
     if win is None:
         return "Verdict: none (judged only on a strict run of the network and its baseline)"
     ok, why = win
+    if ok is None:
+        return f"Verdict: none ({why})"
     return "Verdict: win" if ok else f"Verdict: no win ({why})"
 
 
 def render_seasonal_report(
-    summary: pd.DataFrame, extras: dict, win: tuple[bool, str] | None
+    summary: pd.DataFrame,
+    extras: dict,
+    win: tuple[bool | None, str] | None,
+    *,
+    ledger: pd.DataFrame | None = None,
 ) -> str:
     """The markdown report of a seasonal run; win None says that no verdict was asked for."""
-    protocol = extras["protocol"]
+    protocol, note = extras["protocol"], label_note(ledger)
     lines = [f"# GTM seasonal benchmark: {protocol} protocol", ""]
     if protocol in PROTOCOL_NOTES:
         lines += [PROTOCOL_NOTES[protocol], ""]
     lines += [_rule_line(), "", _verdict_line(win), ""]
-    lines += ["## CRPS and calibration by model and lead", "", LABEL_NOTE, ""]
+    lines += ["## CRPS and calibration by model and lead", "", note, ""]
     header = ["model", "lead", "n", "CRPS", "skill vs trend", "skill vs emos", "cover50", "cover90"]
     body = [
         [
@@ -225,17 +242,17 @@ def render_seasonal_report(
         lines += [f"Rows excluded by the strict rule: {extras['excluded_rows']}", ""]
     skipped = extras.get("skipped_windows") or []
     lines += ["Test years skipped: " + (", ".join(str(year) for year in skipped) or "none"), ""]
-    return "\n".join([*lines, *_pit_lines(extras, "all leads")])
+    return "\n".join([*lines, *_pit_lines(extras, "all leads", note)])
 
 
-def _pit_lines(extras: dict, scope: str) -> list[str]:
+def _pit_lines(extras: dict, scope: str, note: str) -> list[str]:
     """The PIT section of a report: a row of bin frequencies per model; none without them."""
     pit = extras.get("pit_hist") or {}
     if not pit:
         return []
     edges = [f"{k / PIT_BINS:.1f}-{(k + 1) / PIT_BINS:.1f}" for k in range(PIT_BINS)]
     body = [[name, *(_fmt(freq, 3) for freq in freqs)] for name, freqs in pit.items()]
-    lines = [f"## PIT histogram ({scope}, {PIT_BINS} bins)", "", LABEL_NOTE, ""]
+    lines = [f"## PIT histogram ({scope}, {PIT_BINS} bins)", "", note, ""]
     return [*lines, *_table(["model", *edges], body), ""]
 
 
@@ -264,15 +281,21 @@ def _nowcast_table(summary: pd.DataFrame) -> list[str]:
     return _table(header, body)
 
 
-def render_nowcast_report(summary: pd.DataFrame, extras: dict, win: tuple[bool, str] | None) -> str:
+def render_nowcast_report(
+    summary: pd.DataFrame,
+    extras: dict,
+    win: tuple[bool | None, str] | None,
+    *,
+    ledger: pd.DataFrame | None = None,
+) -> str:
     """The markdown report of a nowcast run; win None says that no verdict was asked for."""
-    protocol = extras["protocol"]
+    protocol, note = extras["protocol"], label_note(ledger)
     lines = [f"# GTM nowcast benchmark: {protocol} protocol", ""]
     if protocol in NOWCAST_NOTES:
         lines += [NOWCAST_NOTES[protocol].format(bridge_through=extras.get("bridge_through")), ""]
     lines += [_nowcast_rule_line(), "", _verdict_line(win), ""]
     lines += [PERSISTENCE_NOTE, "", CHECKPOINT_5_NOTE, ""]
-    lines += ["## CRPS and calibration by model and checkpoint", "", LABEL_NOTE, ""]
+    lines += ["## CRPS and calibration by model and checkpoint", "", note, ""]
     lines += [*_nowcast_table(summary), ""]
     first = extras.get("first_print_summary")
     first = pd.DataFrame() if first is None else pd.DataFrame(first)
@@ -287,9 +310,23 @@ def render_nowcast_report(summary: pd.DataFrame, extras: dict, win: tuple[bool, 
         dropped = extras["dropped_gap_rows"]
         what = "a missing ERA5 day (a gap, or a checkpoint after the series ends)"
         lines += [f"Test rows dropped for {what}: {dropped}", ""]
+    if "dropped_gap_rows_train" in extras:
+        trained = extras["dropped_gap_rows_train"]
+        where = "in every window that trains on them"
+        lines += [f"Training rows dropped for a missing ERA5 day, {where}: {trained}", ""]
+    if "daily_coverage" in extras:
+        lines += [_coverage_line(extras["daily_coverage"]), ""]
     skipped = extras.get("skipped_windows") or []
     lines += ["Test years skipped: " + (", ".join(str(year) for year in skipped) or "none"), ""]
-    return "\n".join([*lines, *_pit_lines(extras, "all checkpoints")])
+    return "\n".join([*lines, *_pit_lines(extras, "all checkpoints", note)])
+
+
+def _coverage_line(coverage: dict) -> str:
+    """The span of the daily series and the days missing inside it."""
+    if coverage.get("first_day") is None:
+        return "Daily ERA5 series: empty"
+    span = f"{coverage['first_day']} to {coverage['last_day']}"
+    return f"Daily ERA5 series: {span}, {coverage['missing_days']} day(s) missing in between"
 
 
 # compare
@@ -299,6 +336,8 @@ def _win_cell(win) -> str:
     if win is None:
         return "-"
     ok, why = (win, "") if isinstance(win, bool) else win
+    if ok is None:
+        return "-"
     if ok:
         return "yes"
     return f"no: {why}" if why else "no"

@@ -21,19 +21,13 @@ from climate.nn.benchmark import (  # noqa: E402
 )
 from climate.nn.leakage import LeakageError  # noqa: E402
 from climate.nn.nowcast import load_daily  # noqa: E402
-from climate.nn.nowcast_windows import MONTH, WindowError  # noqa: E402
+from climate.nn.nowcast_windows import WindowError  # noqa: E402
 from climate.nn.report import render_nowcast_report  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.storage import ledger_path, load_ledger  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
 
 DEFAULT_MODELS = "nn,bridge,persistence"
-
-
-def _month(text: str) -> str:
-    if MONTH.fullmatch(text) is None:
-        raise argparse.ArgumentTypeError(f"a month as YYYY-MM, got {text!r}")
-    return text
 
 
 def _models(models: tuple[str, ...]) -> tuple[str, ...]:
@@ -54,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bridge-through",
-        type=_month,
+        type=nn_cli.month_text,
         default=None,
         help="fit one bridge through this month (YYYY-MM) for every window: a frozen variant "
         "that is never the headline and records no verdict",
@@ -71,7 +65,7 @@ def _read_inputs(root: Path):
         if noaa_C.empty:
             raise FileNotFoundError(f"no gtm labels in {ledger_path(root)}")
         return daily_K, noaa_C, seas5, load_ledger(root)
-    except OSError as exc:
+    except (OSError, ValueError, KeyError) as exc:
         raise nn_cli.UsageError(f"cannot read the research inputs under {root}: {exc}") from exc
 
 
@@ -102,7 +96,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             raise nn_cli.UsageError("no test row could be scored: check --root and the test years")
         judged = args.bridge_through is None and {"nn", "bridge"} <= set(models)
         win = nowcast_win(summary, extras["first_print_summary"]) if judged else None
-        report_md = render_nowcast_report(summary, extras, win)
+        report_md = render_nowcast_report(summary, extras, win, ledger=ledger)
         config = nn_cli.base_config(
             args,
             kind="nowcast",

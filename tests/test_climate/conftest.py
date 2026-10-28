@@ -120,6 +120,7 @@ def saved_nowcast_model(tmp_path_factory):
     _quick_fit(GtmNowcastModel(seeds=(0,), hidden=8), rows).save(model_dir)
     provenance = {
         "kind": "nowcast",
+        "protocol": "strict",
         "test_year": 2011,
         "labels_through": "2010-12",
         "bridge": bridge.params,
@@ -152,6 +153,7 @@ def saved_models(tmp_path_factory):
     _quick_fit(GtmNnModel(seeds=(0,), hidden=8), rows).save(nn_dir)
     provenance = {
         "kind": "seasonal",
+        "protocol": "strict",
         "test_year": 2012,
         "labels_through": "2011-12",
         "bridge": bridge.params,
