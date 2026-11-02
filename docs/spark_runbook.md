@@ -741,46 +741,72 @@ check (most often: the LLM is still loaded).
 The GTM research package is `climate/nn/`: neural post-processing of SEAS5
 and a nowcast of the running month, benchmark only; nothing in it is wired
 into the paper loop. Its data root is `~/data/gtm_research/climate_data`,
-never the mirror and never the live root. Set it as `CLIMATE_DATA_ROOT` or
-pass it as `--root`: with neither, the scripts use the mirror.
-`gtm_nn_fetch.py` writes under the root and refuses a mirror root (exit 2);
-the benchmarks and the payload and pricing scripts only read it.
+never the mirror and never the live root. Pass it as `--root`, or set
+`CLIMATE_DATA_ROOT` for the one command: with neither, the scripts use the
+mirror. `gtm_nn_fetch.py` writes under the root and refuses a mirror root
+(exit 2); the benchmarks and the payload and pricing scripts only read it.
 
 In `scripts/research/`, `gtm_nn_fetch.py` fetches daily ERA5 into
-`reference/era5_daily_global_mean.parquet`. It needs `~/.cdsapirc` for
-`scura`; the monthly ritual is
-`--refresh --months <previous month>..<current month>`. `gtm_nn_benchmark.py`
-is the seasonal strict run against EMOS, `gtm_nn_compare.py` tabulates run
-directories of one kind with the verdict, `gtm_nowcast_benchmark.py` is the
-nowcast strict run against the bridge, `gtm_nowcast.py` prints the payload of
-one as-of, and `gtm_nn_price.py` prices a strike ladder with EMOS and the
-seasonal network side by side. The four that run a network share
-`scripts/research/nn_cli.py`: torch check, device rule, run directories,
-as-of parsing, provenance read.
+`reference/era5_daily_global_mean.parquet` and needs `~/.cdsapirc` for
+`scura`. `gtm_nn_benchmark.py` is the seasonal strict run against EMOS,
+`gtm_nn_compare.py` tabulates run directories of one kind with the verdict,
+`gtm_nowcast_benchmark.py` is the nowcast strict run against the bridge,
+`gtm_nowcast.py` prints the payload of one as-of, and `gtm_nn_price.py`
+prices a strike ladder with EMOS and the seasonal network side by side. The
+four that run a network share `scripts/research/nn_cli.py`: torch check,
+device rule, run directories, as-of parsing, provenance read.
+
+Run the scripts as `scura` from the research clone, through the launcher,
+with the torch venv, `~/work/wx-dl/.venv` (the clone's own `.venv` has no
+torch). A benchmark's own `--gpu-budget` (GiB, at most the launcher's) is what
+puts its network on the GPU; the payload and pricing scripts run on the CPU
+and take none. The torch tests run in the same venv:
+
+    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root ~/data/gtm_research/climate_data --gpu-budget 20
+    ~/work/wx-dl/.venv/bin/python -m pytest tests/test_climate tests/test_architecture -q -p no:cacheprovider
+
+The first fetch is a one-month pilot; check that the file it delivers under
+the root, `raw/era5_2025-12_t2m_6hourly.nc`, is a netCDF of 181 by 360 points
+with four steps a day, then fetch the years and the 2026 months together in
+tmux with a long `--soft-timeout` (without the 2026 months a payload exits 2):
+
+    bash scripts/spark/research_run.sh -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_fetch.py --root ~/data/gtm_research/climate_data --months 2025-12 --today <today>
+    bash scripts/spark/research_run.sh -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_fetch.py --root ~/data/gtm_research/climate_data --years 1993-2025 --months 2026-01..<current month> --soft-timeout 86400
+
+The daily refresh is run on the day of a payload, not once a month, as
+`--refresh --months <previous month>..<current month>`. Before a payload or a
+pricing run, refresh the daily series, then copy the current
+`forecasts/seas5_global_mean.parquet` and `labels/labels_ledger.parquet` from
+the mirror (section 7.6) into the research root; the EMOS column of the
+pricing script matches the paper loop only while those copies are current.
 
 A run directory holds `config.json`, `metrics.json`, `report.md`,
 `rows.parquet` and, when the network ran, `weights/` with
-`weights/provenance.json` (`kind`, `test_year`, `labels_through`, the bridge
-parameters). The payload scripts rebuild their inputs from that file, so a
-model directory is always the `weights/` of a strict run.
+`weights/provenance.json` (`kind`, `protocol`, `test_year`, `labels_through`,
+the bridge parameters). The payload scripts rebuild their inputs from that
+file, so a model directory is always the `weights/` of a strict run, and the
+scripts refuse any other (`--bridge-through` runs save weights too).
 
-The payload of `gtm_nowcast.py` is `usable` only when the daily series has
-every public day of the month so far (ERA5 lags five days), no input of the
-network is missing, and the as-of is at or after 00:00 UTC of the 10th of the
-target month, the first scored checkpoint. Before that it still prints the
-payload (and writes `--out`) and exits 3, as for any unusable one; exit 2 is
-a usage error (a month not started, a month whose public days the series
-lacks, torch missing). The network is trained and scored only at the nine
-checkpoints, so an as-of between two of them interpolates in the fraction of
-days used, and `usable` does not mean calibrated there.
+The nowcast decides at nine checkpoints, 00:00 UTC on the 5th, 10th, 15th,
+20th and 25th of the target month and 1, 3, 6 and 10 days after its last
+day: nine are decided and eight scored, as the 5th sees no day (ERA5 lags
+five days). The payload of `gtm_nowcast.py` is `usable` only when the daily
+series has every public day of the month so far, no input of the network is
+missing, the research root holds the SEAS5 init the as-of should see (init m
+of target month m from the 13th at 12:00 UTC, else m-1) and the as-of has
+reached checkpoint 10, the first scored one. Otherwise it still prints the
+payload (and writes `--out`), names the file to copy when an input is stale
+and exits 3. Exit 2 is a usage error: a month not started, a month of which
+the series holds no day although ERA5 has published some, torch missing.
+From +1 to +10 the payload needs `--target-month <previous month>`; the
+default is the as-of month.
+`last_era5_day` is the last day public by the lag rule, not the last day the
+series holds; the two can differ only when `gap_days` is above 0. The network
+is trained and scored only at the nine checkpoints, so an as-of between two
+of them interpolates in the fraction of days used, and `usable` does not mean
+calibrated there. `gtm_nn_price.py` exits 0, 3 or 2: on a stale init it still
+prints the table, names the stale and the expected init and exits 3.
 
-Run the scripts as `scura` from the research clone, through the launcher,
-with the research venv. A benchmark's own `--gpu-budget` (GiB, at most the
-launcher's) is what puts its network on the GPU; the payload and pricing
-scripts run on the CPU and take none:
-
-    bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root ~/data/gtm_research/climate_data --gpu-budget 20
-
-The torch tests run in that venv:
-
-    ~/work/wx-dl/.venv/bin/python -m pytest tests/test_climate tests/test_architecture -q -p no:cacheprovider
+Two late NOAA prints are overridden in `climate/nn/availability.py`: December
+2018 (printed 2019-02-06, after the shutdown) and September 2024 (printed
+2024-10-24, after Hurricane Helene); a later one goes in that map once known.
