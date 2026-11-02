@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from functools import partial
 
 import numpy as np
@@ -14,6 +15,36 @@ from climate.paths import ENV_VAR
 from climate.reduce import ERA5_PARQUET, SEAS5_PARQUET
 from climate.storage import append_observations, ledger_path
 from tests.test_climate import nn_fixtures
+
+# the first lines of a child interpreter without torch: argv[1] is the checkout, imports follow
+BLOCK_TORCH = """
+import sys
+sys.path.insert(0, sys.argv[1])
+
+
+class BlockTorch:
+    def find_spec(self, name, path=None, target=None):
+        if name == "torch" or name.startswith("torch."):
+            raise ModuleNotFoundError("torch is blocked", name=name)
+
+
+sys.meta_path.insert(0, BlockTorch())
+"""
+
+
+class _BlockTorch:
+    """A meta-path finder that makes `import torch` fail as on a machine without it."""
+
+    def find_spec(self, name, path=None, target=None):
+        if name == "torch" or name.startswith("torch."):
+            raise ModuleNotFoundError("torch is blocked", name=name)
+
+
+@pytest.fixture
+def no_torch(monkeypatch):
+    """A machine without torch: the import machinery refuses it, whatever was imported before."""
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BlockTorch(), *sys.meta_path])
 
 
 @pytest.fixture

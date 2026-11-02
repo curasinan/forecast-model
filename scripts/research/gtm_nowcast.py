@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -16,13 +17,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from climate.dataset import load_noaa_gtm, load_seas5  # noqa: E402
-from climate.nn.availability import last_era5_day_for  # noqa: E402
+from climate.dataset import load_seas5  # noqa: E402
+from climate.nn.availability import last_era5_day_for, seas5_available_on  # noqa: E402
 from climate.nn.features import seasonal_frame  # noqa: E402
-from climate.nn.nowcast import load_daily, nowcast_payload, nowcast_row  # noqa: E402
+from climate.nn.nowcast import (  # noqa: E402
+    CHECKPOINTS,
+    expected_seas_init,
+    load_daily,
+    missing_label,
+    nowcast_payload,
+    nowcast_row,
+)
 from climate.nn.nowcast_model import GtmNowcastModel  # noqa: E402
 from climate.nn.nowcast_windows import monthly_means  # noqa: E402
 from climate.paths import root_path  # noqa: E402
+from climate.reduce import SEAS5_PARQUET  # noqa: E402
 from climate.storage import ledger_path, load_ledger  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
 
@@ -58,22 +67,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_inputs(root: Path):
-    """The daily ERA5 series, the labels, the SEAS5 members and the labels ledger under root."""
-    try:
-        daily_K = load_daily(root)
-        seas5 = load_seas5(root)
-        noaa_C = load_noaa_gtm(root)
-        ledger = load_ledger(root)
-    except (OSError, ValueError, KeyError) as exc:
-        raise nn_cli.UsageError(f"cannot read the research inputs under {root}: {exc}") from exc
-    if noaa_C.empty:
-        raise nn_cli.UsageError(f"no gtm labels in {ledger_path(root)}")
-    if daily_K.empty:
-        raise nn_cli.UsageError(f"the daily ERA5 series under {root} is empty")
-    return daily_K, noaa_C, seas5, ledger
-
-
 def _require_days(daily_K: pd.Series, month: str, as_of: datetime) -> None:
     """UsageError for a month not under way, or one with published days that the series lacks."""
     period = pd.Period(month, freq="M")
@@ -100,33 +93,63 @@ def _require_days(daily_K: pd.Series, month: str, as_of: datetime) -> None:
     raise nn_cli.UsageError(f"the daily series has no day of target month {month}")
 
 
-def _reason(payload: dict) -> str:
-    """One line on why the payload cannot be used."""
+def _reason(
+    payload: dict, *, as_of: datetime, root: Path, noaa_C: pd.Series, ledger: pd.DataFrame
+) -> str:
+    """One line on why the payload cannot be used; a stale input names the file to copy."""
+    month = payload["target_month"]
     if payload["gap_days"]:
         return (
-            f"not usable: {payload['gap_days']} public day(s) of {payload['target_month']} "
+            f"not usable: {payload['gap_days']} public day(s) of {month} "
             "are missing from the daily series"
         )
     if payload["days_used"] == 0:
-        return f"not usable: no day of {payload['target_month']} is public yet"
-    if payload["checkpoint"] == "5":
+        return f"not usable: no day of {month} is public yet"
+    if payload["checkpoint"] == CHECKPOINTS[0]:
         return (
             f"not usable: checkpoint 10 not reached, {payload['days_used']} day(s) used; "
             "the network trained on 5 or more"
+        )
+    expected = expected_seas_init(month, as_of)
+    if payload["seas_init"] != expected:
+        since = seas5_available_on(expected).strftime(nn_cli.ISO_UTC)
+        return (
+            f"not usable: seas_init {payload['seas_init'] or '(none)'} is stale, init {expected} "
+            f"has been public since {since}: copy the current {'/'.join(SEAS5_PARQUET)} "
+            f"from the mirror into {root}"
+        )
+    missing = missing_label(noaa_C, ledger, target_month=month, decision=as_of)
+    if missing is not None:
+        period, printed = missing
+        labels = ledger_path(root).relative_to(root).as_posix()
+        return (
+            f"not usable: the labels ledger under {root} lacks {period}, printed since "
+            f"{printed.strftime(nn_cli.ISO_UTC)}: copy the current {labels} from the mirror"
         )
     return "not usable: an input of the network is missing (see seas_init and prev_label_month)"
 
 
 def _write(path: Path, text: str) -> None:
-    """Write text through a temporary file beside path; the old file stays whole until the swap."""
-    tmp = path.with_name(path.name + ".tmp")
+    """Write text through a temporary file of its own beside path; the old one stays whole."""
+    tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(text + "\n", encoding="utf-8", newline="\n")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+            newline="\n",
+        ) as handle:
+            tmp = Path(handle.name)
+            handle.write(text + "\n")
         os.replace(tmp, path)
     except OSError as exc:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         raise nn_cli.UsageError(f"cannot write {path}: {exc}") from exc
 
 
@@ -139,7 +162,9 @@ def _nowcast(args: argparse.Namespace) -> int:
     bridge = nn_cli.bridge_of(provenance, model_dir)
     model = nn_cli.load_model(GtmNowcastModel, model_dir)
     root = root_path(args.root)
-    daily_K, noaa_C, seas5, ledger = _read_inputs(root)
+    daily_K, seas5, ledger, noaa_C = nn_cli.read_inputs(root, load_daily, load_seas5, load_ledger)
+    if daily_K.empty:
+        raise nn_cli.UsageError(f"the daily ERA5 series under {root} is empty")
     try:
         _require_days(daily_K, month, as_of)
         seasonal = seasonal_frame(seas5, monthly_means(daily_K), noaa_C, bridge=bridge)
@@ -152,7 +177,7 @@ def _nowcast(args: argparse.Namespace) -> int:
             target_month=month,
             decision=as_of,
         )
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         raise nn_cli.UsageError(f"cannot build the nowcast inputs from {root}: {exc}") from exc
     prediction = model.predict(pd.DataFrame([row])).iloc[0]
     fingerprint = model.fingerprint()
@@ -165,7 +190,8 @@ def _nowcast(args: argparse.Namespace) -> int:
     print(text)
     print(f"nowcast model {fingerprint} {nn_cli.training_note(provenance)}", file=sys.stderr)
     if not payload["usable"]:
-        print(_reason(payload), file=sys.stderr)
+        reason = _reason(payload, as_of=as_of, root=root, noaa_C=noaa_C, ledger=ledger)
+        print(reason, file=sys.stderr)
     return 0 if payload["usable"] else 3
 
 

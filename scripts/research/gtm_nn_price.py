@@ -14,18 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from climate.dataset import (  # noqa: E402
-    build_frame_from_inputs,
-    load_era5,
-    load_noaa_gtm,
-    load_seas5,
-)
+from climate.dataset import build_frame_from_inputs, load_era5, load_seas5  # noqa: E402
 from climate.emos import EmosModel  # noqa: E402
 from climate.ladder import p_yes  # noqa: E402
+from climate.nn.availability import seas5_available_on  # noqa: E402
 from climate.nn.features import seasonal_frame  # noqa: E402
+from climate.nn.nowcast import expected_seas_init  # noqa: E402
 from climate.nn.seasonal_model import GtmNnModel  # noqa: E402
 from climate.paths import root_path  # noqa: E402
-from climate.storage import ledger_path  # noqa: E402
+from climate.reduce import SEAS5_PARQUET  # noqa: E402
 from scripts.research import nn_cli  # noqa: E402
 
 TABLE_HEADER = "strike | p_yes_emos | p_yes_nn"
@@ -72,17 +69,6 @@ def _parser() -> argparse.ArgumentParser:
         help="strikes in degrees C of anomaly, like 1.0 1.1 1.2",
     )
     return parser
-
-
-def _read_inputs(root: Path):
-    """The SEAS5 members, the monthly ERA5 means and the labels under root."""
-    try:
-        seas5, era5_K, noaa_C = load_seas5(root), load_era5(root), load_noaa_gtm(root)
-    except (OSError, ValueError, KeyError) as exc:
-        raise nn_cli.UsageError(f"cannot read the research inputs under {root}: {exc}") from exc
-    if noaa_C.empty:
-        raise nn_cli.UsageError(f"no gtm labels in {ledger_path(root)}")
-    return seas5, era5_K, noaa_C
 
 
 def _load_emos(path: Path) -> EmosModel:
@@ -135,7 +121,8 @@ def _price(args: argparse.Namespace) -> int:
     bridge = nn_cli.bridge_of(provenance, nn_dir)
     net = nn_cli.load_model(GtmNnModel, nn_dir)
     emos = _load_emos(Path(args.emos).expanduser())
-    seas5, era5_K, noaa_C = _read_inputs(root_path(args.root))
+    root = root_path(args.root)
+    seas5, era5_K, noaa_C = nn_cli.read_inputs(root, load_seas5, load_era5)
     month = args.target_month
     try:
         nn_frame = seasonal_frame(seas5, era5_K, noaa_C, bridge=bridge)
@@ -162,6 +149,15 @@ def _price(args: argparse.Namespace) -> int:
     for strike in args.strikes:
         emos_p, nn_p = _cell(emos_gaussian, strike), _cell(nn_gaussian, strike)
         print(f"| {strike!r} | {emos_p} | {nn_p} |")
+    expected = expected_seas_init(month, as_of)
+    if init != expected:
+        since = seas5_available_on(expected).strftime(nn_cli.ISO_UTC)
+        print(
+            f"stale: init {init} is priced, init {expected} has been public since {since}: "
+            f"copy the current {'/'.join(SEAS5_PARQUET)} from the mirror into {root}",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

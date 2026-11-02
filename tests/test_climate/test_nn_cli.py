@@ -24,24 +24,10 @@ from scripts.research.gtm_nn_benchmark import main
 from scripts.research.gtm_nn_compare import main as compare_main
 from scripts.research.gtm_nowcast_benchmark import main as nowcast_main
 from tests.test_climate import nn_fixtures
+from tests.test_climate.conftest import BLOCK_TORCH
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "scripts" / "research"
-
-
-class _BlockTorch:
-    """A meta-path finder that makes `import torch` fail as on a machine without it."""
-
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-@pytest.fixture
-def no_torch(monkeypatch):
-    """A machine without torch: the import machinery refuses it, whatever was imported before."""
-    monkeypatch.delitem(sys.modules, "torch", raising=False)
-    monkeypatch.setattr(sys, "meta_path", [_BlockTorch(), *sys.meta_path])
 
 
 def _args(root, run_dir, *more):
@@ -823,18 +809,7 @@ def test_the_compare_script_prints_the_nowcast_table_and_refuses_to_mix_the_kind
 # process level
 
 
-BLOCK_TORCH = """
-import sys
-sys.path.insert(0, sys.argv[1])
-
-
-class BlockTorch:
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-sys.meta_path.insert(0, BlockTorch())
+IMPORTS = """
 import climate.nn.benchmark
 import climate.nn.nowcast_model
 import climate.nn.nowcast_windows
@@ -849,7 +824,9 @@ import scripts.research.nn_cli
 
 def test_the_modules_and_the_scripts_import_without_torch():
     done = subprocess.run(
-        [sys.executable, "-c", BLOCK_TORCH, str(REPO_ROOT)], capture_output=True, text=True
+        [sys.executable, "-c", BLOCK_TORCH + IMPORTS, str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
     )
     assert done.returncode == 0, done.stderr
 

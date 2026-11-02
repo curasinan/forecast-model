@@ -20,6 +20,7 @@ from climate.nn.nowcast import NOWCAST_FEATURES, nowcast_frame  # noqa: E402
 from climate.nn.nowcast_model import GtmNowcastModel  # noqa: E402
 from climate.nn.seasonal_model import SEEDS, GtmNnModel  # noqa: E402
 from tests.test_climate import nn_fixtures  # noqa: E402
+from tests.test_climate.conftest import BLOCK_TORCH  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LATE = ["20", "25", "+1", "+3"]
@@ -259,25 +260,9 @@ def test_the_network_beats_the_seasonal_forecast_alone_late_in_the_month(frame):
     assert model.crps(test).mean() < 0.7 * seasonal_only
 
 
-BLOCK_TORCH = """
-import sys
-
-sys.path.insert(0, sys.argv[1])
-
-
-class BlockTorch:
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-sys.meta_path.insert(0, BlockTorch())
-import climate.nn.nowcast_model
-"""
-
-
 def test_the_module_imports_without_torch():
+    code = BLOCK_TORCH + "import climate.nn.nowcast_model\n"
     done = subprocess.run(
-        [sys.executable, "-c", BLOCK_TORCH, str(REPO_ROOT)], capture_output=True, text=True
+        [sys.executable, "-c", code, str(REPO_ROOT)], capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr

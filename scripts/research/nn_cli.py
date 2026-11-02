@@ -9,14 +9,18 @@ import pickle
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from analysis.gpu_budget import GpuBudgetError
 from climate.bridge import Bridge
+from climate.dataset import load_noaa_gtm
+from climate.nn.nowcast import ISO_UTC as ISO_UTC  # the scripts take the time format from here
 from climate.nn.nowcast_windows import MONTH
 from climate.nn.report import git_commit, write_provenance, write_run
 from climate.nn.seasonal_model import SEEDS
 from climate.nn.torch_model import configure_device
 from climate.nn.windows import FIRST_TEST_YEAR
+from climate.storage import ledger_path
 
 TORCH_MISSING = (
     'research extra not installed: uv pip install -e ".[climate,research]" into ~/work/wx-dl/.venv'
@@ -31,7 +35,6 @@ LOAD_ERRORS = (
     RuntimeError,
     pickle.UnpicklingError,
 )
-ISO_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
 class UsageError(Exception):
@@ -285,6 +288,18 @@ def bridge_of(provenance: dict, model_dir: Path) -> Bridge:
 def training_note(provenance: dict) -> str:
     """What a saved network saw, for the context line: its labels, from the provenance."""
     return f"trained on labels through {provenance.get('labels_through', 'an unknown month')}"
+
+
+def read_inputs(root: Path, *loaders: Callable[[Path], Any]) -> tuple:
+    """What each loader reads under root, then the gtm labels; UsageError for a bad file or none."""
+    try:
+        found = tuple(load(root) for load in loaders)
+        noaa_C = load_noaa_gtm(root)
+    except (OSError, ValueError, KeyError) as exc:
+        raise UsageError(f"cannot read the research inputs under {root}: {exc}") from exc
+    if noaa_C.empty:
+        raise UsageError(f"no gtm labels in {ledger_path(root)}")
+    return (*found, noaa_C)
 
 
 def load_model(model_class, model_dir: Path):

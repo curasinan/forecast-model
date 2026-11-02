@@ -22,10 +22,12 @@ from climate.emos import EmosModel
 from climate.ladder import p_yes
 from climate.nn.availability import seas5_available_on
 from climate.nn.features import seasonal_frame
+from climate.nn import nowcast
 from climate.nn.nowcast import (
     CHECKPOINTS,
     NOWCAST_COLUMNS,
     checkpoint_decision,
+    expected_seas_init,
     load_daily,
     month_to_date,
     nowcast_frame,
@@ -35,10 +37,12 @@ from climate.nn.nowcast import (
 from climate.nn.nowcast_model import GtmNowcastModel
 from climate.nn.nowcast_windows import monthly_means
 from climate.nn.seasonal_model import GtmNnModel
+from climate.paths import root_path
 from climate.storage import LEDGER_COLUMNS, VINTAGE_LIVE, load_ledger
 from scripts.research import gtm_nn_price, gtm_nowcast, nn_cli
 from scripts.research.gtm_nn_price import main as price_main
 from scripts.research.gtm_nowcast import main as nowcast_main
+from tests.test_climate.conftest import BLOCK_TORCH
 
 UTC = timezone.utc
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -309,6 +313,43 @@ def test_a_missing_seasonal_init_and_previous_label_stay_empty_strings():
     )
     p = nowcast_payload(row, float("nan"), float("nan"), model_fingerprint="abc")
     assert p["seas_init"] == "" and p["prev_label_month"] == ""
+
+
+def test_the_expected_seasonal_init_is_the_latest_released_one_capped_at_the_target():
+    assert expected_seas_init("2026-10", datetime(2026, 10, 12, tzinfo=UTC)) == "2026-09"
+    assert expected_seas_init("2026-10", datetime(2026, 10, 13, 11, 59, 59, tzinfo=UTC)) == (
+        "2026-09"
+    )
+    assert expected_seas_init("2026-10", datetime(2026, 10, 13, 12, tzinfo=UTC)) == "2026-10"
+    zoned = datetime(2026, 10, 13, 13, 59, tzinfo=timezone(timedelta(hours=2)))  # 11:59 UTC
+    assert expected_seas_init("2026-10", zoned) == "2026-09"
+    assert expected_seas_init("2026-12", datetime(2026, 10, 20, tzinfo=UTC)) == "2026-10"
+    assert expected_seas_init("2026-10", datetime(2026, 11, 20, tzinfo=UTC)) == "2026-10"
+
+
+@pytest.mark.parametrize(
+    "inits, decision, usable",
+    [
+        (["2026-09"], datetime(2026, 10, 20, tzinfo=UTC), False),  # October's init is missing
+        (["2026-09", "2026-10"], datetime(2026, 10, 20, tzinfo=UTC), True),
+        (["2026-09"], datetime(2026, 10, 12, tzinfo=UTC), True),  # October's is not out yet
+        (["2026-09", "2026-10"], datetime(2026, 11, 3, tzinfo=UTC), True),
+        (["2026-09"], datetime(2026, 11, 3, tzinfo=UTC), False),
+    ],
+)
+def test_a_payload_is_usable_only_with_the_seasonal_init_its_time_should_see(
+    inits, decision, usable
+):
+    row = nowcast_row(
+        _daily("2026-08-01", "2026-12-31"),
+        _labels("2026-10"),
+        _seasonal(inits, "2026-10"),
+        bridge=_bridge(),
+        target_month="2026-10",
+        decision=decision,
+    )
+    p = nowcast_payload(row, 1.21, 0.04, model_fingerprint="abc")
+    assert p["usable"] is usable and p["gap_days"] == 0 and list(p) == PAYLOAD_KEYS
 
 
 def test_the_payload_converts_a_decision_in_another_zone_to_utc_and_refuses_a_naive_one():
@@ -689,6 +730,77 @@ def test_a_nowcast_is_usable_only_from_checkpoint_10_and_says_why_before_it(
     assert notes[1:] == ([REACHED_10.format(days)] if rc else [])
 
 
+def _without_init(root, init: str) -> None:
+    """The SEAS5 file of the root without the members of one init month."""
+    path = root / "forecasts" / "seas5_global_mean.parquet"
+    stored = pd.read_parquet(path)
+    stored[pd.to_datetime(stored["init_date"]).dt.strftime("%Y-%m") != init].to_parquet(
+        path, index=False
+    )
+
+
+def test_a_root_without_the_current_init_is_not_usable_and_says_which_file_to_copy(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    _without_init(synthetic_root_with_daily, "2011-06")
+    rc, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", "2011-06-20T00:00:00Z"
+    )
+    captured = capsys.readouterr()
+    assert rc == 3 and payload["usable"] is False and payload["seas_init"] == "2011-05"
+    assert np.isfinite(payload["mu"])  # the network answers, from an init it saw only a lead later
+    root = root_path(str(synthetic_root_with_daily))
+    assert captured.err.strip().splitlines()[-1] == (
+        "not usable: seas_init 2011-05 is stale, init 2011-06 has been public since "
+        "2011-06-13T12:00:00Z: copy the current forecasts/seas5_global_mean.parquet from the "
+        f"mirror into {root}"
+    )
+
+
+@pytest.mark.parametrize("dropped", [None, "2011-06"])
+def test_before_the_13th_the_previous_init_is_the_one_expected_and_usable(
+    dropped, tmp_path, synthetic_root_with_daily, saved_nowcast_model
+):
+    if dropped is not None:
+        _without_init(synthetic_root_with_daily, dropped)  # not public on the 12th anyway
+    rc, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", "2011-06-12T00:00:00Z"
+    )
+    assert rc == 0 and payload["usable"] is True and payload["seas_init"] == "2011-05"
+
+
+def test_a_ledger_without_the_previous_label_names_the_month_and_the_file_to_copy(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    path = synthetic_root_with_daily / "labels" / "labels_ledger.parquet"
+    ledger = pd.read_parquet(path)
+    ledger[ledger["period"] <= "2011-04"].to_parquet(path, index=False)  # two months behind
+    rc, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", "2011-06-20T00:00:00Z"
+    )
+    captured = capsys.readouterr()
+    assert rc == 3 and payload["usable"] is False and payload["mu"] is None
+    assert payload["prev_label_month"] == "" and payload["seas_init"] == "2011-06"
+    root = root_path(str(synthetic_root_with_daily))
+    assert captured.err.strip().splitlines()[-1] == (
+        f"not usable: the labels ledger under {root} lacks 2011-05, printed since "
+        "2011-06-12T00:00:00Z: copy the current labels/labels_ledger.parquet from the mirror"
+    )
+
+
+def test_a_seas5_file_without_its_lead_column_exits_2_instead_of_a_traceback(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model, capsys
+):
+    path = synthetic_root_with_daily / "forecasts" / "seas5_global_mean.parquet"
+    pd.read_parquet(path).drop(columns=["lead_month"]).to_parquet(path, index=False)
+    rc, payload = _nowcast(
+        tmp_path, synthetic_root_with_daily, saved_nowcast_model, "--as-of", "2011-06-20T00:00:00Z"
+    )
+    captured = capsys.readouterr()
+    assert rc == 2 and payload is None and captured.out == ""
+    assert "cannot build the nowcast inputs" in captured.err and "lead_month" in captured.err
+
+
 @pytest.mark.parametrize("as_of", ["2012-01-03T00:00:00Z", "2012-01-05T23:59:59Z"])
 def test_the_month_after_the_series_is_not_usable_until_a_day_of_it_is_public(
     as_of, tmp_path, synthetic_root_with_daily, saved_nowcast_model
@@ -781,10 +893,13 @@ def test_the_payload_is_written_through_a_temporary_file_that_replaces_the_old_o
     monkeypatch.setattr(os, "replace", spy)
     assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 0
     ((source, target, staged, kept),) = seen
-    assert (source, target) == (out.with_name("payload.json.tmp"), out)
+    assert target == out and source.parent == folder and source != out.with_name("payload.json.tmp")
+    assert source.name.startswith("payload.json.") and source.suffix == ".tmp"
     assert kept == "old" and json.loads(staged)["target_month"] == "2011-06"  # whole until the swap
     assert json.loads(out.read_text(encoding="utf-8")) == json.loads(staged)
     assert sorted(os.listdir(folder)) == ["payload.json"]  # no .tmp is left beside the payload
+    assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 0
+    assert seen[1][0] != source  # every run writes through a temporary file of its own
 
 
 def test_a_failed_replace_keeps_the_old_payload_and_leaves_no_temporary_file(
@@ -1389,6 +1504,25 @@ def test_the_freshest_init_public_at_the_as_of_is_priced_and_one_public_at_it_co
     assert capsys.readouterr().out.splitlines() == _table([0.4], emos, net)
 
 
+def test_a_stale_init_still_prints_the_table_says_what_to_copy_and_exits_3(
+    synthetic_root, saved_models, capsys
+):
+    _without_init(synthetic_root, "2012-01")
+    emos_json, nn_dir = saved_models
+    argv = ["--target-month", "2012-03", "--as-of", "2012-01-20T00:00:00Z", "--strikes", "0.4"]
+    assert _price(synthetic_root, emos_json, nn_dir, *argv) == 3
+    captured = capsys.readouterr()
+    emos, net = _gaussians(synthetic_root, emos_json, nn_dir, "2012-03", "2011-12")
+    assert captured.out.splitlines() == _table([0.4], emos, net)  # priced on what is there
+    notes = captured.err.strip().splitlines()
+    assert len(notes) == 2 and "init 2011-12 (lead 4)" in notes[0]
+    assert notes[1] == (
+        "stale: init 2011-12 is priced, init 2012-01 has been public since 2012-01-13T12:00:00Z: "
+        "copy the current forecasts/seas5_global_mean.parquet from the mirror into "
+        f"{root_path(str(synthetic_root))}"
+    )
+
+
 @pytest.mark.parametrize(
     "as_of", ["2011-10-13T11:59:59Z", "2011-09-01T00:00:00Z", "1999-01-01T00:00:00Z"]
 )
@@ -1633,6 +1767,7 @@ SHARED_HELPERS = (
     "bridge_of",
     "training_note",
     "load_model",
+    "read_inputs",
 )
 
 
@@ -1642,7 +1777,15 @@ def test_the_helpers_of_both_scripts_live_in_nn_cli_and_no_script_borrows_from_a
     for module in (gtm_nowcast, gtm_nn_price):
         source = Path(module.__file__).read_text(encoding="utf-8")
         assert [name for name in SHARED_HELPERS if f"def {name}" in source] == []
+        assert "def _read_inputs" not in source and "nn_cli.read_inputs(" in source
     assert "gtm_nowcast" not in Path(gtm_nn_price.__file__).read_text(encoding="utf-8")
+
+
+def test_the_iso_time_format_lives_once_in_the_nowcast_module():
+    assert nowcast.ISO_UTC == "%Y-%m-%dT%H:%M:%SZ" and nn_cli.ISO_UTC == nowcast.ISO_UTC
+    for module in (nowcast, nn_cli, gtm_nowcast, gtm_nn_price):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert source.count('"%Y-%m-%dT%H:%M:%SZ"') == (1 if module is nowcast else 0)
 
 
 def test_parse_as_of_takes_z_and_any_offset_and_refuses_a_time_without_one():
@@ -1681,35 +1824,6 @@ def test_training_note_names_the_labels_the_network_saw_and_admits_when_it_does_
 
 # without torch
 
-
-class _BlockTorch:
-    """A meta-path finder that makes `import torch` fail as on a machine without it."""
-
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-@pytest.fixture
-def no_torch(monkeypatch):
-    """A machine without torch: the import machinery refuses it, whatever was imported before."""
-    monkeypatch.delitem(sys.modules, "torch", raising=False)
-    monkeypatch.setattr(sys, "meta_path", [_BlockTorch(), *sys.meta_path])
-
-
-BLOCK_TORCH = """
-import sys
-sys.path.insert(0, sys.argv[1])
-
-
-class BlockTorch:
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-sys.meta_path.insert(0, BlockTorch())
-"""
 CHECK_BLOCKED = (
     BLOCK_TORCH
     + """

@@ -714,6 +714,17 @@ def test_the_frame_chooses_a_seasonal_row_by_its_own_decision_time():
     assert _row(_feb_frame(seasonal=seasonal), "15")["seas_init"] == "2026-02"  # at the checkpoint
 
 
+@pytest.mark.parametrize(
+    "column", ["target_month", "decision_utc", "fc_mean_C", "fc_sd_C", "init_month"]
+)
+def test_a_seasonal_frame_without_one_of_its_columns_is_refused_and_the_column_named(column):
+    seasonal = _seasonal().drop(columns=[column])
+    with pytest.raises(ValueError, match=f"the seasonal frame lacks {column}: "):
+        _feb_frame(seasonal=seasonal)
+    with pytest.raises(ValueError, match=f"the seasonal frame lacks {column}: "):
+        freshest_seasonal(seasonal, "2026-02", datetime(2026, 2, 20, tzinfo=UTC))
+
+
 def test_a_seasonal_init_is_unused_until_it_is_released():
     frame = _feb_frame(seasonal=_seasonal(inits=["2026-02"], target="2026-02"))
     for name in ("5", "10"):  # released on 2026-02-13 at 12:00

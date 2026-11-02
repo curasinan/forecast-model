@@ -22,6 +22,7 @@ from climate.nn.features import SEASONAL_FEATURES, seasonal_frame  # noqa: E402
 from climate.nn.seasonal_model import SEEDS, VALIDATION_YEARS, GtmNnModel  # noqa: E402
 from climate.nn.torch_model import collapse_seeds, predict_gaussian  # noqa: E402
 from tests.test_climate import nn_fixtures  # noqa: E402
+from tests.test_climate.conftest import BLOCK_TORCH  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -308,25 +309,9 @@ def test_a_feature_constant_in_training_does_not_blow_up_a_later_row(synthetic_i
     assert len(late) > 0 and (model.predict(late)["mu"].abs() < 5).all()
 
 
-BLOCK_TORCH = """
-import sys
-
-sys.path.insert(0, sys.argv[1])
-
-
-class BlockTorch:
-    def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ModuleNotFoundError("torch is blocked", name=name)
-
-
-sys.meta_path.insert(0, BlockTorch())
-import climate.nn.seasonal_model
-"""
-
-
 def test_the_module_imports_without_torch():
+    code = BLOCK_TORCH + "import climate.nn.seasonal_model\n"
     done = subprocess.run(
-        [sys.executable, "-c", BLOCK_TORCH, str(REPO_ROOT)], capture_output=True, text=True
+        [sys.executable, "-c", code, str(REPO_ROOT)], capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr

@@ -81,7 +81,8 @@ _PREV_LABEL_LOOKBACK = 2
 
 _CHECKPOINT = re.compile(r"(\+?)([1-9][0-9]*)")
 _MONTH = re.compile(r"([0-9]{4})-(0[1-9]|1[0-2])")
-_ISO_UTC = "%Y-%m-%dT%H:%M:%SZ"
+_SEASONAL_COLUMNS = ("target_month", "decision_utc", "fc_mean_C", "fc_sd_C", "init_month")
+ISO_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _month_span(target_month: str) -> tuple[date, date]:
@@ -137,9 +138,9 @@ def _month_values(daily_K: pd.Series, first: date, length: int) -> np.ndarray:
     return daily_K.reindex(days).to_numpy(dtype=float)
 
 
-def _days_considered(first: date, end: date, last_day: date) -> int:
-    """Days from the 1st through min(last_day, month end); none when last_day is before the 1st."""
-    return max(0, (min(last_day, end) - first).days + 1)
+def _days_considered(first: date, last_day: date) -> int:
+    """Days from the 1st through last_day; none when last_day is before the 1st."""
+    return max(0, (last_day - first).days + 1)
 
 
 def _summarise(values: np.ndarray) -> tuple[float, int, int, int]:
@@ -155,7 +156,7 @@ def month_to_date(daily_K: pd.Series, target_month: str, last_day: date) -> tupl
     _require_daily(daily_K)
     first, end = _month_span(target_month)
     values = _month_values(daily_K, first, (end - first).days + 1)
-    mean, used, gap, _ = _summarise(values[: _days_considered(first, end, last_day)])
+    mean, used, gap, _ = _summarise(values[: _days_considered(first, last_day)])
     return mean, used, gap
 
 
@@ -164,6 +165,11 @@ _Candidate = tuple[pd.Timestamp, float, float, str]
 
 def _by_target(seasonal: pd.DataFrame) -> dict[str, list[_Candidate]]:
     """Seasonal rows as (decision_utc, fc_mean_C, fc_sd_C, init_month) by target month."""
+    missing = [column for column in _SEASONAL_COLUMNS if column not in seasonal.columns]
+    if missing:
+        raise ValueError(
+            f"the seasonal frame lacks {', '.join(missing)}: build it with seasonal_frame"
+        )
     columns = (
         seasonal["target_month"],
         seasonal["decision_utc"],
@@ -215,13 +221,15 @@ def _target_months(daily_K: pd.Series, months: list[str] | None) -> list[str]:
     return [str(period) for period in span]
 
 
+def _months_before(month: str) -> list[str]:
+    """The months the previous label of a target may come from, the latest first."""
+    period = pd.Period(month, freq="M")
+    return [str(period - lag) for lag in range(1, _PREV_LABEL_LOOKBACK + 1)]
+
+
 def _print_times(months: list[str], ledger: pd.DataFrame | None) -> dict[str, datetime]:
     """When the target months and the months before them become public."""
-    needed = {
-        str(pd.Period(month, freq="M") - lag)
-        for month in months
-        for lag in range(_PREV_LABEL_LOOKBACK + 1)
-    }
+    needed = {period for month in months for period in (month, *_months_before(month))}
     return {period: noaa_available_on(period, ledger) for period in sorted(needed)}
 
 
@@ -235,17 +243,22 @@ def _month_encodings(months: list[str]) -> tuple[dict[str, int], dict[str, float
     )
 
 
+def _printed_before(
+    before: list[str], decision: datetime, printed: dict[str, datetime]
+) -> str | None:
+    """The latest month in before that is public at decision, if any."""
+    return next((period for period in before if printed[period] <= decision), None)
+
+
 def _previous_label(
     before: list[str], decision: datetime, labels: dict[str, float], printed: dict[str, datetime]
 ) -> tuple[float, str, datetime]:
     """Label, month and print time of the latest month in before public at decision."""
-    for period in before:
-        if printed[period] <= decision:
-            value = labels.get(period, float("nan"))
-            if np.isfinite(value):
-                return value, period, printed[period]
-            break
-    return float("nan"), "", decision
+    period = _printed_before(before, decision, printed)
+    value = float("nan") if period is None else labels.get(period, float("nan"))
+    if not np.isfinite(value):
+        return float("nan"), "", decision
+    return value, period, printed[period]
 
 
 @dataclass(frozen=True)
@@ -279,11 +292,11 @@ def _month_rows(
     length = (end - first).days + 1
     values = _month_values(daily_K, first, length)
     full_mean = float(values.mean()) if np.isfinite(values).all() else float("nan")
-    before = [str(pd.Period(month, freq="M") - lag) for lag in range(1, _PREV_LABEL_LOOKBACK + 1)]
+    before = _months_before(month)
     seasonal_rows = look.candidates.get(month, [])
     rows = []
     for checkpoint, decision in decisions:
-        considered = _days_considered(first, end, last_era5_day_for(decision))
+        considered = _days_considered(first, last_era5_day_for(decision))
         mean, used, gap, last = _summarise(values[:considered])
         prev, prev_month, prev_printed = _previous_label(
             before, decision, look.labels, look.printed
@@ -359,6 +372,27 @@ def nowcast_frame(
     return _typed(pd.DataFrame(rows, columns=NOWCAST_COLUMNS), bridge)
 
 
+def missing_label(
+    noaa_C: pd.Series, ledger: pd.DataFrame | None, *, target_month: str, decision: datetime
+) -> tuple[str, datetime] | None:
+    """(month, print time) of the previous label public at decision that noaa_C lacks, or None."""
+    _require_aware(decision)
+    _month_span(target_month)
+    printed = _print_times([target_month], ledger)
+    period = _printed_before(_months_before(target_month), decision, printed)
+    if period is None or np.isfinite(_label_lookup(noaa_C).get(period, float("nan"))):
+        return None
+    return period, printed[period]
+
+
+def expected_seas_init(target_month: str, decision: datetime) -> str:
+    """The SEAS5 init a decision should see for the target: the latest released, at most it."""
+    _require_aware(decision)
+    month = pd.Period(decision.astimezone(timezone.utc).strftime("%Y-%m"), freq="M")
+    released = month if decision >= seas5_available_on(str(month)) else month - 1
+    return str(min(released, pd.Period(target_month, freq="M")))
+
+
 def _checkpoint_at(target_month: str, decision: datetime) -> str:
     """The latest checkpoint decided at or before the decision; the first one when none is."""
     reached = [c for c in CHECKPOINTS if checkpoint_decision(target_month, c) <= decision]
@@ -386,7 +420,7 @@ def nowcast_row(
 
 
 def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprint: str) -> dict:
-    """A row's JSON-ready nowcast; checkpoint 5 is never usable: no training row has so few days."""
+    """A row's JSON-ready nowcast; usable needs every public day, checkpoint 10, the right init."""
     decision = pd.Timestamp(row["decision_utc"])
     if decision.tzinfo is None:
         raise ValueError("decision_utc must be a timezone-aware time")
@@ -395,8 +429,9 @@ def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprin
     first, end = _month_span(target_month)
     visible = last_era5_day_for(decision.to_pydatetime())
     gap_days = int(row["gap_days"])
+    current = str(row["seas_init"]) == expected_seas_init(target_month, decision.to_pydatetime())
     return {
-        "as_of": decision.strftime(_ISO_UTC),
+        "as_of": decision.strftime(ISO_UTC),
         "target_month": target_month,
         "checkpoint": checkpoint,
         "mu": float(mu) if math.isfinite(mu) else None,
@@ -407,5 +442,5 @@ def nowcast_payload(row: pd.Series, mu: float, sigma: float, *, model_fingerprin
         "seas_init": str(row["seas_init"]),
         "prev_label_month": str(row["prev_label_month"]),
         "model_fingerprint": str(model_fingerprint),
-        "usable": gap_days == 0 and math.isfinite(mu) and checkpoint != "5",
+        "usable": gap_days == 0 and math.isfinite(mu) and checkpoint != CHECKPOINTS[0] and current,
     }
