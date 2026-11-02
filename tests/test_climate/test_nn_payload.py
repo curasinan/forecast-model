@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -902,6 +903,21 @@ def test_the_payload_is_written_through_a_temporary_file_that_replaces_the_old_o
     assert seen[1][0] != source  # every run writes through a temporary file of its own
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_the_payload_file_has_the_mode_the_umask_gives(
+    tmp_path, synthetic_root_with_daily, saved_nowcast_model
+):
+    folder = tmp_path / "published"
+    folder.mkdir()
+    old = os.umask(0o027)
+    try:
+        assert _publish(folder, synthetic_root_with_daily, saved_nowcast_model) == 0
+    finally:
+        os.umask(old)
+    mode = stat.S_IMODE((folder / "payload.json").stat().st_mode)
+    assert mode == 0o666 & ~0o027  # the mode a plain write gets, not a temporary file's 0600
+
+
 def test_a_failed_replace_keeps_the_old_payload_and_leaves_no_temporary_file(
     tmp_path, synthetic_root_with_daily, saved_nowcast_model, monkeypatch, capsys
 ):
@@ -1542,6 +1558,36 @@ def test_a_target_month_that_seas5_never_covers_exits_2(synthetic_root, saved_mo
     argv = ["--target-month", "2031-03", "--as-of", "2030-01-20T00:00:00Z", "--strikes", "0.4"]
     assert _price(synthetic_root, emos_json, nn_dir, *argv) == 2
     assert "2031-03" in capsys.readouterr().err
+
+
+def test_a_stale_init_at_the_longest_lead_prints_only_its_line_and_exits_3(
+    synthetic_root, saved_models, capsys
+):
+    _without_init(synthetic_root, "2012-01")  # the older inits reach 2012-05 at most
+    emos_json, nn_dir = saved_models
+    argv = ["--as-of", "2012-01-20T00:00:00Z", "--strikes", "0.4", "--target-month"]
+    assert _price(synthetic_root, emos_json, nn_dir, *argv, "2012-06") == 3  # lead 6 of 2012-01
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.strip() == (
+        "stale: no init of 2012-06 can be priced, init 2012-01 has been public since "
+        "2012-01-13T12:00:00Z: copy the current forecasts/seas5_global_mean.parquet from the "
+        f"mirror into {root_path(str(synthetic_root))}"
+    )
+    assert _price(synthetic_root, emos_json, nn_dir, *argv, "2012-07") == 2  # beyond lead 6
+    assert "no SEAS5 init of 2012-07 was public" in capsys.readouterr().err
+
+
+def test_the_price_script_exits_2_for_a_seas5_file_without_its_lead_column(
+    synthetic_root, saved_models, capsys
+):
+    path = synthetic_root / "forecasts" / "seas5_global_mean.parquet"
+    pd.read_parquet(path).drop(columns=["lead_month"]).to_parquet(path, index=False)
+    emos_json, nn_dir = saved_models
+    argv = ["--target-month", "2012-03", "--as-of", "2012-01-20T00:00:00Z", "--strikes", "0.4"]
+    assert _price(synthetic_root, emos_json, nn_dir, *argv) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and len(captured.err.strip().splitlines()) == 1
+    assert "cannot build the frames from the research inputs: 'lead_month'" in captured.err
 
 
 def test_a_nan_gaussian_on_the_emos_side_prints_a_dash_there_only(

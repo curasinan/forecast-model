@@ -145,6 +145,9 @@ def _write(path: Path, text: str) -> None:
         ) as handle:
             tmp = Path(handle.name)
             handle.write(text + "\n")
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)  # the mode a plain write gets, not the temporary file's 0600
         os.replace(tmp, path)
     except OSError as exc:
         if tmp is not None:

@@ -760,9 +760,12 @@ Run the scripts as `scura` from the research clone, through the launcher,
 with the torch venv, `~/work/wx-dl/.venv` (the clone's own `.venv` has no
 torch). A benchmark's own `--gpu-budget` (GiB, at most the launcher's) is what
 puts its network on the GPU; the payload and pricing scripts run on the CPU
-and take none. The torch tests run in the same venv:
+and take none:
 
     bash scripts/spark/research_run.sh --memory 8G --gpu-budget 20G -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_benchmark.py --root ~/data/gtm_research/climate_data --gpu-budget 20
+
+The torch tests run in the same venv:
+
     ~/work/wx-dl/.venv/bin/python -m pytest tests/test_climate tests/test_architecture -q -p no:cacheprovider
 
 The first fetch is a one-month pilot; check that the file it delivers under
@@ -779,6 +782,10 @@ pricing run, refresh the daily series, then copy the current
 `forecasts/seas5_global_mean.parquet` and `labels/labels_ledger.parquet` from
 the mirror (section 7.6) into the research root; the EMOS column of the
 pricing script matches the paper loop only while those copies are current.
+From the SEAS5 release on the 13th at 12:00 UTC until the by-hand `--pilot`
+fetch of section 7.5 has put init m into the live root and a mirror refresh
+into the mirror, usually by the 15th, every payload for the running month
+exits 3 and the copy cannot help yet: run the fetch first.
 
 A run directory holds `config.json`, `metrics.json`, `report.md`,
 `rows.parquet` and, when the network ran, `weights/` with
@@ -799,13 +806,14 @@ payload (and writes `--out`), names the file to copy when an input is stale
 and exits 3. Exit 2 is a usage error: a month not started, a month of which
 the series holds no day although ERA5 has published some, torch missing.
 From +1 to +10 the payload needs `--target-month <previous month>`; the
-default is the as-of month.
-`last_era5_day` is the last day public by the lag rule, not the last day the
-series holds; the two can differ only when `gap_days` is above 0. The network
-is trained and scored only at the nine checkpoints, so an as-of between two
-of them interpolates in the fraction of days used, and `usable` does not mean
-calibrated there. `gtm_nn_price.py` exits 0, 3 or 2: on a stale init it still
-prints the table, names the stale and the expected init and exits 3.
+default is the as-of month. `last_era5_day` is the last day public by the lag
+rule, not the last day the series holds; the two can differ only when
+`gap_days` is above 0. The network is trained and scored only at the eight
+checkpoints from the 10th on, so an as-of between two of them interpolates in
+the fraction of days used, and `usable` does not mean calibrated there.
+`gtm_nn_price.py` exits 0, 3 or 2: on a stale init it still prints what it can
+price (no table when no init in the file reaches the target month), names the
+expected init and the file to copy, and exits 3.
 
 Two late NOAA prints are overridden in `climate/nn/availability.py`: December
 2018 (printed 2019-02-06, after the shutdown) and September 2024 (printed

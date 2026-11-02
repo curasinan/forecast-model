@@ -18,6 +18,7 @@ from climate.dataset import build_frame_from_inputs, load_era5, load_seas5  # no
 from climate.emos import EmosModel  # noqa: E402
 from climate.ladder import p_yes  # noqa: E402
 from climate.nn.availability import seas5_available_on  # noqa: E402
+from climate.nn.benchmark import LEADS  # noqa: E402
 from climate.nn.features import seasonal_frame  # noqa: E402
 from climate.nn.nowcast import expected_seas_init  # noqa: E402
 from climate.nn.seasonal_model import GtmNnModel  # noqa: E402
@@ -82,15 +83,23 @@ def _load_emos(path: Path) -> EmosModel:
     return model
 
 
-def _freshest_init(nn_frame: pd.DataFrame, month: str, as_of: datetime) -> tuple[str, int]:
-    """(init month, lead) of the freshest SEAS5 init of the target month public at as_of."""
+def _freshest_init(nn_frame: pd.DataFrame, month: str, as_of: datetime) -> tuple[str, int] | None:
+    """(init month, lead) of the target's freshest SEAS5 init public at as_of, or None."""
     public = nn_frame[(nn_frame["target_month"] == month) & (nn_frame["decision_utc"] <= as_of)]
     if public.empty:
-        raise nn_cli.UsageError(
-            f"no SEAS5 init of {month} was public at {as_of.strftime(nn_cli.ISO_UTC)}"
-        )
+        return None
     best = public.loc[public["decision_utc"].idxmax()]
     return str(best["init_month"]), int(best["lead_month"])
+
+
+def _stale_line(priced: str | None, month: str, expected: str, root: Path) -> str:
+    """What a stale SEAS5 file made the script price, the init it lacks and the file to copy."""
+    what = f"init {priced} is priced" if priced else f"no init of {month} can be priced"
+    since = seas5_available_on(expected).strftime(nn_cli.ISO_UTC)
+    return (
+        f"stale: {what}, init {expected} has been public since {since}: "
+        f"copy the current {'/'.join(SEAS5_PARQUET)} from the mirror into {root}"
+    )
 
 
 def _gaussian(prediction: pd.DataFrame) -> tuple[float, float]:
@@ -126,10 +135,20 @@ def _price(args: argparse.Namespace) -> int:
     month = args.target_month
     try:
         nn_frame = seasonal_frame(seas5, era5_K, noaa_C, bridge=bridge)
-        init, lead = _freshest_init(nn_frame, month, as_of)
         emos_frame = build_frame_from_inputs(seas5, era5_K, noaa_C)  # the bridge fitted on all
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         raise nn_cli.UsageError(f"cannot build the frames from the research inputs: {exc}") from exc
+    expected = expected_seas_init(month, as_of)
+    freshest = _freshest_init(nn_frame, month, as_of)
+    if freshest is None:
+        lead_of_expected = (pd.Period(month, freq="M") - pd.Period(expected, freq="M")).n + 1
+        if lead_of_expected <= max(LEADS):  # the init exists at the CDS but not in the file
+            print(_stale_line(None, month, expected, root), file=sys.stderr)
+            return 3
+        raise nn_cli.UsageError(
+            f"no SEAS5 init of {month} was public at {as_of.strftime(nn_cli.ISO_UTC)}"
+        )
+    init, lead = freshest
     nn_pick = nn_frame[(nn_frame["target_month"] == month) & (nn_frame["init_month"] == init)]
     in_init = emos_frame["init_date"].dt.strftime("%Y-%m") == init
     emos_pick = emos_frame[(emos_frame["target_month"] == month) & in_init]
@@ -149,14 +168,8 @@ def _price(args: argparse.Namespace) -> int:
     for strike in args.strikes:
         emos_p, nn_p = _cell(emos_gaussian, strike), _cell(nn_gaussian, strike)
         print(f"| {strike!r} | {emos_p} | {nn_p} |")
-    expected = expected_seas_init(month, as_of)
     if init != expected:
-        since = seas5_available_on(expected).strftime(nn_cli.ISO_UTC)
-        print(
-            f"stale: init {init} is priced, init {expected} has been public since {since}: "
-            f"copy the current {'/'.join(SEAS5_PARQUET)} from the mirror into {root}",
-            file=sys.stderr,
-        )
+        print(_stale_line(init, month, expected, root), file=sys.stderr)
         return 3
     return 0
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -528,6 +530,19 @@ def test_replace_writes_the_parquet_once_through_a_temporary_file_and_leaves_non
         stored["t2m_global_K"].iloc[2:], era5_daily_frame(second)["t2m_global_K"]
     )
     assert stored["date"].dtype == "datetime64[ns]" and stored["date"].dt.tz is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_a_replaced_parquet_has_the_mode_the_umask_gives(tmp_path):
+    reduce_era5_daily_file(_synthetic_hourly_file(tmp_path, 3, 4, start="2026-02-01"), tmp_path)
+    again = _synthetic_hourly_file(tmp_path, 3, 4, name="b.nc", start="2026-02-01", offset=1.0)
+    old = os.umask(0o027)
+    try:
+        reduce_era5_daily_file(again, tmp_path, replace=True)
+    finally:
+        os.umask(old)
+    mode = stat.S_IMODE(tmp_path.joinpath(*DAILY_PARQUET).stat().st_mode)
+    assert mode == 0o666 & ~0o027  # the mode a plain write gets, not a temporary file's 0600
 
 
 def test_replace_without_a_parquet_just_writes_it(tmp_path):

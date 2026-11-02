@@ -146,6 +146,9 @@ def _write_whole(frame: pd.DataFrame, path: Path) -> None:
     os.close(handle)
     try:
         frame.to_parquet(name, engine="pyarrow", index=False)
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(name, 0o666 & ~mask)  # the mode a plain write gets, not mkstemp's 0600
         os.replace(name, path)
     except BaseException:
         with contextlib.suppress(OSError):
