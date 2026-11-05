@@ -776,6 +776,10 @@ tmux with a long `--soft-timeout` (without the 2026 months a payload exits 2):
     bash scripts/spark/research_run.sh -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_fetch.py --root ~/data/gtm_research/climate_data --months 2025-12 --today <today>
     bash scripts/spark/research_run.sh -- ~/work/wx-dl/.venv/bin/python scripts/research/gtm_nn_fetch.py --root ~/data/gtm_research/climate_data --years 1993-2025 --months 2026-01..<current month> --soft-timeout 86400
 
+The fetch sends one request at a time (`--jobs 1`, the default): the CDS
+notice of 2026-10-22 asks for sequential requests and suspends the accounts
+it flags, and the same account feeds the paper loop.
+
 The daily refresh is run on the day of a payload, not once a month, as
 `--refresh --months <previous month>..<current month>`. Before a payload or a
 pricing run, refresh the daily series, then copy the current

@@ -865,11 +865,11 @@ def _spy_on_run_tasks(monkeypatch):
     return seen
 
 
-def test_fetch_cli_defaults_are_the_planned_years_two_jobs_and_two_hours(tmp_path, monkeypatch):
+def test_fetch_cli_defaults_are_the_planned_years_one_job_and_two_hours(tmp_path, monkeypatch):
     seen = _spy_on_run_tasks(monkeypatch)
     main(["--root", str(tmp_path)])
     assert [task[1]["year"] for task in seen["tasks"]] == [str(y) for y in range(1993, 2026)]
-    assert (seen["soft_timeout"], seen["jobs"]) == (7200, 2)
+    assert (seen["soft_timeout"], seen["jobs"]) == (7200, 1)
 
 
 def test_fetch_cli_hands_its_options_to_run_tasks(tmp_path, monkeypatch):

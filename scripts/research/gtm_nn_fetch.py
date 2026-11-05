@@ -33,7 +33,7 @@ from scripts.fetch_climate_forecasts import (  # noqa: E402
 from src.utils.live_root import MirrorRootError, refuse_if_mirror  # noqa: E402
 
 DEFAULT_YEARS = "1993-2025"
-DEFAULT_JOBS = 2
+DEFAULT_JOBS = 1
 DEFAULT_SOFT_TIMEOUT = 7200.0
 DAY_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 REFRESH_HINT = "rerun with --refresh"
