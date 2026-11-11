@@ -401,6 +401,7 @@ directory so nothing is written under `~/quant_data`.
 | [`docs/venue_semantics.md`](docs/venue_semantics.md) | Verified ForecastEx facts: settlement, fees, order types, oracles |
 | [`docs/gtm_model_report.md`](docs/gtm_model_report.md) | The GTM model: data, bridge, variants, skill, gates |
 | [`docs/gtm_bridge_robustness.md`](docs/gtm_bridge_robustness.md) | Hindcast skill with the bridge fitted inside each window |
+| [`docs/gtm_nn_report_2026-11-11.md`](docs/gtm_nn_report_2026-11-11.md) | Two neural networks against EMOS and the bridge nowcast: benchmarks, no win |
 | [`docs/ibkr_runbook.md`](docs/ibkr_runbook.md) | Running the recorder: durability, re-login, alerts, triage |
 | [`docs/spark_runbook.md`](docs/spark_runbook.md) | Running research and the runtime on a Linux box |
 | [`docs/spark_parity_2026-10-03.md`](docs/spark_parity_2026-10-03.md) | Evidence that two machines produce the same numbers |

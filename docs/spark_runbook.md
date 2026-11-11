@@ -779,6 +779,9 @@ tmux with a long `--soft-timeout` (without the 2026 months a payload exits 2):
 The fetch sends one request at a time (`--jobs 1`, the default): the CDS
 notice of 2026-10-22 asks for sequential requests and suspends the accounts
 it flags, and the same account feeds the paper loop.
+A one-year request waited two to three hours in the CDS queue in November
+2026 and the full fetch took four days; splitting the years into months did
+not shorten it (`docs/gtm_nn_report_2026-11-11.md`, section 9).
 
 The daily refresh is run on the day of a payload, not once a month, as
 `--refresh --months <previous month>..<current month>`. Before a payload or a
@@ -790,6 +793,11 @@ From the SEAS5 release on the 13th at 12:00 UTC until the by-hand `--pilot`
 fetch of section 7.5 has put init m into the live root and a mirror refresh
 into the mirror, usually by the 15th, every payload for the running month
 exits 3 and the copy cannot help yet: run the fetch first.
+
+The live store holds no init month from 2026-01 to 2026-06. The research
+root got them by a one-off request on 2026-11-11
+(`docs/gtm_nn_report_2026-11-11.md`, section 1), and the copy above drops
+them again until the live store is completed.
 
 A run directory holds `config.json`, `metrics.json`, `report.md`,
 `rows.parquet` and, when the network ran, `weights/` with
