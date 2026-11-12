@@ -59,6 +59,7 @@ the move to ForecastEx invalidated.
 |---|---|
 | `climate/` | GTM lane: NOAA labels, Copernicus retrievals, ERA5 to NOAA bridge, EMOS fit, strike ladder, paper loop, go-live gates |
 | `climate/nn/` | GTM research: neural post-processing and nowcast, benchmark only |
+| `climate/sim/` | GTM paper-trading simulations: market-implied distributions, model against market, book P&L |
 | `src/venues/` | Venue abstraction. `src/venues/ibkr/` is the IB Gateway adapter: session supervisor, pacing limiter, quote recorder, hourly backfill |
 | `src/trading/` | Executor, risk manager, position tracker, paper-book reconciliation, lock file |
 | `src/llm/` | Client for a local OpenAI-compatible model server |
@@ -423,6 +424,7 @@ directory so nothing is written under `~/quant_data`.
 | [`docs/gtm_model_report.md`](docs/gtm_model_report.md) | The GTM model: data, bridge, variants, skill, gates |
 | [`docs/gtm_bridge_robustness.md`](docs/gtm_bridge_robustness.md) | Hindcast skill with the bridge fitted inside each window |
 | [`docs/gtm_nn_report_2026-11-11.md`](docs/gtm_nn_report_2026-11-11.md) | Two neural networks against EMOS and the bridge nowcast: benchmarks, no win |
+| [`docs/gtm_sim_pilot_2026-11-12.md`](docs/gtm_sim_pilot_2026-11-12.md) | Simulation pilot: the market's December distribution against the model's, the December book under both |
 | [`docs/ibkr_runbook.md`](docs/ibkr_runbook.md) | Running the recorder: durability, re-login, alerts, triage |
 | [`docs/spark_runbook.md`](docs/spark_runbook.md) | Running research and the runtime on a Linux box |
 | [`docs/spark_parity_2026-10-03.md`](docs/spark_parity_2026-10-03.md) | Evidence that two machines produce the same numbers |
