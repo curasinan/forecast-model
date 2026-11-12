@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
@@ -29,6 +30,9 @@ from src.venues.ibkr.settings import IBKRSettings
 logger = logging.getLogger(__name__)
 
 _QUOTE_BATCH_SIZE = 50
+_CANCEL_CONFIRM_TIMEOUT_S = 15.0
+_CANCELLED_STATES = frozenset({"Cancelled", "ApiCancelled"})
+_DONE_STATES = frozenset({"Cancelled", "ApiCancelled", "Filled", "Inactive"})
 _DATA_TYPE_NAMES = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed"}
 _STATUS_MAP = {
     "PendingSubmit": "pending",
@@ -291,14 +295,29 @@ class IBKRAdapter(VenueAdapter):
             return self._trade_to_order(trade)
         return None
 
-    def cancel_order(self, order_id: str) -> bool:
+    def cancel_order(self, order_id: str, timeout_s: float = _CANCEL_CONFIRM_TIMEOUT_S) -> bool:
+        """Cancel one of this session's orders; True only once the venue says it is cancelled.
+
+        False when the order is not among this session's open orders, when it
+        filled before the cancel landed, or when no final state arrived within
+        `timeout_s` (verify at the venue then).
+        """
         if self.read_only:
             raise VenueReadOnlyError(f"{self.name} adapter is read-only; refusing to cancel")
         ib = self._require_ib()
         for trade in ib.openTrades():
-            if str(trade.order.orderId) == str(order_id):
-                ib.cancelOrder(trade.order)
+            if str(trade.order.orderId) != str(order_id):
+                continue
+            ib.cancelOrder(trade.order)
+            deadline = time.monotonic() + timeout_s
+            while trade.orderStatus.status not in _DONE_STATES and time.monotonic() < deadline:
+                ib.sleep(0.25)
+            status = trade.orderStatus.status
+            if status in _CANCELLED_STATES:
                 return True
+            logger.warning("cancel of order %s not confirmed: status %s after %.0f s",
+                           order_id, status, timeout_s)
+            return False
         return False
 
     # -- economics ---------------------------------------------------------

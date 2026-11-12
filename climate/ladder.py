@@ -269,6 +269,8 @@ LADDER_COLUMNS = [
     "ask",
     "spread",
     "target_month_source",
+    "no_bid",
+    "no_ask",
 ]
 
 
@@ -304,6 +306,8 @@ def ladder_table(
         q["spread"] = q["ask"] - q["bid"]
     if "target_month_source" not in q.columns:
         q["target_month_source"] = None
+    for col in ("no_bid", "no_ask"):
+        q[col] = _clean_price(q[col]) if col in q.columns else np.nan
 
     p = np.empty(len(q), dtype=float)
     for i, (tm, k) in enumerate(zip(q["target_month"], q["strike"])):

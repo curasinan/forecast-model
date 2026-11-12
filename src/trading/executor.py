@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ class TradeIntent:
     days_to_resolution: int | None = None  # overrides market.scheduled_resolution_time
     liquidity_usd: float = 0.0
     no_price: float | None = None  # NO-leg quote when the venue quotes it separately
+    quote: dict | None = None  # the bid/ask and limit rule the price came from, for the run log
 
 
 @dataclass
@@ -205,8 +207,13 @@ class TradingExecutor:
             ))
         return self.execute_intents(intents, mode=mode)
 
-    def execute_intents(self, intents: Iterable[TradeIntent], mode: str = "approve") -> ExecutionReport:
+    def execute_intents(self, intents: Iterable[TradeIntent], mode: str = "approve",
+                        pre_approved: frozenset[str] = frozenset()) -> ExecutionReport:
         """Evaluate, and (mode-permitting) place, one intent at a time.
+
+        `pre_approved` holds question_ids the operator has already approved in
+        this run (a reprice replacement): approve mode does not ask for them
+        again. Risk checks still apply to them.
 
         Ordering semantics (H5 group cap, Task 3.6; order-dependent-cap-
         scaling lesson): intents are evaluated STRICTLY in the order
@@ -235,7 +242,7 @@ class TradingExecutor:
                 continue
             report.trades_proposed += 1
 
-            if mode == "approve":
+            if mode == "approve" and decision.question_id not in pre_approved:
                 approved = self._prompt_approval(decision)
             else:
                 approved = True
@@ -258,6 +265,33 @@ class TradingExecutor:
             "simulated" if report.simulated else self._venue.name,
         )
         return report
+
+    def preview_intents(self, intents: Iterable[TradeIntent],
+                        commitments: dict | None = None) -> list[TradeDecision]:
+        """What execute_intents would decide for `intents`, in order, placing nothing.
+
+        `commitments` (the shape of `load_open_commitments`) seeds the book's
+        exposure first, as the paper entrypoint does before placing. Each
+        approved decision consumes exposure as a placement would, so a later
+        intent sees the headroom the earlier ones left. The risk state is
+        restored afterwards.
+        """
+        saved = copy.deepcopy(self._risk_manager)
+        try:
+            if commitments is not None:
+                self._risk_manager.seed_exposure(float(commitments.get("total_usd", 0.0)))
+                self._risk_manager.seed_group_exposure(dict(commitments.get("by_group", {})))
+            decisions: list[TradeDecision] = []
+            for intent in intents:
+                decision = self._evaluate(intent)
+                decisions.append(decision)
+                if decision.risk_check.approved and decision.order is not None:
+                    self._risk_manager.add_exposure(
+                        decision.order.cost_usd, group_key=_group_key(decision.question_id)
+                    )
+            return decisions
+        finally:
+            self._risk_manager = saved
 
     # -- evaluation --------------------------------------------------------
     def _evaluate(self, intent: TradeIntent) -> TradeDecision:
@@ -314,13 +348,24 @@ class TradingExecutor:
             net_expected_value=net_ev, net_kelly_fraction=kelly, holding_days=holding_days,
         )
         if risk_result.approved:
-            decision.order = edge_to_order(
+            order = edge_to_order(
                 edge=priced,
                 size_usd=risk_result.adjusted_size_usd,
                 market=intent.market,
                 fee_model=fee_model,
                 no_price=intent.no_price,
             )
+            if order.size <= 0:
+                reason = (f"${risk_result.adjusted_size_usd:.2f} approved buys no whole "
+                          f"contract at {order.price:g}")
+                decision.risk_check = RiskCheckResult(
+                    approved=False, reason=reason,
+                    checks_passed=risk_result.checks_passed,
+                    checks_failed=[*risk_result.checks_failed, reason],
+                )
+                decision.reason = reason
+            else:
+                decision.order = order
         return decision
 
     def _prompt_approval(self, decision: TradeDecision) -> bool:

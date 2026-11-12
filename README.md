@@ -232,9 +232,30 @@ python scripts/run_ibkr_paper.py --simulate
 python scripts/run_ibkr_paper.py
 python scripts/run_ibkr_paper.py --mode auto --top 5
 
+# Cancel resting orders priced below today's limit and buy again at it.
+python scripts/run_ibkr_paper.py --reprice
+
 # Record what happened to resting orders.
 python scripts/sync_ibkr_paper.py
 ```
+
+**Order prices.** A paper order is a GTC limit at the ask by default
+(`--price ask`): it fills against the resting offer, so the book takes
+positions instead of waiting for a seller. `--ticks-below-ask N` bids N ticks
+under the ask, never under the bid, and `--price mid` restores the earlier
+passive bid at the mid. The edge, the EV and the minimum edge (`--min-edge`)
+are judged at the limit actually paid, so a contract whose edge at the mid
+does not survive the spread is not bought.
+
+`--reprice` cancels each resting order whose limit is below the one the same
+leg would get today, then buys again at the new limit. A month's strikes
+settle on one print, so they share one cap (`--max-group`, default $15):
+replacements go to the largest edge first, and an order with no room left is
+cancelled without one. Approve mode asks once per order and says which ones
+get no replacement. A book row is marked cancelled only after the venue
+confirms the cancel, which keeps the daily sync's mass-cancellation guard
+quiet; a cancel that is not confirmed (the order may have filled) keeps the
+row and places nothing on that leg.
 
 The health probe exits 0 for `OK` and 1 for `STALE`, `CRITICAL`, `DOWN` or
 `DEGRADED`, and alerts only when the state changes. `ALERT_METHOD` selects
