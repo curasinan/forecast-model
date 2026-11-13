@@ -62,4 +62,21 @@ def write_run(run_dir: Path, *, config: dict, metrics: dict, grid: pd.DataFrame,
         raise
 
 
-__all__ = ["CELL_FRAMES", "plain", "write_run"]
+def finish_run(writer, run_dir: Path, headline: Mapping | None = None) -> Path | None:
+    """Write the run's dashboard.html, then mark the run finished; returns the dashboard's path.
+
+    The results are already on disk by then, so a dashboard that cannot be
+    rendered costs a warning in the progress log, never the run.
+    """
+    path = None
+    try:
+        from climate.sim.dashboard import write_dashboard
+
+        path = write_dashboard(run_dir)
+    except Exception as exc:  # noqa: BLE001 -- the run's results stand without it
+        writer.warning(None, f"dashboard not written: {type(exc).__name__}: {exc}")
+    writer.finished(headline)
+    return path
+
+
+__all__ = ["CELL_FRAMES", "finish_run", "plain", "write_run"]

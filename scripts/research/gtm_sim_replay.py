@@ -42,6 +42,7 @@ from climate.paths import root_path  # noqa: E402
 from climate.sim.compare import first_prints  # noqa: E402
 from climate.sim.forecast import PointInTimeForecaster, print_times  # noqa: E402
 from climate.sim.panel import HOURLY, SWEEP, load_panel  # noqa: E402
+from climate.sim.progress import ProgressWriter  # noqa: E402
 from climate.sim.replay import (  # noqa: E402
     CADENCES,
     Policy,
@@ -53,7 +54,7 @@ from climate.sim.replay import (  # noqa: E402
     stop_times,
     target_months,
 )
-from climate.sim.rundir import write_run  # noqa: E402
+from climate.sim.rundir import finish_run, write_run  # noqa: E402
 from climate.sim.venue import FILL_MODELS  # noqa: E402
 from climate.storage import load_ledger  # noqa: E402
 
@@ -211,69 +212,94 @@ def main(argv: list[str] | None = None) -> int:
             run_dir = Path.home() / "runs" / f"gtm_sim_replay_{stamp}"
         if run_dir.exists():
             raise UsageError(f"the run directory exists already: {run_dir}")
-
-        panel = load_panel(ticks_root, start=args.start, end=args.end, hourly=not args.no_hourly)
-        if panel.empty:
-            raise UsageError(f"no GTM quotes under {ticks_root} in the window")
-        contracts = panel.contracts()
-        labels = load_contract_labels(ticks_root, universe_json=args.universe_json)
-        ledger = load_ledger(root)
-        target_of = target_months(contracts, labels)
-        months = sorted(set(target_of.values()))
-        settle = settlements(target_of, first_prints(ledger), print_times(months, ledger))
-        stops = stop_times(contracts, target_of, ledger)
-        forecaster = build_forecaster(root, args.model, ledger, fitted_at)
-        decisions = decision_times(panel, cadence=args.cadence, at=args.at,
-                                   start=args.start, end=args.end)
-        if not decisions:
-            raise UsageError("no decision time falls inside the quotes")
     except UsageError as exc:
         print(exc, file=sys.stderr)
         return 2
 
-    work_dir = run_dir.with_name(f".{run_dir.name}.work")
-    shutil.rmtree(work_dir, ignore_errors=True)
-    results = []
-    try:
-        for cfg in grid_cfgs:
-            print(f"replaying {cfg.name} over {len(decisions)} decisions", flush=True)
-            results.append(Replay(panel, contracts, labels, forecaster, settle, stops, cfg,
-                                  work_dir).run(decisions))
+    writer = ProgressWriter(run_dir, "gtm_sim_replay", [c.name for c in grid_cfgs],
+                            args=vars(args), git_commit=git_commit())
+    with writer:
+        try:
+            writer.run_phase("loading quotes")
+            panel = load_panel(ticks_root, start=args.start, end=args.end, hourly=not args.no_hourly)
+            if panel.empty:
+                raise UsageError(f"no GTM quotes under {ticks_root} in the window")
+            contracts = panel.contracts()
+            labels = load_contract_labels(ticks_root, universe_json=args.universe_json)
+            ledger = load_ledger(root)
+            target_of = target_months(contracts, labels)
+            months = sorted(set(target_of.values()))
+            settle = settlements(target_of, first_prints(ledger), print_times(months, ledger))
+            stops = stop_times(contracts, target_of, ledger)
+            writer.run_phase("building the forecaster")
+            forecaster = build_forecaster(root, args.model, ledger, fitted_at)
+            decisions = decision_times(panel, cadence=args.cadence, at=args.at,
+                                       start=args.start, end=args.end)
+            if not decisions:
+                raise UsageError("no decision time falls inside the quotes")
+        except UsageError as exc:
+            writer.failed(str(exc))
+            print(exc, file=sys.stderr)
+            return 2
 
-        sources = panel.frame.drop_duplicates("ts")["source"].value_counts().to_dict()
-        summary = {
-            "quotes": f"{panel.times[0]:%Y-%m-%d %H:%M} to {panel.times[-1]:%Y-%m-%d %H:%M} UTC, "
-                      f"{sources.get(SWEEP, 0)} sweeps, {sources.get(HOURLY, 0)} hourly snapshots",
-            "contracts": f"{len(contracts)} legs over target months {', '.join(months)}",
-            "settled months": ", ".join(f"{m} = {s.value:.2f} ({s.vintage})"
-                                        for m, s in settle.items() if s.value is not None) or "none",
-            "decisions": f"{len(decisions)} ({args.cadence} at {args.at:%H:%M} UTC)",
-            "model": ("EMOS refitted on the labels printed by each decision" if args.model == "pit"
-                      else f"fixed {args.model}"),
-            "caps": f"bankroll {args.bankroll:g}, position {args.max_position:g}, month "
-                    f"{args.max_group:g}, exposure {args.max_exposure:g}, min edge {args.min_edge:g}",
-        }
-        cells = {r.config.name: (r.config, r.metrics) for r in results}
-        verdict = d1_verdict(cells)
-        grid = pd.DataFrame([{"cell": r.config.name, **{c: r.metrics.get(c, np.nan)
-                                                        for c in GRID_COLUMNS[1:]}}
-                             for r in results], columns=GRID_COLUMNS)
-        focus = next(((r.config.name, r) for r in results
-                      if r.config.policy.name == "ask" and r.config.latency == 1
-                      and r.config.fill_model == "paper"), None)
-        if focus is None and results:
-            focus = (results[0].config.name, results[0])
-        report = render_report(summary, grid, verdict, focus)
-        config = {"kind": "gtm_sim_replay", "root": str(root), "ticks_root": str(ticks_root),
-                  "args": vars(args), "cells": [r.config.name for r in results],
-                  "git_commit": git_commit(), "run_dir": str(run_dir)}
-        metrics = {"summary": summary, "d1": verdict,
-                   "cells": {r.config.name: r.metrics for r in results},
-                   "notes": {r.config.name: r.notes for r in results if r.notes}}
-        write_run(run_dir, config=config, metrics=metrics, grid=grid, report=report,
-                  cells={r.config.name: (r, work_dir / f"{r.config.name}.db") for r in results})
-    finally:
+        writer.set_steps(len(decisions))
+        writer.run_phase("replaying")
+        work_dir = run_dir.with_name(f".{run_dir.name}.work")
         shutil.rmtree(work_dir, ignore_errors=True)
+        results = []
+        try:
+            for cfg in grid_cfgs:
+                print(f"replaying {cfg.name} over {len(decisions)} decisions", flush=True)
+                writer.cell_started(cfg.name)
+                result = Replay(panel, contracts, labels, forecaster, settle, stops, cfg,
+                                work_dir).run(decisions, on_step=writer.stepper(cfg.name))
+                results.append(result)
+                writer.cell_finished(
+                    cfg.name, {c: result.metrics.get(c) for c in GRID_COLUMNS[1:]},
+                    frames={"orders": result.orders, "equity": result.equity,
+                            "months": result.months, "decisions": result.decisions})
+
+            writer.run_phase("writing results")
+            sources = panel.frame.drop_duplicates("ts")["source"].value_counts().to_dict()
+            summary = {
+                "quotes": f"{panel.times[0]:%Y-%m-%d %H:%M} to {panel.times[-1]:%Y-%m-%d %H:%M} UTC, "
+                          f"{sources.get(SWEEP, 0)} sweeps, {sources.get(HOURLY, 0)} hourly snapshots",
+                "contracts": f"{len(contracts)} legs over target months {', '.join(months)}",
+                "settled months": ", ".join(f"{m} = {s.value:.2f} ({s.vintage})"
+                                            for m, s in settle.items() if s.value is not None) or "none",
+                "decisions": f"{len(decisions)} ({args.cadence} at {args.at:%H:%M} UTC)",
+                "model": ("EMOS refitted on the labels printed by each decision" if args.model == "pit"
+                          else f"fixed {args.model}"),
+                "caps": f"bankroll {args.bankroll:g}, position {args.max_position:g}, month "
+                        f"{args.max_group:g}, exposure {args.max_exposure:g}, min edge {args.min_edge:g}",
+            }
+            cells = {r.config.name: (r.config, r.metrics) for r in results}
+            verdict = d1_verdict(cells)
+            grid = pd.DataFrame([{"cell": r.config.name, **{c: r.metrics.get(c, np.nan)
+                                                            for c in GRID_COLUMNS[1:]}}
+                                 for r in results], columns=GRID_COLUMNS)
+            focus = next(((r.config.name, r) for r in results
+                          if r.config.policy.name == "ask" and r.config.latency == 1
+                          and r.config.fill_model == "paper"), None)
+            if focus is None and results:
+                focus = (results[0].config.name, results[0])
+            report = render_report(summary, grid, verdict, focus)
+            config = {"kind": "gtm_sim_replay", "root": str(root), "ticks_root": str(ticks_root),
+                      "args": vars(args), "cells": [r.config.name for r in results],
+                      "git_commit": git_commit(), "run_dir": str(run_dir)}
+            metrics = {"summary": summary, "d1": verdict,
+                       "cells": {r.config.name: r.metrics for r in results},
+                       "notes": {r.config.name: r.notes for r in results if r.notes}}
+            write_run(run_dir, config=config, metrics=metrics, grid=grid, report=report,
+                      cells={r.config.name: (r, work_dir / f"{r.config.name}.db") for r in results})
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        ranked = grid.dropna(subset=["total_pnl_bid"]).sort_values("total_pnl_bid")
+        headline = {"d1": verdict[-1] if verdict else None, "cells": len(results)}
+        if len(ranked):
+            headline.update(best_cell=ranked.iloc[-1]["cell"], best_pnl=ranked.iloc[-1]["total_pnl_bid"],
+                            worst_cell=ranked.iloc[0]["cell"], worst_pnl=ranked.iloc[0]["total_pnl_bid"])
+        finish_run(writer, run_dir, headline)
     print(report)
     print(f"run directory: {run_dir}")
     return 0

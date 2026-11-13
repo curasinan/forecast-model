@@ -905,5 +905,41 @@ split at `--split-year`, and the break-even points: the blend weight at which
 a proxy's P&L reaches zero, and the informed-market error sd above which the
 model makes money. Each cell of the run directory adds `yearly.parquet`.
 
+**Watching a run.** While it runs, every simulation script keeps
+`~/runs/.active/<run>/`: `progress.json` (the whole state, replaced at most
+once a second and refreshed every ten seconds by a heartbeat),
+`events.jsonl` (one event a line) and the frames of the cells already
+finished. At the end it copies `progress.json` and `events.jsonl` into the
+run directory, beside `dashboard.html`. From a second ssh session or a tmux
+pane, as `scura`, in the research clone:
+
+    .venv/bin/python scripts/research/gtm_sim_watch.py
+    .venv/bin/python scripts/research/gtm_sim_watch.py --follow
+    .venv/bin/python scripts/research/gtm_sim_watch.py --once
+    .venv/bin/python scripts/research/gtm_sim_watch.py --show latest
+    .venv/bin/python scripts/research/gtm_sim_watch.py --clear-dead
+
+The first lists the active runs and the last ten finished ones. `--follow`
+keeps the newest running run on screen, a row per cell with its bar, the
+simulated date, the time left, orders and fills, P&L settled and marked to
+the bid, drawdown, skipped decisions and warnings, and a sparkline of its
+equity; when the run ends it prints the results. Columns that do not fit the
+terminal are dropped, drawdown and the sparkline first, rather than cut
+short. `--once` prints one snapshot, for a phone ssh client. A run is
+`running`, `stalled` (no heartbeat for two minutes, the process alive),
+`dead` (no heartbeat and no process: the launcher's memory ceiling is the
+usual cause, see the journal), `silent` (started on another host),
+`finished` or `failed` (the error is shown). Exit 0 running or finished, 1
+failed or dead, 2 no such run, 130 when the watcher is interrupted; the run
+goes on. A run written with `--out` elsewhere is watched with
+`--runs-root <its parent>`. `--clear-dead` removes the active entries of dead
+runs and of runs that ended more than a day ago.
+
+`dashboard.html` is one self-contained page per run (charts, verdicts and
+tables, light and dark, no network): copy it off the Spark, for example
+`scp spark:runs/<run>/dashboard.html .`, and open it in a browser.
+`gtm_sim_dashboard.py <run>` rewrites it, or renders a run still going from
+its finished cells, marked partial.
+
 The scripts that talk to the venue stay where 7.5 puts them: as `trading`,
 in the runtime clone `/home/trading/forecast-model`.

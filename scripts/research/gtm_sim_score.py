@@ -26,6 +26,8 @@ from climate.nn.report import git_commit, write_run  # noqa: E402
 from climate.paths import root_path  # noqa: E402
 from climate.sim.compare import compare_snapshots, first_prints, print_level_summary  # noqa: E402
 from climate.sim.ladders import ladder_frame, read_payloads  # noqa: E402
+from climate.sim.progress import ProgressWriter  # noqa: E402
+from climate.sim.rundir import finish_run  # noqa: E402
 from climate.storage import load_ledger  # noqa: E402
 
 PAPER_FILES = ("gtm_signals_history.jsonl", "gtm_signals.json")
@@ -128,7 +130,14 @@ def main(argv: list[str] | None = None) -> int:
         "n_scored": int(np.isfinite(compared["crps_diff"]).sum()),
         "settled_months": by_print.to_dict(orient="records"),
     }
-    write_run(run_dir, config=config, metrics=metrics, rows=compared, report_md=report)
+    with ProgressWriter(run_dir, "gtm_sim_score", ["score"], steps=1, args=vars(args),
+                        git_commit=git_commit(), start_thread=False) as writer:
+        writer.cell_started("score")
+        write_run(run_dir, config=config, metrics=metrics, rows=compared, report_md=report)
+        headline = {"rows": metrics["n_rows"], "identified": metrics["n_identified"],
+                    "scored": metrics["n_scored"]}
+        writer.cell_finished("score", headline)
+        finish_run(writer, run_dir, headline)
     print(report)
     print(f"run directory: {run_dir}")
     return 0

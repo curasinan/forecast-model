@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -391,15 +391,40 @@ class Replay:
                 "open_value_mid": open_mid, "equity_bid": realized + open_bid - open_cost,
                 "equity_mid": realized + open_mid - open_cost}
 
-    def run(self, decisions: Sequence[pd.Timestamp]) -> ReplayResult:
+    def run(self, decisions: Sequence[pd.Timestamp],
+            on_step: Callable[[dict], None] | None = None) -> ReplayResult:
+        """Replay every decision in order; `on_step` hears about each one as it finishes.
+
+        It gets the step number and total, the simulated time, the orders and
+        filled orders so far, the equity settled and marked to the bid, the
+        decision's skip reason, and the warnings it raised (a reconcile abort,
+        the first decision a fixed model may have seen the future of).
+        """
         rows, curve = [], []
-        for t in decisions:
+        flagged_model = False
+        n = len(decisions)
+        for i, t in enumerate(decisions, start=1):
             t = pd.Timestamp(t)
+            aborts = self.reconcile_aborts
             self.venue.advance(t)
             self._settle_due(t)
             self._reconcile(t)
             rows.append(self._decide(t))
             curve.append(self._equity(t))
+            if on_step is not None:
+                warnings = []
+                if self.reconcile_aborts > aborts:
+                    warnings.append("reconcile aborted")
+                if rows[-1]["model_after_decision"] and not flagged_model:
+                    flagged_model = True
+                    warnings.append("the fixed model was fitted after this decision")
+                on_step({
+                    "step": i, "steps": n, "sim_time": t,
+                    "orders": len(self.venue.orders),
+                    "filled": sum(1 for o in self.venue.orders.values() if o.filled > 0),
+                    "pnl_settled": curve[-1]["realized"], "pnl_marked": curve[-1]["equity_bid"],
+                    "skipped": rows[-1]["skipped"], "warnings": warnings,
+                })
         if not self.panel.empty:
             end = self.panel.times[-1]
             self.venue.advance(end)

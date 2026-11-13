@@ -47,6 +47,7 @@ from climate.sim.hindcast import (  # noqa: E402
     settlement_values,
     yearly_table,
 )
+from climate.sim.progress import ProgressWriter  # noqa: E402
 from climate.sim.replay import (  # noqa: E402
     Policy,
     Replay,
@@ -55,7 +56,7 @@ from climate.sim.replay import (  # noqa: E402
     stop_times,
     target_months,
 )
-from climate.sim.rundir import write_run  # noqa: E402
+from climate.sim.rundir import finish_run, write_run  # noqa: E402
 from climate.storage import load_ledger  # noqa: E402
 
 GRID_COLUMNS = ["cell", "proxy", "weight", "sd", "total_pnl", "mean_year", "sd_year", "t_stat",
@@ -226,67 +227,88 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
 
-    ledger = load_ledger(root)
-    printed = print_times(labels.index, ledger)
-    last_month = min(f"{args.last_year}-12", str(labels.index.max()))
-    model = StrictForecaster(seas5, era5, labels, ledger)
-    decisions = hindcast_decisions(args.first_year, args.last_year, day=args.day, at=args.at)
-    years = list(range(args.first_year, args.last_year + 1))
-    cfg = ReplayConfig(policy=Policy.parse("ask"), bankroll=args.bankroll,
-                       max_position=args.max_position, max_exposure=args.max_exposure,
-                       max_group=args.max_group, min_edge=args.min_edge)
-    work_dir = run_dir.with_name(f".{run_dir.name}.work")
-    shutil.rmtree(work_dir, ignore_errors=True)
-    rows, cells, yearly, extra = [], {}, {}, {}
-    try:
-        for i, spec in enumerate(specs, start=1):
-            started = _time.monotonic()
-            market = MarketModel(spec, labels, printed, model, seed=args.seed)
-            venue = build_venue(market, decisions, last_month=last_month,
-                                months_ahead=args.months_ahead, half_spread=args.half_spread,
-                                ceiling=args.ceiling)
-            contracts = venue.panel.contracts()
-            target_of = target_months(contracts, None)
-            months = sorted(set(target_of.values()))
-            settle = settlements(target_of, settlement_values(labels, months, noise=args.label_noise,
-                                                              seed=args.seed),
-                                 print_times(months, ledger))
-            cell_dir = work_dir / spec.name
-            result = Replay(venue.panel, contracts, None, model, settle,
-                            stop_times(contracts, target_of, ledger), cfg, cell_dir).run(decisions)
-            table = yearly_table(result, years)
-            metrics = hindcast_metrics(table, result, split_year=args.split_year)
-            rows.append({"cell": spec.name, "proxy": spec.kind, "weight": spec.weight,
-                         "sd": spec.sd, **{c: metrics.get(c) for c in GRID_COLUMNS[4:]}})
-            cells[spec.name] = (result, cell_dir / f"{cfg.name}.db")
-            yearly[spec.name] = table
-            extra[spec.name] = {"yearly": table}
-            print(f"[{i}/{len(specs)}] {spec.name}: P&L {metrics['total_pnl']:+.2f} on "
-                  f"{metrics['orders_filled']} trades ({_time.monotonic() - started:.0f} s)", flush=True)
-
-        grid = pd.DataFrame(rows, columns=GRID_COLUMNS)
-        breakevens = breakeven_lines(grid)
-        summary = {
-            "years": f"{args.first_year} to {args.last_year}, {len(decisions)} decisions "
-                     f"(the {args.day}th at {args.at:%H:%M} UTC)",
-            "model": "EMOS refitted on the labels printed by each decision; bridge refitted "
-                     "each year on the labels through the previous December",
-            "markets": ", ".join(PROXY_NAMES[k] for k in dict.fromkeys(s.kind for s in specs)),
-            "quotes": f"{args.months_ahead + 1} months open, half-spread {args.half_spread:g}, "
-                      f"ceiling {args.ceiling:g}, label noise {args.label_noise:g}",
-            "caps": f"bankroll {args.bankroll:g}, position {args.max_position:g}, month "
-                    f"{args.max_group:g}, exposure {args.max_exposure:g}, min edge {args.min_edge:g}",
-        }
-        report = render_report(summary, grid, breakevens, yearly, args.split_year)
-        config = {"kind": "gtm_sim_hindcast", "root": str(root), "args": vars(args),
-                  "cells": [s.name for s in specs], "git_commit": git_commit(),
-                  "run_dir": str(run_dir)}
-        metrics_out = {"summary": summary, "breakeven": breakevens,
-                       "cells": {r["cell"]: r for r in rows}}
-        write_run(run_dir, config=config, metrics=metrics_out, grid=grid, report=report,
-                  cells=cells, extra=extra)
-    finally:
+    writer = ProgressWriter(run_dir, "gtm_sim_hindcast", [s.name for s in specs],
+                            args=vars(args), git_commit=git_commit())
+    with writer:
+        ledger = load_ledger(root)
+        printed = print_times(labels.index, ledger)
+        last_month = min(f"{args.last_year}-12", str(labels.index.max()))
+        model = StrictForecaster(seas5, era5, labels, ledger)
+        decisions = hindcast_decisions(args.first_year, args.last_year, day=args.day, at=args.at)
+        writer.set_steps(len(decisions))
+        writer.run_phase("trading the cells")
+        years = list(range(args.first_year, args.last_year + 1))
+        cfg = ReplayConfig(policy=Policy.parse("ask"), bankroll=args.bankroll,
+                           max_position=args.max_position, max_exposure=args.max_exposure,
+                           max_group=args.max_group, min_edge=args.min_edge)
+        work_dir = run_dir.with_name(f".{run_dir.name}.work")
         shutil.rmtree(work_dir, ignore_errors=True)
+        rows, cells, yearly, extra = [], {}, {}, {}
+        try:
+            for i, spec in enumerate(specs, start=1):
+                started = _time.monotonic()
+                writer.cell_started(spec.name, phase="building quotes")
+                market = MarketModel(spec, labels, printed, model, seed=args.seed)
+                venue = build_venue(market, decisions, last_month=last_month,
+                                    months_ahead=args.months_ahead, half_spread=args.half_spread,
+                                    ceiling=args.ceiling)
+                contracts = venue.panel.contracts()
+                target_of = target_months(contracts, None)
+                months = sorted(set(target_of.values()))
+                settle = settlements(target_of, settlement_values(labels, months,
+                                                                  noise=args.label_noise,
+                                                                  seed=args.seed),
+                                     print_times(months, ledger))
+                writer.cell_phase(spec.name, "")
+                cell_dir = work_dir / spec.name
+                result = Replay(venue.panel, contracts, None, model, settle,
+                                stop_times(contracts, target_of, ledger), cfg,
+                                cell_dir).run(decisions, on_step=writer.stepper(spec.name))
+                table = yearly_table(result, years)
+                metrics = hindcast_metrics(table, result, split_year=args.split_year)
+                row = {"cell": spec.name, "proxy": spec.kind, "weight": spec.weight,
+                       "sd": spec.sd, **{c: metrics.get(c) for c in GRID_COLUMNS[4:]}}
+                rows.append(row)
+                cells[spec.name] = (result, cell_dir / f"{cfg.name}.db")
+                yearly[spec.name] = table
+                extra[spec.name] = {"yearly": table}
+                writer.cell_finished(spec.name, row,
+                                     frames={"orders": result.orders, "equity": result.equity,
+                                             "months": result.months, "yearly": table})
+                print(f"[{i}/{len(specs)}] {spec.name}: P&L {metrics['total_pnl']:+.2f} on "
+                      f"{metrics['orders_filled']} trades ({_time.monotonic() - started:.0f} s)",
+                      flush=True)
+
+            writer.run_phase("writing results")
+            grid = pd.DataFrame(rows, columns=GRID_COLUMNS)
+            breakevens = breakeven_lines(grid)
+            summary = {
+                "years": f"{args.first_year} to {args.last_year}, {len(decisions)} decisions "
+                         f"(the {args.day}th at {args.at:%H:%M} UTC)",
+                "model": "EMOS refitted on the labels printed by each decision; bridge refitted "
+                         "each year on the labels through the previous December",
+                "markets": ", ".join(PROXY_NAMES[k] for k in dict.fromkeys(s.kind for s in specs)),
+                "quotes": f"{args.months_ahead + 1} months open, half-spread {args.half_spread:g}, "
+                          f"ceiling {args.ceiling:g}, label noise {args.label_noise:g}",
+                "caps": f"bankroll {args.bankroll:g}, position {args.max_position:g}, month "
+                        f"{args.max_group:g}, exposure {args.max_exposure:g}, min edge {args.min_edge:g}",
+            }
+            report = render_report(summary, grid, breakevens, yearly, args.split_year)
+            config = {"kind": "gtm_sim_hindcast", "root": str(root), "args": vars(args),
+                      "cells": [s.name for s in specs], "git_commit": git_commit(),
+                      "run_dir": str(run_dir)}
+            metrics_out = {"summary": summary, "breakeven": breakevens,
+                           "cells": {r["cell"]: r for r in rows}}
+            write_run(run_dir, config=config, metrics=metrics_out, grid=grid, report=report,
+                      cells=cells, extra=extra)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        ranked = grid.sort_values("total_pnl")
+        headline = {"cells": len(rows), **{f"breakeven {k}": v for k, v in breakevens.items()}}
+        if len(ranked):
+            headline.update(best_cell=ranked.iloc[-1]["cell"], best_pnl=ranked.iloc[-1]["total_pnl"],
+                            worst_cell=ranked.iloc[0]["cell"], worst_pnl=ranked.iloc[0]["total_pnl"])
+        finish_run(writer, run_dir, headline)
     print(report)
     print(f"run directory: {run_dir}")
     return 0

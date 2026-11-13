@@ -36,6 +36,8 @@ from climate.sim.book import (  # noqa: E402
 )
 from climate.sim.implied import fit_implied  # noqa: E402
 from climate.sim.ladders import ladder_frame, read_payloads  # noqa: E402
+from climate.sim.progress import ProgressWriter  # noqa: E402
+from climate.sim.rundir import finish_run  # noqa: E402
 from scripts.research.gtm_sim_score import new_run_dir  # noqa: E402
 
 
@@ -170,7 +172,14 @@ def main(argv: list[str] | None = None) -> int:
     }
     metrics = {"market_fit": fit.to_dict() if fit is not None else None,
                "marks": marks, "breakeven_mu": breakevens}
-    write_run(run_dir, config=config, metrics=metrics, rows=table, report_md=report)
+    with ProgressWriter(run_dir, "gtm_sim_book", ["book"], steps=1, args=vars(args),
+                        git_commit=git_commit(), start_thread=False) as writer:
+        writer.cell_started("book")
+        write_run(run_dir, config=config, metrics=metrics, rows=table, report_md=report)
+        headline = {"books": len(books), "scenarios": int(table["scenario"].nunique()),
+                    "target": args.target}
+        writer.cell_finished("book", headline)
+        finish_run(writer, run_dir, headline)
     print(report)
     print(f"run directory: {run_dir}")
     return 0

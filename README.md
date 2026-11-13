@@ -199,6 +199,7 @@ research clone, against the mirror (`docs/spark_runbook.md` section 7.11):
 python scripts/research/gtm_sim_replay.py --root ~/data/gtm_research/climate_data --ticks-root ~/quant_data/ibkr_ticks
 python scripts/research/gtm_sim_score.py --root ~/quant_data/climate_data
 python scripts/research/gtm_sim_hindcast.py --root ~/data/gtm_research/climate_data
+python scripts/research/gtm_sim_watch.py --follow
 python scripts/research/gtm_sim_book.py --payload ~/quant_data/climate_data/paper/gtm_signals.json --target 2026-12 --book "now=1.3:YES:22:0.44"
 ```
 
@@ -207,6 +208,8 @@ the point-in-time forecast of that moment, fills orders against later
 snapshots, and compares the limit rules and fill models in one run directory.
 The hindcast trades 2001 to 2025 against synthetic markets of rising quality
 and says how good a market may be before the model stops making money.
+`gtm_sim_watch.py` follows a run from the terminal while it goes, and every
+run directory ends with a self-contained `dashboard.html`.
 
 Things worth knowing:
 

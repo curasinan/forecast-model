@@ -41,7 +41,11 @@ def test_the_grid_writes_one_run_directory(tmp_path, ticks):
     assert code == 0
     run = tmp_path / "run"
     assert {p.name for p in run.iterdir()} == {"config.json", "metrics.json", "grid.parquet",
-                                               "report.md", "cells"}
+                                               "report.md", "cells", "progress.json",
+                                               "events.jsonl", "dashboard.html"}
+    progress = json.loads((run / "progress.json").read_text())
+    assert progress["status"] == "finished" and progress["headline"]["d1"].startswith("D1 choice")
+    assert all(c["status"] == "finished" and c["step"] == c["steps"] for c in progress["cells"])
     grid = pd.read_parquet(run / "grid.parquet")
     assert len(grid) == 3 * 2 * 2
     cell = run / "cells" / "ask_lat1_paper"
