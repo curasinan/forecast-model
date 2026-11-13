@@ -853,8 +853,10 @@ the quotes and the ledger are current:
 The replay takes the climate root for SEAS5, ERA5 and the labels, and the
 ticks root for the recorder's `quotes/` and the backfill's `quotes_hourly/`.
 Give it the research root, which holds the 2026-01..06 inits the live store
-lacks, after copying the current ledger and SEAS5 file into it (7.10); the
-quotes come from the mirror. Code reaches the research clone by
+lacks, after copying only the current ledger into it; copying the SEAS5 file
+too would drop those six inits again (7.10). The quotes come from the mirror:
+
+    cp ~/quant_data/climate_data/labels/labels_ledger.parquet ~/data/gtm_research/climate_data/labels/ Code reaches the research clone by
 `git push spark main` from the Zenbook, apart from the runtime's deploy.
 
 What one run does: at each decision time (daily at 14:00 UTC by default;
