@@ -886,5 +886,24 @@ only from the SEAS5 init six months before it: November 2026 from the June
 init (released 2026-06-13), December from July's. Hourly history before then
 helps S1, not the replay.
 
+`gtm_sim_hindcast.py` (S3) trades the paper book month by month over
+2001 to 2025 against synthetic markets, since no GTM market existed before
+2026: trend climatology (`m0`), damped persistence (`m1`), the raw bridged
+SEAS5 ensemble (`m2`), the model shifted as the 2026 market was against it
+(`m3`), each blended toward the model at the weights of `--blends`, and an
+informed market that knows the label up to the error sds of `--informed-sd`.
+The model side is the replay's, with the bridge refitted each year on the
+labels through the previous December, and the trading is the replay's
+executor and caps at the ask. It needs only the climate root:
+
+    bash scripts/spark/research_run.sh -- .venv/bin/python scripts/research/gtm_sim_hindcast.py --root ~/data/gtm_research/climate_data
+
+The default grid is 21 cells (four proxies at four weights, five informed
+sds), about ten minutes. The report gives each cell's P&L, its yearly mean,
+spread and t statistic, the share of years up, the hit rate, the two periods
+split at `--split-year`, and the break-even points: the blend weight at which
+a proxy's P&L reaches zero, and the informed-market error sd above which the
+model makes money. Each cell of the run directory adds `yearly.parquet`.
+
 The scripts that talk to the venue stay where 7.5 puts them: as `trading`,
 in the runtime clone `/home/trading/forecast-model`.

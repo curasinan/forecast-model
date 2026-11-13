@@ -15,11 +15,9 @@ Exit codes: 0 done, 2 usage error or nothing to replay.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import sys
-import uuid
 from datetime import date, datetime, time
 from itertools import product
 from pathlib import Path
@@ -31,7 +29,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from climate.dataset import build_frame_from_inputs, load_era5, load_noaa_gtm, load_seas5  # noqa: E402
+from climate.dataset import (  # noqa: E402
+    build_frame_from_inputs,
+    load_era5,
+    load_noaa_gtm,
+    load_seas5,
+)
 from climate.emos import EmosModel  # noqa: E402
 from climate.ladder import load_contract_labels  # noqa: E402
 from climate.nn.report import git_commit  # noqa: E402
@@ -50,6 +53,7 @@ from climate.sim.replay import (  # noqa: E402
     stop_times,
     target_months,
 )
+from climate.sim.rundir import write_run  # noqa: E402
 from climate.sim.venue import FILL_MODELS  # noqa: E402
 from climate.storage import load_ledger  # noqa: E402
 
@@ -157,40 +161,6 @@ def render_report(summary: dict, grid: pd.DataFrame, verdict: list[str], focus) 
     lines += ["", "Hourly bars stand in for the recorder where it has no sweep in the hour: their "
               "bid and ask are hour averages, and the live-like fill model fills nothing on them."]
     return "\n".join(lines) + "\n"
-
-
-def write_run(run_dir: Path, *, config: dict, metrics: dict, grid: pd.DataFrame, report: str,
-              results: list, work_dir: Path) -> None:
-    """The run directory in one step: written beside, then renamed into place."""
-    if run_dir.exists():
-        raise UsageError(f"the run directory exists already: {run_dir}")
-    run_dir.parent.mkdir(parents=True, exist_ok=True)
-    scratch = run_dir.with_name(f".{run_dir.name}.{uuid.uuid4().hex[:8]}.partial")
-    scratch.mkdir()
-    try:
-        (scratch / "config.json").write_text(json.dumps(config, indent=2, default=str), encoding="utf-8")
-        (scratch / "metrics.json").write_text(json.dumps(metrics, indent=2, default=_plain),
-                                              encoding="utf-8")
-        grid.to_parquet(scratch / "grid.parquet", index=False)
-        (scratch / "report.md").write_text(report, encoding="utf-8", newline="\n")
-        for result in results:
-            cell = scratch / "cells" / result.config.name
-            cell.mkdir(parents=True)
-            for name in ("decisions", "orders", "months", "equity"):
-                getattr(result, name).to_parquet(cell / f"{name}.parquet", index=False)
-            shutil.copy2(work_dir / f"{result.config.name}.db", cell / "paper_book.db")
-        os.rename(scratch, run_dir)
-    except BaseException:
-        shutil.rmtree(scratch, ignore_errors=True)
-        raise
-
-
-def _plain(value):
-    if isinstance(value, (np.floating, float)):
-        return None if not np.isfinite(value) else float(value)
-    if isinstance(value, np.integer):
-        return int(value)
-    return str(value)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                    "cells": {r.config.name: r.metrics for r in results},
                    "notes": {r.config.name: r.notes for r in results if r.notes}}
         write_run(run_dir, config=config, metrics=metrics, grid=grid, report=report,
-                  results=results, work_dir=work_dir)
+                  cells={r.config.name: (r, work_dir / f"{r.config.name}.db") for r in results})
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
     print(report)
