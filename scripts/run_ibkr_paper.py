@@ -15,17 +15,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from climate.paper import parse_ts_utc  # noqa: E402
 from climate.paper_criteria import check_staleness  # noqa: E402
 from climate.paths import data_root, root_path  # noqa: E402
-from src.domain.ids import MarketId  # noqa: E402
-from src.models.prediction import EdgeSignal  # noqa: E402
 from src.trading.executor import TradeIntent, TradingExecutor, render_group_commitments  # noqa: E402
+from src.trading.gtm_intents import intents_from_payload  # noqa: E402
 from src.trading.locks import LockHeldError, acquire_db_lock  # noqa: E402
-from src.trading.pricing import (  # noqa: E402
-    DEFAULT_PRICE_POLICY,
-    DEFAULT_TICK,
-    PRICE_POLICIES,
-    buy_limit_price,
-    finite_or_none,
-)
+from src.trading.pricing import DEFAULT_PRICE_POLICY, PRICE_POLICIES  # noqa: E402
 from src.trading.reconcile import drop_already_committed, load_open_commitments  # noqa: E402
 from src.trading.reprice import RepriceOutcome, reprice_resting_orders  # noqa: E402
 from src.trading.risk_manager import RiskLimits  # noqa: E402
@@ -36,86 +29,13 @@ from src.venues.ibkr.settings import IBKRSettings  # noqa: E402
 log = logging.getLogger("run_ibkr_paper")
 
 
-def _leg_limit(row: dict, buy_yes: bool, *, price_policy: str, tick: float,
-               ticks_below_ask: int) -> float | None:
-    """The limit for the leg being bought, from that leg's own bid and ask."""
-    if buy_yes:
-        return buy_limit_price(row.get("bid"), row.get("ask"), policy=price_policy, tick=tick,
-                               ticks_below_ask=ticks_below_ask)
-    return buy_limit_price(row.get("no_bid"), row.get("no_ask"), policy=price_policy, tick=tick,
-                           ticks_below_ask=ticks_below_ask)
-
-
 def load_intents(signals_path: Path, adapter: IBKRAdapter, top: int | None,
                  min_edge: float, *, price_policy: str = DEFAULT_PRICE_POLICY,
                  ticks_below_ask: int = 0) -> list[TradeIntent]:
-    """Map gtm_signals.json rows to TradeIntents, priced at the limit the order will carry.
-
-    The leg follows the sign of the edge at the mid (YES when the model is
-    above the market). The limit comes from that leg's quote under
-    `price_policy` ('ask': the ask less `ticks_below_ask` ticks; 'mid': the
-    mid), and the edge and EV are taken at that limit, the price actually
-    paid. A row whose edge at the limit is below `min_edge` is skipped. The
-    intents come back sorted by that edge, largest first.
-    """
+    """gtm_signals.json at `signals_path` as TradeIntents (src/trading/gtm_intents.py)."""
     payload = json.loads(signals_path.read_text(encoding="utf-8"))
-    rows = [r for r in payload.get("signals", []) if r.get("tradeable")]
-    rows.sort(key=lambda r: -abs(float(r.get("edge") or 0.0)))
-    if top:
-        rows = rows[:top]
-    fee_model = adapter.fee_model()  # refuses stale fee facts before anything is priced
-    intents: list[TradeIntent] = []
-    for r in rows:
-        p = float(r["p_model"])
-        yes_mid = finite_or_none(r.get("yes_mid"))
-        if yes_mid is None or r.get("suspect_quote"):
-            continue
-        buy_yes = p - yes_mid > 0
-        question_id = f"gtm:{r['target_month']}:{r['strike']}"
-        limits = dict(price_policy=price_policy, ticks_below_ask=ticks_below_ask)
-
-        price = _leg_limit(r, buy_yes, tick=DEFAULT_TICK, **limits)
-        if price is None:
-            log.warning("skipping %s: no usable %s quote", question_id, "YES" if buy_yes else "NO")
-            continue
-        if (p - price if buy_yes else (1.0 - p) - price) < min_edge:
-            continue
-
-        market_id = MarketId.ibkr(int(r["con_id"]))
-        try:
-            market = adapter.get_market(market_id)
-        except Exception as exc:  # noqa: BLE001 -- skip, don't guess a contract
-            log.warning("skipping conId %s: %s", r["con_id"], exc)
-            continue
-        tick = market.tick_size or DEFAULT_TICK
-        if tick != DEFAULT_TICK:
-            price = _leg_limit(r, buy_yes, tick=tick, **limits)
-            if price is None:
-                continue
-
-        edge = p - price if buy_yes else (1.0 - p) - price
-        if edge < min_edge:
-            continue
-        yes_price = price if buy_yes else fee_model.yes_no_price_sum() - price
-        title = f"GTM {r['target_month']} > {r['strike']}"
-        signal = EdgeSignal(
-            question_id=question_id,
-            model_prob=p, market_prob=yes_price, edge_pct=edge if buy_yes else -edge,
-            expected_value=edge - fee_model.execution_cost(price, 1),
-            kelly_fraction=float(r.get("half_kelly") or 0.0),
-            confidence=1.0,
-        )
-        leg = "" if buy_yes else "no_"
-        intents.append(TradeIntent(
-            edge=signal, market=market, title=title,
-            no_price=None if buy_yes else price,
-            quote={"policy": price_policy, "ticks_below_ask": ticks_below_ask,
-                   "bid": finite_or_none(r.get(f"{leg}bid")),
-                   "ask": finite_or_none(r.get(f"{leg}ask")),
-                   "limit": price},
-        ))
-    intents.sort(key=lambda i: -abs(i.edge.edge_pct))  # the group cap goes to the best edge first
-    return intents
+    return intents_from_payload(payload, adapter, top, min_edge, price_policy=price_policy,
+                                ticks_below_ask=ticks_below_ask)
 
 
 def main(argv: list[str] | None = None) -> int:

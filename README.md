@@ -59,7 +59,7 @@ the move to ForecastEx invalidated.
 |---|---|
 | `climate/` | GTM lane: NOAA labels, Copernicus retrievals, ERA5 to NOAA bridge, EMOS fit, strike ladder, paper loop, go-live gates |
 | `climate/nn/` | GTM research: neural post-processing and nowcast, benchmark only |
-| `climate/sim/` | GTM paper-trading simulations: market-implied distributions, model against market, book P&L |
+| `climate/sim/` | GTM paper-trading simulations: market-implied distributions, model against market, book P&L, the quote replay through the paper executor |
 | `src/venues/` | Venue abstraction. `src/venues/ibkr/` is the IB Gateway adapter: session supervisor, pacing limiter, quote recorder, hourly backfill |
 | `src/trading/` | Executor, risk manager, position tracker, paper-book reconciliation, lock file |
 | `src/llm/` | Client for a local OpenAI-compatible model server |
@@ -191,6 +191,19 @@ python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data
 # 4. Compare the forecast ladder with the latest recorded quotes. No orders.
 python scripts/run_gtm_paper.py
 ```
+
+Simulations of the paper book run on the Spark as the research user, from the
+research clone, against the mirror (`docs/spark_runbook.md` section 7.11):
+
+```bash
+python scripts/research/gtm_sim_replay.py --root ~/data/gtm_research/climate_data --ticks-root ~/quant_data/ibkr_ticks
+python scripts/research/gtm_sim_score.py --root ~/quant_data/climate_data
+python scripts/research/gtm_sim_book.py --payload ~/quant_data/climate_data/paper/gtm_signals.json --target 2026-12 --book "now=1.3:YES:22:0.44"
+```
+
+The replay runs the paper loop at each past decision time on the quotes and
+the point-in-time forecast of that moment, fills orders against later
+snapshots, and compares the limit rules and fill models in one run directory.
 
 Things worth knowing:
 
