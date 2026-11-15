@@ -830,3 +830,116 @@ expected init and the file to copy, and exits 3.
 Two late NOAA prints are overridden in `climate/nn/availability.py`: December
 2018 (printed 2019-02-06, after the shutdown) and September 2024 (printed
 2024-10-24, after Hurricane Helene); a later one goes in that map once known.
+
+### 7.11 Paper-trading simulations
+
+`climate/sim/` holds the simulations of the GTM paper book, with one script
+each in `scripts/research/`: `gtm_sim_score.py` (S1, the model's distribution
+against the market's), `gtm_sim_book.py` (S4a, a book's P&L at settlement
+under scenarios) and `gtm_sim_replay.py` (S2, the quote replay). They only
+read their inputs and write a run directory under `~/runs/`; none of them
+reaches the Gateway or writes under a data root.
+
+Run them as `scura`, from the research clone, through the launcher, with the
+clone's own `.venv` (no torch is needed). Refresh the mirror first (7.6), so
+the quotes and the ledger are current:
+
+    cd ~/work/forecast-model
+    bash scripts/spark/mirror_live.sh
+    .venv/bin/python scripts/spark/verify_mirror.py --root ~/quant_data
+    bash scripts/spark/research_run.sh -- .venv/bin/python scripts/research/gtm_sim_replay.py --root ~/data/gtm_research/climate_data --ticks-root ~/quant_data/ibkr_ticks
+    bash scripts/spark/research_run.sh -- .venv/bin/python scripts/research/gtm_sim_score.py --root ~/quant_data/climate_data
+
+The replay takes the climate root for SEAS5, ERA5 and the labels, and the
+ticks root for the recorder's `quotes/` and the backfill's `quotes_hourly/`.
+Give it the research root, which holds the 2026-01..06 inits the live store
+lacks, after copying only the current ledger into it; copying the SEAS5 file
+too would drop those six inits again (7.10). The quotes come from the mirror:
+
+    cp ~/quant_data/climate_data/labels/labels_ledger.parquet ~/data/gtm_research/climate_data/labels/ Code reaches the research clone by
+`git push spark main` from the Zenbook, apart from the runtime's deploy.
+
+What one run does: at each decision time (daily at 14:00 UTC by default;
+`--cadence release` decides on the 13th after the SEAS5 release, `--cadence
+sweep` at every sweep) the paper loop runs as it does live, on that moment's
+latest snapshot no older than 40 minutes, with the EMOS refitted on the labels
+printed by then and the SEAS5 inits released by then (`--model PATH` uses a
+fixed fit instead and flags every decision it may have seen the future of):
+edge gate, intents at the limit rule, dedup and caps of a fresh paper book,
+the executor, the reconcile. Orders fill on a later snapshot whose ask is at
+or under the limit, at that ask; trading in a leg stops at the start of its
+expiry date, or a day before the ledger first saw the print if that is
+earlier; a month settles on its first print and is marked to the bid until
+then. Hourly bars stand in where the recorder has no sweep in the hour.
+
+The default grid is the limit rules `ask,ask-1,ask-2,mid` by the fill models
+`paper,live` at one snapshot of latency, eight cells over the same decisions;
+`--latency 1,2`, `--reprice both` and `--skip-running-month both` widen it.
+The run directory holds `config.json`, `metrics.json` (every cell's metrics
+and the D1 verdict of the simulation plan), `grid.parquet`, `report.md` and
+`cells/<cell>/` with `decisions.parquet`, `orders.parquet`, `months.parquet`,
+`equity.parquet` and the cell's `paper_book.db`. Exit 2 is a usage error, no
+quotes in the window, or an existing run directory.
+
+The model forecasts at most six months ahead, so a target month can be traded
+only from the SEAS5 init six months before it: November 2026 from the June
+init (released 2026-06-13), December from July's. Hourly history before then
+helps S1, not the replay.
+
+`gtm_sim_hindcast.py` (S3) trades the paper book month by month over
+2001 to 2025 against synthetic markets, since no GTM market existed before
+2026: trend climatology (`m0`), damped persistence (`m1`), the raw bridged
+SEAS5 ensemble (`m2`), the model shifted as the 2026 market was against it
+(`m3`), each blended toward the model at the weights of `--blends`, and an
+informed market that knows the label up to the error sds of `--informed-sd`.
+The model side is the replay's, with the bridge refitted each year on the
+labels through the previous December, and the trading is the replay's
+executor and caps at the ask. It needs only the climate root:
+
+    bash scripts/spark/research_run.sh -- .venv/bin/python scripts/research/gtm_sim_hindcast.py --root ~/data/gtm_research/climate_data
+
+The default grid is 21 cells (four proxies at four weights, five informed
+sds), about ten minutes. The report gives each cell's P&L, its yearly mean,
+spread and t statistic, the share of years up, the hit rate, the two periods
+split at `--split-year`, and the break-even points: the blend weight at which
+a proxy's P&L reaches zero, and the informed-market error sd above which the
+model makes money. Each cell of the run directory adds `yearly.parquet`.
+
+**Watching a run.** While it runs, every simulation script keeps
+`~/runs/.active/<run>/`: `progress.json` (the whole state, replaced at most
+once a second and refreshed every ten seconds by a heartbeat),
+`events.jsonl` (one event a line) and the frames of the cells already
+finished. At the end it copies `progress.json` and `events.jsonl` into the
+run directory, beside `dashboard.html`. From a second ssh session or a tmux
+pane, as `scura`, in the research clone:
+
+    .venv/bin/python scripts/research/gtm_sim_watch.py
+    .venv/bin/python scripts/research/gtm_sim_watch.py --follow
+    .venv/bin/python scripts/research/gtm_sim_watch.py --once
+    .venv/bin/python scripts/research/gtm_sim_watch.py --show latest
+    .venv/bin/python scripts/research/gtm_sim_watch.py --clear-dead
+
+The first lists the active runs and the last ten finished ones. `--follow`
+keeps the newest running run on screen, a row per cell with its bar, the
+simulated date, the time left, orders and fills, P&L settled and marked to
+the bid, drawdown, skipped decisions and warnings, and a sparkline of its
+equity; when the run ends it prints the results. Columns that do not fit the
+terminal are dropped, drawdown and the sparkline first, rather than cut
+short. `--once` prints one snapshot, for a phone ssh client. A run is
+`running`, `stalled` (no heartbeat for two minutes, the process alive),
+`dead` (no heartbeat and no process: the launcher's memory ceiling is the
+usual cause, see the journal), `silent` (started on another host),
+`finished` or `failed` (the error is shown). Exit 0 running or finished, 1
+failed or dead, 2 no such run, 130 when the watcher is interrupted; the run
+goes on. A run written with `--out` elsewhere is watched with
+`--runs-root <its parent>`. `--clear-dead` removes the active entries of dead
+runs and of runs that ended more than a day ago.
+
+`dashboard.html` is one self-contained page per run (charts, verdicts and
+tables, light and dark, no network): copy it off the Spark, for example
+`scp spark:runs/<run>/dashboard.html .`, and open it in a browser.
+`gtm_sim_dashboard.py <run>` rewrites it, or renders a run still going from
+its finished cells, marked partial.
+
+The scripts that talk to the venue stay where 7.5 puts them: as `trading`,
+in the runtime clone `/home/trading/forecast-model`.

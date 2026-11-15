@@ -59,6 +59,7 @@ the move to ForecastEx invalidated.
 |---|---|
 | `climate/` | GTM lane: NOAA labels, Copernicus retrievals, ERA5 to NOAA bridge, EMOS fit, strike ladder, paper loop, go-live gates |
 | `climate/nn/` | GTM research: neural post-processing and nowcast, benchmark only |
+| `climate/sim/` | GTM paper-trading simulations: market-implied distributions, model against market, book P&L, the quote replay through the paper executor |
 | `src/venues/` | Venue abstraction. `src/venues/ibkr/` is the IB Gateway adapter: session supervisor, pacing limiter, quote recorder, hourly backfill |
 | `src/trading/` | Executor, risk manager, position tracker, paper-book reconciliation, lock file |
 | `src/llm/` | Client for a local OpenAI-compatible model server |
@@ -191,6 +192,25 @@ python scripts/fit_gtm_emos.py --trend --root ~/quant_data_snapshot/climate_data
 python scripts/run_gtm_paper.py
 ```
 
+Simulations of the paper book run on the Spark as the research user, from the
+research clone, against the mirror (`docs/spark_runbook.md` section 7.11):
+
+```bash
+python scripts/research/gtm_sim_replay.py --root ~/data/gtm_research/climate_data --ticks-root ~/quant_data/ibkr_ticks
+python scripts/research/gtm_sim_score.py --root ~/quant_data/climate_data
+python scripts/research/gtm_sim_hindcast.py --root ~/data/gtm_research/climate_data
+python scripts/research/gtm_sim_watch.py --follow
+python scripts/research/gtm_sim_book.py --payload ~/quant_data/climate_data/paper/gtm_signals.json --target 2026-12 --book "now=1.3:YES:22:0.44"
+```
+
+The replay runs the paper loop at each past decision time on the quotes and
+the point-in-time forecast of that moment, fills orders against later
+snapshots, and compares the limit rules and fill models in one run directory.
+The hindcast trades 2001 to 2025 against synthetic markets of rising quality
+and says how good a market may be before the model stops making money.
+`gtm_sim_watch.py` follows a run from the terminal while it goes, and every
+run directory ends with a self-contained `dashboard.html`.
+
 Things worth knowing:
 
 - **Labels are a first-print ledger.** ForecastEx settles on the first
@@ -232,9 +252,30 @@ python scripts/run_ibkr_paper.py --simulate
 python scripts/run_ibkr_paper.py
 python scripts/run_ibkr_paper.py --mode auto --top 5
 
+# Cancel resting orders priced below today's limit and buy again at it.
+python scripts/run_ibkr_paper.py --reprice
+
 # Record what happened to resting orders.
 python scripts/sync_ibkr_paper.py
 ```
+
+**Order prices.** A paper order is a GTC limit at the ask by default
+(`--price ask`): it fills against the resting offer, so the book takes
+positions instead of waiting for a seller. `--ticks-below-ask N` bids N ticks
+under the ask, never under the bid, and `--price mid` restores the earlier
+passive bid at the mid. The edge, the EV and the minimum edge (`--min-edge`)
+are judged at the limit actually paid, so a contract whose edge at the mid
+does not survive the spread is not bought.
+
+`--reprice` cancels each resting order whose limit is below the one the same
+leg would get today, then buys again at the new limit. A month's strikes
+settle on one print, so they share one cap (`--max-group`, default $15):
+replacements go to the largest edge first, and an order with no room left is
+cancelled without one. Approve mode asks once per order and says which ones
+get no replacement. A book row is marked cancelled only after the venue
+confirms the cancel, which keeps the daily sync's mass-cancellation guard
+quiet; a cancel that is not confirmed (the order may have filled) keeps the
+row and places nothing on that leg.
 
 The health probe exits 0 for `OK` and 1 for `STALE`, `CRITICAL`, `DOWN` or
 `DEGRADED`, and alerts only when the state changes. `ALERT_METHOD` selects
@@ -402,6 +443,7 @@ directory so nothing is written under `~/quant_data`.
 | [`docs/gtm_model_report.md`](docs/gtm_model_report.md) | The GTM model: data, bridge, variants, skill, gates |
 | [`docs/gtm_bridge_robustness.md`](docs/gtm_bridge_robustness.md) | Hindcast skill with the bridge fitted inside each window |
 | [`docs/gtm_nn_report_2026-11-11.md`](docs/gtm_nn_report_2026-11-11.md) | Two neural networks against EMOS and the bridge nowcast: benchmarks, no win |
+| [`docs/gtm_sim_pilot_2026-11-12.md`](docs/gtm_sim_pilot_2026-11-12.md) | Simulation pilot: the market's December distribution against the model's, the December book under both |
 | [`docs/ibkr_runbook.md`](docs/ibkr_runbook.md) | Running the recorder: durability, re-login, alerts, triage |
 | [`docs/spark_runbook.md`](docs/spark_runbook.md) | Running research and the runtime on a Linux box |
 | [`docs/spark_parity_2026-10-03.md`](docs/spark_parity_2026-10-03.md) | Evidence that two machines produce the same numbers |
